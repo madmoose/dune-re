@@ -168,7 +168,7 @@ impl<'a> HnmDecoder<'a> {
                 }
                 BLOCK_TYPE_PL => {
                     let block_size = r.read_le_u16()?;
-                    let pal_data = r.split().1;
+                    let pal_data = &r.get_ref()[r.position() as usize..];
 
                     pal.apply_palette_update(pal_data)?;
 
@@ -198,7 +198,7 @@ impl<'a> HnmDecoder<'a> {
                         (r.read_le_i16()?, r.read_le_i16()?)
                     };
 
-                    let data = r.split().1;
+                    let data = &r.get_ref()[r.position() as usize..];
 
                     blit::Blitter::new(data, framebuffer)
                         .at(x, y + fb_y_offset)

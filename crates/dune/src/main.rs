@@ -1,4 +1,3 @@
-#![feature(cursor_split)]
 #![allow(clippy::identity_op)]
 #![allow(clippy::collapsible_if)]
 #![allow(dead_code)]

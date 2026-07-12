@@ -386,7 +386,8 @@ impl GameState {
                 // inline here is equivalent.
                 BLOCK_TYPE_PL => {
                     let block_size = r.read_le_u16()?;
-                    self.palette.apply_palette_update(r.split().1)?;
+                    self.palette
+                        .apply_palette_update(&r.get_ref()[r.position() as usize..])?;
                     r.seek_relative(block_size as i64 - 4)?;
                 }
                 // = ccf4 loc_0cd37 'mm': the streaming loop/redirect marker. The
@@ -421,7 +422,7 @@ impl GameState {
                         (r.read_le_i16()?, r.read_le_i16()?)
                     };
 
-                    let data = r.split().1;
+                    let data = &r.get_ref()[r.position() as usize..];
 
                     // = seg000:ccd7 cmp ax, 19h / jnb: clips with video id >=
                     // 0x19 (IRULAN.HNM and the SEQ* talking heads) blit through
