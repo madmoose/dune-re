@@ -17,21 +17,6 @@ use crate::{
     sprite_bank,
 };
 
-// = seg001:1aba mouse_handlers_01aba — the PALACE PLAN overlay's MouseHandlers
-// record. idle and every button slot but the LMB press are the no-op loc_00f66;
-// the LMB press is menu_callback_choice_exit_menu (0xd2e2), so a click anywhere
-// over the plan closes it. ui_draw_palace_plan installs it via
-// set_active_mouse_handlers (= seg000:1906).
-pub(crate) static PALACE_PLAN_MOUSE_HANDLERS: MouseHandlers = MouseHandlers {
-    idle: GameState::palace_plan_idle,
-    lmb: GameState::palace_plan_lmb,
-    rmb: GameState::palace_plan_rmb,
-    release: GameState::palace_plan_release,
-    rmb_release: GameState::palace_plan_rmb_release,
-    drag: GameState::palace_plan_drag,
-    rmb_drag: GameState::palace_plan_rmb_drag,
-};
-
 // = seg001:120b _stru_206BB_icon_list — the PALPLAN.HSQ icon list drawn by
 // draw_icons_list_at_si (each entry is (sprite, x, y), 0xffff-terminated): the
 // plan base bitmap (sprite 0) at the plan origin (182, 12) and the three room
@@ -65,6 +50,30 @@ const PALACE_PLAN_ROOM_OFFSETS: [(u8, u8); 11] = [
     (57, 49),
     (1, 65),
 ];
+
+// = data_0143c — the PALACE PLAN's right-side rect (x0, y0, x1, y1), the region
+// vga_fill_rect backs and blit_fb1_to_screen_effect reveals.
+const PALACE_PLAN_RECT: Rect = Rect {
+    x0: 160,
+    y0: 0,
+    x1: 320,
+    y1: 116,
+};
+
+// = seg001:1aba mouse_handlers_01aba — the PALACE PLAN overlay's MouseHandlers
+// record. idle and every button slot but the LMB press are the no-op loc_00f66;
+// the LMB press is menu_callback_choice_exit_menu (0xd2e2), so a click anywhere
+// over the plan closes it. ui_draw_palace_plan installs it via
+// set_active_mouse_handlers (= seg000:1906).
+pub(crate) static PALACE_PLAN_MOUSE_HANDLERS: MouseHandlers = MouseHandlers {
+    idle: GameState::palace_plan_idle,
+    lmb: GameState::palace_plan_lmb,
+    rmb: GameState::palace_plan_rmb,
+    release: GameState::palace_plan_release,
+    rmb_release: GameState::palace_plan_rmb_release,
+    drag: GameState::palace_plan_drag,
+    rmb_drag: GameState::palace_plan_rmb_drag,
+};
 
 impl GameState {
     // = seg000:18ee ui_draw_palace_plan — the nav-panel centre button
@@ -106,12 +115,12 @@ impl GameState {
         self.with_active_bank_sheet(|s, sheet| {
             s.draw_icons_list_at_si(&PALACE_PLAN_ICONS, sheet);
         });
-        // = seg000:1933 call iterate_over_all_NPCs_and_do_quite_a_bit_more — stamp
+        // = seg000:1933 call iterate_over_all_npcs_and_draw_population — stamp
         //   the per-room population markers.
         self.iterate_over_all_npcs_and_draw_population();
         // = seg000:1936 si=data_0143c; al=10h; blit_fb1_to_screen_effect — scroll
         //   the composed plan onto the visible screen.
-        self.blit_fb1_to_screen_effect(0x10, palace_plan_rect());
+        self.blit_fb1_to_screen_effect(0x10, PALACE_PLAN_RECT);
         // = seg000:193e bp=menu_done; bx=loc_019fc; jmp loc_0d323 — push the
         //   overlay as the active screen element (cleanup = palace_plan_cleanup),
         //   fold the " Done" command strip on, then highlight the cursor's slot.
@@ -121,34 +130,7 @@ impl GameState {
         self.highlight_hovered_text_action_item();
     }
 
-    // = seg000:19fc loc_019fc — the PALACE PLAN overlay's cleanup callback (the
-    // DOS bx passed to the screen-element push). Restore the room screen the plan
-    // covered: clear the active mouse hotspot, copy the plan's backing rect back
-    // from fb2 (the clean composed screen) into fb1, scroll-reveal it, and
-    // reselect the room mouse-handler table. screen_element_stack_pop_and_cleanup
-    // invokes it by the PalacePlan identity.
-    pub(crate) fn palace_plan_cleanup(&mut self) {
-        // = seg000:19fc call clear_some_mouse_rect.
-        self.clear_some_mouse_rect();
-        // = seg000:19ff si=143ch; call copy_rect_fb2_to_fb1 — restore the right-
-        //   side rect from the clean fb2 backup into fb1. The port's vga_copy_rect
-        //   takes absolute coordinates, so apply fb_base_ofs (y_offset) here.
-        let yoff = self.y_offset as i16;
-        let r = Rect {
-            x0: 160,
-            y0: yoff,
-            x1: 320,
-            y1: 116 + yoff,
-        };
-        gfx::vga_copy_rect(&mut self.framebuffer, &self.framebuffer_saved, r);
-        // = seg000:1a07 al=12h; call blit_fb1_to_screen_effect — scroll the
-        //   restored area back onto the screen.
-        self.blit_fb1_to_screen_effect(0x12, palace_plan_rect());
-        // = seg000:1a0c jmp select_room_ui_table — restore the room mouse handlers.
-        self.select_room_ui_table();
-    }
-
-    // = seg000:1948 iterate_over_all_NPCs_and_do_quite_a_bit_more — tally every
+    // = seg000:1948 iterate_over_all_npcs_and_draw_population — tally every
     // present NPC into a per-room histogram, then stamp each palace room's
     // markers onto the composed plan. The histogram has three 0xc-entry banks:
     // bank A (flag 0x40 clear) and bank B (flag 0x40 set) hold the ally/enemy
@@ -160,8 +142,7 @@ impl GameState {
         //   appearance word (location_appearance, data_00006).
         let cur_appearance_hi = (self.location_appearance >> 8) as u8;
         // = seg000:1956 si=room_persons; cx=10h — tally the 16 room-person slots.
-        for i in 0..16 {
-            let rp = self.room_persons[i];
+        for rp in &self.room_persons {
             // = seg000:1962 cmp dh,[si+3] — match on the appearance high byte.
             if (rp.location_appearance >> 8) as u8 != cur_appearance_hi {
                 continue;
@@ -177,20 +158,16 @@ impl GameState {
             if rp.flags & 0x40 != 0 {
                 idx += 0xc;
             }
-            // = seg000:197e inc [bx+di]. DOS room numbers stay within 1..0xc, so
-            //   idx is always in-bounds; guard rather than corrupt the stack.
-            if (0..hist.len() as i32).contains(&idx) {
-                hist[idx as usize] += 1;
-            }
+            // = seg000:197e inc [bx+di].
+            hist[idx as usize] += 1;
         }
+
         // = seg000:1985 bx=[location_and_room]; xor bh,bh; cmp bl,0ch; ja skip;
         //   add bl,17h; inc [bx+di] — mark the player's current room in bank C.
         let cur_room = (self.location_and_room & 0xff) as i32;
         if cur_room <= 0xc {
             let idx = cur_room + 0x17;
-            if (0..hist.len() as i32).contains(&idx) {
-                hist[idx as usize] += 1;
-            }
+            hist[idx as usize] += 1;
         }
 
         // = seg000:1995 inc di; cx=0bh; si=1426h — draw the 11 room markers. After
@@ -236,6 +213,33 @@ impl GameState {
         }
     }
 
+    // = seg000:19fc loc_019fc — the PALACE PLAN overlay's cleanup callback (the
+    // DOS bx passed to the screen-element push). Restore the room screen the plan
+    // covered: clear the active mouse hotspot, copy the plan's backing rect back
+    // from fb2 (the clean composed screen) into fb1, scroll-reveal it, and
+    // reselect the room mouse-handler table. screen_element_stack_pop_and_cleanup
+    // invokes it by the PalacePlan identity.
+    pub(crate) fn palace_plan_cleanup(&mut self) {
+        // = seg000:19fc call clear_some_mouse_rect.
+        self.clear_some_mouse_rect();
+        // = seg000:19ff si=143ch; call copy_rect_fb2_to_fb1 — restore the right-
+        //   side rect from the clean fb2 backup into fb1. The port's vga_copy_rect
+        //   takes absolute coordinates, so apply fb_base_ofs (y_offset) here.
+        let yoff = self.y_offset as i16;
+        let r = Rect {
+            x0: 160,
+            y0: yoff,
+            x1: 320,
+            y1: 116 + yoff,
+        };
+        gfx::vga_copy_rect(&mut self.framebuffer, &self.framebuffer_saved, r);
+        // = seg000:1a07 al=12h; call blit_fb1_to_screen_effect — scroll the
+        //   restored area back onto the screen.
+        self.blit_fb1_to_screen_effect(0x12, PALACE_PLAN_RECT);
+        // = seg000:1a0c jmp select_room_ui_table — restore the room mouse handlers.
+        self.select_room_ui_table();
+    }
+
     // = seg000:0f66 nullsub_00f66 — the PALACE PLAN's idle handler ([si] of the
     // mouse_handlers_01aba record, seg001:1aba), a no-op.
     fn palace_plan_idle(&mut self) {}
@@ -253,15 +257,4 @@ impl GameState {
     fn palace_plan_rmb_release(&mut self) {}
     fn palace_plan_drag(&mut self, _dx: i16, _dy: i16) {}
     fn palace_plan_rmb_drag(&mut self, _dx: i16, _dy: i16) {}
-}
-
-// = data_0143c — the PALACE PLAN's right-side rect (x0, y0, x1, y1), the region
-// vga_fill_rect backs and blit_fb1_to_screen_effect reveals.
-fn palace_plan_rect() -> Rect {
-    Rect {
-        x0: 160,
-        y0: 0,
-        x1: 320,
-        y1: 116,
-    }
 }
