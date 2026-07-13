@@ -131,13 +131,17 @@ impl GameState {
     }
 
     // = seg000:1948 iterate_over_all_npcs_and_draw_population — tally every
-    // present NPC into a per-room histogram, then stamp each palace room's
-    // markers onto the composed plan. The histogram has three 0xc-entry banks:
-    // bank A (flag 0x40 clear) and bank B (flag 0x40 set) hold the ally/enemy
-    // counts indexed by room-1, and bank C marks the player's current room.
+    // present NPC into a per-room count, then stamp each palace room's
+    // markers onto the composed plan.
     fn iterate_over_all_npcs_and_draw_population(&mut self) {
-        // = seg000:1948 sub sp,24h; rep stosb — a zeroed 36-byte histogram.
-        let mut hist = [0u8; 0x24];
+        // = seg000:1948 sub sp,24h; rep stosb — a zeroed 36-byte array.
+        // implemented as three 12-byte arrays: allies, enemies, and player.
+        // Each is indexed by the palace room number-1 (0..11) and counts the
+        // number of NPCs present in each room.
+        let mut allies = [0u8; 12];
+        let mut enemies = [0u8; 12];
+        let mut player = [0u8; 12];
+
         // = seg000:195e dh=[data_00007] — the high byte of the current location's
         //   appearance word (location_appearance, data_00006).
         let cur_appearance_hi = (self.location_appearance >> 8) as u8;
@@ -153,27 +157,27 @@ impl GameState {
                 continue;
             }
             // = seg000:196f bx=[si]; dec bl — index by the entry's room number-1.
-            let mut idx = ((rp.location_and_room & 0xff) as i32) - 1;
+            let idx = ((rp.location_and_room & 0xff) as i32) - 1;
             // = seg000:1975 test [si+0fh],40h — flag 0x40 selects the second bank.
             if rp.flags & 0x40 != 0 {
-                idx += 0xc;
+                // = seg000:197e inc [bx+di].
+                enemies[idx as usize] += 1;
+            } else {
+                // = seg000:197e inc [bx+di].
+                allies[idx as usize] += 1;
             }
-            // = seg000:197e inc [bx+di].
-            hist[idx as usize] += 1;
         }
 
         // = seg000:1985 bx=[location_and_room]; xor bh,bh; cmp bl,0ch; ja skip;
         //   add bl,17h; inc [bx+di] — mark the player's current room in bank C.
         let cur_room = (self.location_and_room & 0xff) as i32;
         if cur_room <= 0xc {
-            let idx = cur_room + 0x17;
-            hist[idx as usize] += 1;
+            let idx = cur_room - 1;
+            player[idx as usize] += 1;
         }
 
-        // = seg000:1995 inc di; cx=0bh; si=1426h — draw the 11 room markers. After
-        //   the `inc di`, room k (0..10, = palace room k+2) reads bank A at
-        //   hist[1+k], bank B at hist[0xd+k], and bank C at hist[0x19+k].
-        for (k, &(ox, oy)) in PALACE_PLAN_ROOM_OFFSETS.iter().enumerate() {
+        // = seg000:1995 inc di; cx=0bh; si=1426h — draw the room markers.
+        for (i, &(ox, oy)) in PALACE_PLAN_ROOM_OFFSETS.iter().enumerate() {
             // = seg000:199c dx=[data_0120d]; bx=[data_0120f]; lodsb/add — the plan
             //   origin plus this room's marker offset.
             let mut x = PLAN_X + ox as i16;
@@ -181,17 +185,17 @@ impl GameState {
             // = seg000:19af add bx,2; add dx,3.
             x += 3;
             y += 2;
-            // = seg000:19b5 cl=[di]; loc_019df — bank A (ally) dots.
-            self.draw_population_dots(hist[1 + k], x, y);
-            // = seg000:19ba add bx,7; cl=[di+0ch]; loc_019df — bank B (enemy) dots.
+            // = seg000:19b5 cl=[di]; loc_019df — ally dots.
+            self.draw_population_dots(allies[i + 1], x, y);
+            // = seg000:19ba add bx,7; cl=[di+0ch]; loc_019df — enemy dots.
             y += 7;
-            self.draw_population_dots(hist[0xd + k], x, y);
+            self.draw_population_dots(enemies[i + 1], x, y);
             // = seg000:19c3 sub bx,4; add dx,9.
             x += 9;
             y -= 4;
             // = seg000:19c9 cmp [di+18h],0; jz skip; ax=1;
-            //   draw_sprite_clobbering_bx_dx — the player's-current-room marker.
-            if hist[0x19 + k] != 0 {
+            //   the player's-current-room marker.
+            if player[i + 1] != 0 {
                 self.draw_active_bank_sprite(1, x, y);
             }
         }
