@@ -10,7 +10,7 @@ cpal = { workspace = true }
 num = { workspace = true }
 opl3-rs = { workspace = true }
 png = { workspace = true }
-winit = { version = "0.30.12", default-features = false, features = ["rwh_06"] }
+winit = { version = "0.30.12", features = ["rwh_06"] }
 wgpu = "30"
 pollster = "1"
 bytemuck = { version = "1", features = ["derive"] }
