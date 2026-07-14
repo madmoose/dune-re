@@ -115,6 +115,9 @@ pub const UI_ELEMENTS_INIT: [UiElement; 24] = [
     ui1(  0,   4,  40,  46, 0x0000, -1, 0xb1ee), // 23 loc_0b1ee
 ];
 
+pub const NAV_PANEL_RECORD_OFFSET: usize = 12; // the first record of the 6-record nav panel (HUD records 12..17)
+pub const NAV_PANEL_RECORD_COUNT: usize = 6; // the nav panel is 6 records long
+
 /// = seg001:1c36 data_01c36 — the closed-book (normal room view) frieze-side
 /// template: the (flags, sprite_id) applied to HUD records 0..4 by
 /// `ui_set_and_draw_frieze_sides`. The sibling templates (open book 1c56, map
@@ -149,7 +152,7 @@ const SUN_MOON_COORDS: [[(u16, u16); 2]; 16] = [
 /// the N/E/S/W move-direction buttons (sprites 29..32, handlers ui_click_room_*)
 /// plus the centre (sprite 36). `ui_setup_and_draw_nav_panel` copies it into place.
 #[rustfmt::skip]
-const NAV_PANEL_ROOM: [UiElement; 6] = [
+const NAV_PANEL_ROOM: [UiElement; NAV_PANEL_RECORD_COUNT] = [
     ui2(255, 162, 295, 192, 0x0000, 33, 0x0f66, None),                                 // 12 box
     ui2(269, 162, 279, 172, 0x0080, 29, 0x3f15, Some(GameState::ui_click_move_up)),    // 13 up
     ui2(284, 172, 294, 182, 0x0080, 30, 0x3f1a, Some(GameState::ui_click_move_right)), // 14 right
@@ -161,7 +164,7 @@ const NAV_PANEL_ROOM: [UiElement; 6] = [
 /// = seg001:1cca the alternate (ornithopter/travel) navigation panel template,
 /// used when `data_046eb` is set.
 #[rustfmt::skip]
-const NAV_PANEL_ALT: [UiElement; 6] = [
+const NAV_PANEL_ALT: [UiElement; NAV_PANEL_RECORD_COUNT] = [
     ui1(266, 171, 285, 184, 0x0080, 41, 0x5b05),
     ui1(267, 162, 284, 171, 0x4080, 37, 0x8829),
     ui1(285, 171, 297, 184, 0x4080, 38, 0x8824),
@@ -173,7 +176,7 @@ const NAV_PANEL_ALT: [UiElement; 6] = [
 /// = seg001:1d72 the map/book-mode navigation panel template, used when
 /// `game_screen_mode_flags & 3` is set.
 #[rustfmt::skip]
-const NAV_PANEL_MAP: [UiElement; 6] = [
+const NAV_PANEL_MAP: [UiElement; NAV_PANEL_RECORD_COUNT] = [
     ui2(262, 168, 263, 169, 0x0200, -1, 0x0f66, None),
     ui1(258, 172, 266, 182, 0x4080, 42, 0x4ad0),
     ui1(270, 170, 279, 182, 0x0080, 43, 0x4f09),
@@ -189,7 +192,7 @@ const NAV_PANEL_MAP: [UiElement; 6] = [
 /// hotspot (record 20) that `callback_transition_look_at_mirror` arms handles
 /// the look-away click instead.
 #[rustfmt::skip]
-pub(crate) const NAV_PANEL_MIRROR: [UiElement; 6] = [
+pub(crate) const NAV_PANEL_MIRROR: [UiElement; NAV_PANEL_RECORD_COUNT] = [
     ui2(262, 168, 263, 169, 0x0200, -1, 0x0f66, None),
     ui2(258, 172, 266, 182, 0x0000, -1, 0x0f66, None),
     ui2(270, 170, 279, 182, 0x0000, -1, 0x0f66, None),
@@ -452,9 +455,10 @@ impl GameState {
     // fills the panel background and draws them. Reached from ui_setup_nav_panel
     // with the view template, and directly from callback_transition_look_at_mirror
     // (si=1d1eh) to blank the compass for the mirror still.
-    pub(crate) fn ui_install_nav_panel(&mut self, template: &[UiElement; 6]) {
+    pub(crate) fn ui_install_nav_panel(&mut self, template: &[UiElement; NAV_PANEL_RECORD_COUNT]) {
+        const NAV_PANEL_RECORD_END: usize = NAV_PANEL_RECORD_OFFSET + NAV_PANEL_RECORD_COUNT;
         // = seg000:d72b di=1b8eh; cx=2ah; rep movsw.
-        self.ui_elements[12..18].copy_from_slice(template);
+        self.ui_elements[NAV_PANEL_RECORD_OFFSET..NAV_PANEL_RECORD_END].copy_from_slice(template);
         // = seg000:d735 loc_0d735.
         self.ui_draw_nav_panel();
     }
@@ -479,7 +483,7 @@ impl GameState {
             gfx::vga_fill_rect(self, 254, 162, 296, 193, 0xf0);
         }
         // = seg000:d738 si=1b8eh; cx=6; draw records 12..18.
-        self.draw_ui_elements_list(12, 6);
+        self.draw_ui_elements_list(NAV_PANEL_RECORD_OFFSET, NAV_PANEL_RECORD_COUNT);
     }
 
     // ---- Not-yet-ported callees (no-op stubs, each linked to its DOS address).

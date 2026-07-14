@@ -616,10 +616,15 @@ impl GameState {
         // = seg000:02b4 inc locations[0].nbr_orni
         self.locations[0].equipment.ornithopters += 1;
         // = seg000:02b8 dx=0x200a, bx=0x180, jmp loc_008f0 (open_SAL_resource
-        // wrapper): set the game's location/room and slot. The actual SAL open
-        // happens later via draw_location_room.
+        // wrapper): record the scene block (seg000:08f8..090b) — location/room,
+        // slot, current_scene, and the current-location record for the slot.
+        // The nav-panel rebuild reads current_location_index before the first
+        // draw_location_room re-records it, so it must be set here. The actual
+        // SAL open happens later via draw_location_room.
         self.location_and_room = 0x200a;
         self.location_appearance = 0x180;
+        self.data_00008 = 0x20;
+        self.current_location_index = 0;
         // Port-ism: reset fb_base_ofs to 0 for the in-game screen (the in-game HUD
         // + room scene draw there). DOS relies on the intro2 scenes having left it
         // at its segvga:01a3 static-init 0; the port stubs those scenes.

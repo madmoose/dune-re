@@ -17,6 +17,7 @@ use crate::{
     sprite::Sprite,
     sprite_bank::Banks,
     sprite_blitter,
+    tablat::Tablat,
     troops::{TROOPS, Troop},
 };
 
@@ -226,8 +227,15 @@ pub struct GameState {
 
     // = seg001:0008 data_00008 — current room/apparence selector byte (static
     // init 0x20). draw_room_scene and draw_room_game_screen treat 0xff as "no
-    // room scene to draw".
+    // room scene to draw"; the desert walk-out (loc_03fd2) sets it to 0xff and
+    // the walk-in arrival (arrive_at_location) restores the location code.
     pub(crate) data_00008: u8,
+
+    // = seg001:0009 data_00009 — the current location slot byte (the
+    // location_appearance high byte), 0xff while out in the desert. Written
+    // alongside data_00008 by the walk-out/arrival paths; the NPC shuffle
+    // (iterate_over_allied_NPCs_and_locations, not ported) reads it.
+    pub(crate) data_00009: u8,
 
     // = seg001:000a bitfield_Paul_events — Paul's story-progress bitfield. Bit 0x10
     // gates the person-0x0e dialogue verb (seg000:90ed: 0x96 vs 0x97).
@@ -275,6 +283,10 @@ pub struct GameState {
     // = seg001:0025 number_of_sietches_visited — counts first visits to
     // locations with a code below 0x20 (the sietches)
     pub(crate) number_of_sietches_visited: u8,
+
+    // = seg001:0027 discovered_sietch_count — counts sietches whose location
+    // record lost its undiscovered bit (location_mark_discovered).
+    pub(crate) discovered_sietch_count: u8,
 
     // = seg001:0026 entering_new_sietch — 0xff while the player's first in-room
     // move inside a freshly visited location is being committed
@@ -325,6 +337,25 @@ pub struct GameState {
 
     // = seg001:08aa troops.
     pub(crate) troops: [Troop; 68],
+
+    // = seg001:114e current_location_ptr — the locations[] index of the
+    // location the player is currently inside; any out-of-table value (>=
+    // 70) means "outside any location". DOS holds the record's seg001
+    // offset (0x100 + 0x1c * index): its static init 0xffff and the
+    // cleared-to-0 of the desert walk-out (seg000:3fdd) and travel departure
+    // (seg000:4763, not ported yet) are both non-record values, which the
+    // port's index form folds into the one sentinel 0xffff. Recomputed on
+    // every scene open (loc_008f0, the port's draw_location_room) and set on
+    // walk-in arrival (arrive_at_location).
+    pub(crate) current_location_index: u16,
+
+    // = seg001:1150 last_location_ptr — the locations[] index of the location
+    // the player is at or last left (static init 0x100 = locations[0], the
+    // Atreides palace). Set on walk-in arrival (arrive_at_location); unlike
+    // current_location_ptr it is NOT cleared when walking out into the
+    // desert, so the desert renderer (draw_outdoor_backdrop) can still see
+    // the nearby location.
+    pub(crate) last_location_index: usize,
 
     // = seg001:1152 companion_1 / seg001:1153 companion_2 — the icon state of the
     // two bottom-left HUD companions portraits.
@@ -658,6 +689,19 @@ pub struct GameState {
 
     pub(crate) dialogue: Box<[u8]>,
 
+    // = the decompressed MAP.HSQ (idx 0xbf) planet terrain map, one byte per
+    // map cell (see map.rs for the layout). DOS keeps res_map_ofs pointing at
+    // its centre (offset 0x62fc); the port stores the whole buffer and adds
+    // the centre inside the tablat row offsets. Mutable: the startup loop ORs
+    // the location bit 0x40 into each location's cell. Empty until
+    // initialize_resources.
+    pub(crate) map: Box<[u8]>,
+
+    // = the byte-swapped TABLAT.BIN (idx 0xba, loaded at seg000:00d3) — the
+    // per-latitude map row table (see tablat.rs). None until
+    // initialize_resources.
+    pub(crate) tablat: Option<Tablat>,
+
     // = seg001:cd9e — the buffer ui_save_head_rect (seg000:1834) grabs the head-
     // fold strip into: framebuffer-1 rect [1e76h] = (150,137,170,147), 20×10 =
     // 200 packed bytes. loc_017be's animating-down branch puts it back to fb1 to
@@ -919,6 +963,7 @@ impl GameState {
             location_and_room: 0x200a,
             location_appearance: 0x180,
             data_00008: 0x20,
+            data_00009: 0,
             bitfield_paul_events: 0,
             current_room: 0x0a,
             pending_destination_room: 0,
@@ -929,6 +974,7 @@ impl GameState {
             persons_talking_to: 0,
             data_00023: 0,
             number_of_sietches_visited: 0,
+            discovered_sietch_count: 0,
             entering_new_sietch: 0,
             game_phase: 0,
             night_attack_stage: 0,
@@ -942,6 +988,8 @@ impl GameState {
             data_000fc: 1,
             locations: LOCATIONS,
             troops: TROOPS,
+            current_location_index: 0xffff,
+            last_location_index: 0,
             companion_1: -1,
             companion_2: -1,
             data_011bc: 0,
@@ -1006,6 +1054,8 @@ impl GameState {
             character_screen_pos: [(0xffff, 0xffff); 0x17],
             dialogue: Default::default(),
             condit: Default::default(),
+            map: Default::default(),
+            tablat: None,
             ui_hud_head_saved_strip: vec![0; 20 * 10],
             ui_hud_head_animating_down: false,
             pit_timer_callback_counter: 0,
@@ -1131,6 +1181,22 @@ impl GameState {
             .expect("load DIALOGUE.HSQ");
 
         self.condit = self.dat_file.read("CONDIT.HSQ").expect("load CONDIT.HSQ");
+
+        // = seg000:00d3..00e5 load TABLAT.BIN and byte-swap its words (Tablat
+        // reads big-endian, the equivalent). The seg000:00e7 loop's derived
+        // per-row table (data_04880, 0x10000 / row length) has no ported
+        // reader yet.
+        let tablat = self.dat_file.read("TABLAT.BIN").expect("load TABLAT.BIN");
+        let tablat: &[u8; 792] = tablat[..792].try_into().expect("TABLAT.BIN size");
+        self.tablat = Some(Tablat::new(tablat));
+
+        // = seg000:0106..0114 load MAP.HSQ (idx 0xbf); res_map_ofs = its centre
+        // (the port keeps the whole buffer, see map.rs).
+        self.map = self.dat_file.read("MAP.HSQ").expect("load MAP.HSQ");
+
+        // = seg000:018f..01c6 cache each location's map cell (also marks the
+        // cell's map byte with the location bit 0x40).
+        self.init_location_map_offsets();
 
         self.build_voc_base_table();
     }

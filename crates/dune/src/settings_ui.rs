@@ -696,11 +696,9 @@ impl GameState {
         let Ok(data) = self.dat_file.read(&name) else {
             return;
         };
-        // = a564 midi_duck_music_volume — drop the score to the "music during
-        // voices" level so the test line is audible over it.
+        // = a564 midi_duck_music_volume
         self.midi_duck_music_volume();
-        // = a567 is_voc_pcm_playing=1; a56c si=3811h; a56f [pcm_vtable_start_
-        // playback] — start the clip on the single dnsdb driver.
+        // = a567 is_voc_pcm_playing=1; a56c si=3811h; a56f [pcm_vtable_start_playback]
         self.pcm_player.stop();
         self.pcm_player.start_playback(&data, 0);
         // = a573 jmp loc_0aba9 — DOS blocks, pumping frame_task_callback_0ab92

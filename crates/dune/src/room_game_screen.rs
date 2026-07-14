@@ -11,8 +11,10 @@
 //! room-view path. The flag state lives on `GameState` (see lib.rs).
 
 use crate::{
-    Equipment, GameState, Location, attack::AttackState, game_ui::NAV_PANEL_MIRROR, gfx,
-    sprite_bank,
+    Equipment, GameState, Location,
+    attack::AttackState,
+    game_ui::{NAV_PANEL_MIRROR, NAV_PANEL_RECORD_OFFSET},
+    gfx, sprite_bank,
 };
 
 /// One verb-menu record — a 4-byte entry of the `command_menu_buf` list
@@ -301,14 +303,24 @@ impl GameState {
     // and from several scene-change sites (seg000:0ecd/13de/1bcf/037aa/9450/b424).
     pub fn draw_room_game_screen(&mut self) {
         // = seg000:2db1 bp = ui_setup_and_draw_nav_panel; draw the top HUD strip
-        // offscreen (front buffer redirected to fb1 for the call).
+        // offscreen (front buffer redirected to fb1 for the call). This also
+        // re-installs the nav-panel template.
         self.gfx_call_bp_with_front_buffer_as_screen(|s| s.ui_setup_and_draw_nav_panel());
         // = seg000:2db7 call select_room_ui_table.
         self.select_room_ui_table();
         // = seg000:2dba data_047a6 = 0xff.
         self.data_047a6 = 0xff;
+        self.draw_room_game_screen_scene_reload();
+    }
 
-        // = seg000:2dbf loc_02dbf — also re-entered to reload the scene.
+    // = seg000:2dbf loc_02dbf — the scene-reload entry: the room-move commit
+    // (loc_0407b) and the travel arrival (seg000:4776) re-enter here, skipping
+    // the seg000:2db1 prologue — in particular the nav-panel template copy, so
+    // the compass records keep their previous flags until
+    // rebuild_and_draw_room_nav_panel adjusts them (the desert's alt rebuild
+    // leaves the centre palace-plan button [17] as the room it was left
+    // through set it: hidden).
+    pub(crate) fn draw_room_game_screen_scene_reload(&mut self) {
         // = seg000:2dbf call open_SAL_resource — open the room's scene resource.
         self.sal_open_resource();
         // = seg000:2dc4 clear the in-transition / render / lip-sync-index state.
@@ -890,7 +902,7 @@ impl GameState {
     // = seg000:2eb2 ui_draw_room_command_panel — draw the bottom command /
     // dialogue panel. With a dialogue active (data_04774 != 0) it renders the
     // dialogue (loc_0301a) and enqueues its render task; otherwise it builds and
-    // draws the verb menu for command_list_ptr. Run via the offscreen helper from
+    // draws the verb menu for current_location_ptr. Run via the offscreen helper from
     // draw_room_game_screen.
     fn ui_draw_room_command_panel(&mut self) {
         // = seg000:2eb2 cmp data_04774,0; jnz -> the dialogue branch.
@@ -907,7 +919,7 @@ impl GameState {
         }
 
         // = seg000:2ec9 loc_02ec9 — the verb-menu branch.
-        // = seg000:2ec9 di = [data_0114e] = command_list_ptr.
+        // = seg000:2ec9 di = [data_0114e] = current_location_ptr.
         // = seg000:2ecd call set_command_menu_origin (menu x/y from the header).
         self.set_command_menu_origin();
         // = seg000:2ed0 call build_room_command_records (assemble the verb list).
@@ -942,12 +954,13 @@ impl GameState {
 
     // ---- Command-panel callees (linked stubs; see the .chani annotations).
 
-    // = seg000:2e98 set_command_menu_origin — compute the verb-menu draw origin
-    // from the command_list header at command_list_ptr (command_menu_x =
-    // header[0]; command_menu_y = header[1] + 0xc) and save the list to
-    // command_menu_list.
-    // TODO: port; needs the command-list data model (command_list_ptr is the
-    // seg-relative offset of a static verb list). No-op stub.
+    // = seg000:2e98 set_command_menu_origin — save the verb-menu list identity
+    // (command_menu_list = di) and compute its draw origin from the two-byte
+    // header at di (command_menu_x = [di]; command_menu_y = [di+1] + 0xc).
+    // Popup menus pass a real template; this room-menu call site passes
+    // current_location_ptr, whose first_name/last_name bytes serve as the
+    // nominal header. TODO: port; needs command_menu_list and its identity
+    // compare (seg000:a2aa) to matter first. No-op stub.
     fn set_command_menu_origin(&mut self) {}
 
     // = seg000:2efb build_room_command_records — assemble the verb-menu record
@@ -980,7 +993,7 @@ impl GameState {
                     recs.push(CMD_FIGHT_FOR_A_WHOLE_DAY);
                     recs.push(grey_if(CMD_CALL_A_WORM, self.game_phase < 0x4f));
                 } else {
-                    // = seg000:2f3d loc_02f3d — di = [command_list_ptr] (the current
+                    // = seg000:2f3d loc_02f3d — di = [current_location_ptr] (the current
                     // location pointer stashed there at room commit); call
                     // compute_location_available_equipment (seg000:7f27) to refresh
                     // orni_count for this location, then "TAKE AN ORNITHOPTER" greyed
@@ -1057,22 +1070,14 @@ impl GameState {
     // location's per-type available equipment (DOS buffer at seg001:46fe,
     // location_available_equipment); the ornithopters slot is orni_count, read
     // just below to grey TAKE AN ORNITHOPTER.
-    //
-    // DOS takes the location pointer in di — the room-commit at seg000:4024 stashes
-    // it in command_list_ptr, which the 2f3d call site reloads into di. The port
-    // instead recovers the location index from location_appearance, whose high byte
-    // the same commit set to index+1 (seg000:40ae div by 0x1c, then seg000:4067
-    // stores bx). This call site is the sietch night-attack room, reached only via
-    // the special-room commit, so the high byte is the index there.
     fn compute_location_available_equipment(&mut self) {
-        // = seg000:2f3e di = [command_list_ptr]; the location index is the high
-        // byte of location_appearance minus 1 (0 = palace). A 0 high byte would
-        // underflow past the table; this guard covers it.
-        let loc = (self.location_appearance >> 8).wrapping_sub(1) as usize;
-        if loc >= self.locations.len() {
+        // = seg000:2f3e di = [current_location_ptr] — the current location
+        // record (this call site is the location entry room's verb build, so
+        // it is always set; the guard covers the "no location" sentinel).
+        let Some(location) = self.locations.get(self.current_location_index as usize) else {
             return;
-        }
-        self.available_equipment = self.location_available_equipment(&self.locations[loc]);
+        };
+        self.available_equipment = self.location_available_equipment(location);
     }
 
     // = seg000:7f2a location_iterate_on_troops_in_location — the shared body the
@@ -1776,12 +1781,12 @@ impl GameState {
     //
     // The location_appearance.lo == 0x80 special-room branch (most rooms, including
     // the palace at 0x180) classifies the room-person linked list reachable
-    // through command_list_ptr: walks data_00009[command_list_ptr] via the
+    // through current_location_ptr: walks data_00009[current_location_ptr] via the
     // shared loc_06603 iterator with bp = loc_0316e (which buckets entries by
     // travel-mate/day/etc. and writes back into room_persons[12], [14], [15]
-    // plus data_0476a/b), then specially handles data_00008[command_list_ptr]
+    // plus data_0476a/b), then specially handles data_00008[current_location_ptr]
     // == 0x21 by writing room_persons[13] and calling loc_02318, then runs
-    // loc_0331e. The port has none of those structures yet: command_list_ptr,
+    // loc_0331e. The port has none of those structures yet: current_location_ptr,
     // the loc_06906 entry decoder, loc_0316e, loc_0331e, loc_02318. While
     // those are stubs the dynamic slots stay at 0x7f80, which is what the
     // unconditional reset above already establishes — so the scan behaves
@@ -1800,8 +1805,8 @@ impl GameState {
         //   the classification chain runs only for "special" rooms whose
         //   location_appearance low byte is 0x80 (the palace 0x180 and most others).
         if (self.location_appearance & 0xff) as u8 == 0x80 {
-            // = seg000:3149..316a the classification chain on command_list_ptr.
-            // TODO: port once command_list_ptr, loc_06603/loc_06906 iteration,
+            // = seg000:3149..316a the classification chain on current_location_ptr.
+            // TODO: port once current_location_ptr, loc_06603/loc_06906 iteration,
             //   loc_0316e (room-person bucketing), loc_0331e and loc_02318
             //   land. Until then the dynamic room_persons[12..16] stay at
             //   0x7f80 and the verb panel reflects only the static-table
@@ -1812,16 +1817,14 @@ impl GameState {
     // = seg000:2ffb rebuild_and_draw_room_nav_panel — flip the four compass
     // direction buttons (ui_elements[13..17]) between visible-and-clickable
     // (flags 0x80) and hidden (flags 0x20) according to the current scene's
-    // four direction-exit bytes, then redraw HUD records 12..18.
+    // four direction-exit bytes, and gate the centre palace-plan button [17]
+    // on being inside the Atreides palace, then redraw HUD records 12..18.
     //
     // The DOS routine also handles three special cases (night attack, map/book
     // mode, sietch entrance) by re-installing alternate templates; the port
     // leaves whatever `ui_setup_and_draw_nav_panel` already placed for those modes
-    // and only customizes the standard palace/sietch room path. The command-
-    // panel identity (`command_list_ptr`) gate on the centre element [17] is
-    // also approximated: until command_list_ptr lands in the port we keep the
-    // centre at its template default. The data_01cc4 mirror is dropped — no
-    // consumer is ported yet.
+    // and only customizes the standard palace/sietch room path. The data_01cc4
+    // mirror of the centre flags is dropped — no consumer is ported yet.
     fn rebuild_and_draw_room_nav_panel(&mut self) {
         // = seg000:2ffb cmp byte ptr [night_attack_stage], 0; jnz loc_0301a (alt). The
         // night-attack path leaves the existing panel in place and just
@@ -1847,10 +1850,10 @@ impl GameState {
         if bl != 0x80 || dh == 0x21 {
             // = seg000:3073 alt template: all four directions clickable with
             //   sprite_ids 0x1d..0x20, box [12].sprite_id = 0x23.
-            self.ui_elements[12].sprite_id = 0x23;
+            self.ui_elements[NAV_PANEL_RECORD_OFFSET].sprite_id = 0x23;
             for i in 0..4 {
-                self.ui_elements[13 + i].flags = 0x80;
-                self.ui_elements[13 + i].sprite_id = 0x1d + i as i16;
+                self.ui_elements[NAV_PANEL_RECORD_OFFSET + 1 + i].flags = 0x80;
+                self.ui_elements[NAV_PANEL_RECORD_OFFSET + 1 + i].sprite_id = 0x1d + i as i16;
             }
             self.ui_draw_nav_panel();
             return;
@@ -1864,10 +1867,23 @@ impl GameState {
             return;
         };
 
-        // = seg000:3045 bx = 0x21; if dl == 1: bx = 0x22 — the box backing
-        //   sprite_id depends on whether this is the location's entry room.
-        let box_sprite_id = if room == 1 { 0x22 } else { 0x21 };
-        self.ui_elements[12].sprite_id = box_sprite_id;
+        // = seg000:3039..3043 al = 0x20 (hidden), or 0x80 (visible) when the
+        //   current location is the Atreides palace (current_location_ptr ==
+        //   100h = locations[0]) — the centre button [17] opens the palace
+        //   plan, which only exists there.
+        // = seg000:3045..304e bx = 0x21; if dl == 1: bx = 0x22 and al = 0x20 —
+        //   the box backing sprite depends on whether this is the location's
+        //   entry room, which also hides the centre button.
+        let (box_sprite_id, centre_flags) = if room == 1 {
+            (0x22, 0x20)
+        } else if self.current_location_index == 0 {
+            (0x21, 0x80)
+        } else {
+            (0x21, 0x20)
+        };
+        self.ui_elements[NAV_PANEL_RECORD_OFFSET].sprite_id = box_sprite_id;
+        // = seg000:3053 mov [di+46h],al — the centre element [17]'s flags.
+        self.ui_elements[NAV_PANEL_RECORD_OFFSET + 5].flags = centre_flags;
         // = seg000:305c the exit-classification loop: for each compass
         //   direction (i = 0..3 → UP / RIGHT / DOWN / LEFT), show the arrow
         //   (flags 0x80) only when the exit byte is in 0xFB..0xFF; otherwise
@@ -1876,7 +1892,7 @@ impl GameState {
         for (i, exit) in exits.iter().enumerate() {
             let exit = *exit as i8;
             let flag = if exit != 0 && exit >= -5 { 0x80 } else { 0x20 };
-            self.ui_elements[13 + i].flags = flag;
+            self.ui_elements[NAV_PANEL_RECORD_OFFSET + 1 + i].flags = flag;
         }
         // = seg000:3070 jmp loc_0d735 — fall into the panel redraw.
         self.ui_draw_nav_panel();
@@ -2018,12 +2034,31 @@ impl GameState {
     // the current location_and_room / location_appearance globals (data_00006).
     //
     // The DOS prologue (loc_098e6, loc_04d00, copy_game_area_rect_to_clip_rect)
-    // and the room-byte >= 0x80 character branch are not ported yet.
+    // is not ported yet.
     fn draw_room_scene(&mut self) {
         // = seg000:37b2 call reset_scene_lip_sync_state — tear down any active
         // talking head (and its idle/voc frame tasks) before redrawing the room,
         // so the LOOK AT MIRROR head stops compositing once the player looks away.
         self.reset_scene_lip_sync_state();
+        // = seg000:37c4..37d7 ax = 0xffff; cmp [current_scene],al; jz — no room
+        // scene (the desert, current_scene 0xff) short-circuits the scene-record
+        // lookup and lands in the sign-bit branch loc_037dc. (An in-room scene
+        // whose record's room byte is >= 0x80 — the character-scene renderer —
+        // takes the same branch in DOS; that case is not ported.)
+        if self.data_00008 == 0xff {
+            // = seg000:37dc call loc_03ae9 — clear the character anchor tables
+            // (no standing people in the desert).
+            self.character_screen_pos = [(0xffff, 0xffff); 0x17];
+            // = seg000:37df or [room_render_flags],1.
+            self.room_render_flags |= 1;
+            // = seg000:37e4 test [game_screen_mode_flags],3; jnz loc_037f4 —
+            // only the plain room view draws the outdoor composite.
+            if self.game_screen_mode_flags & 3 == 0 {
+                // = seg000:37e9 falls into loc_037eb.
+                self.draw_desert_view();
+            }
+            return;
+        }
         self.draw_location_room(self.location_and_room, self.location_appearance);
     }
 

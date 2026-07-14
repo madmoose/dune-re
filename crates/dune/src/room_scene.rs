@@ -60,11 +60,16 @@ const ROOM_SHEET_NAMES: [&str; 16] = [
 // = seg001:1972 room1_backdrop_base — the per-SAL outdoor-backdrop base resource
 // that draw_outdoor_backdrop (seg000:3839) reads as
 // room1_backdrop_base[calc_SAL_index]: SIET -> DS0 (0x3c), PALACE -> DP1 (0x72),
-// VILG -> 0x7f, HARK -> DF1 (0x76) / DH0 (0x84). The matching per-SAL thresholds
-// in room1_backdrop_threshold (seg001:1977) are {5, 4, 5, 4, 4}; they gate the
-// game_time/map branch (seg000:3834), which the port does not model (see
-// draw_outdoor_backdrop), so the threshold table itself is not needed here.
+// VILG -> 0x7f, HARK -> DF1 (0x76) / DH0 (0x84). Standing in the desert on the
+// location's longitude adds the fine latitude (the walked distance) to the
+// base, so the view shrinks into the distance step by step (DP1 -> DP0 -> DP2
+// -> DP3 for the palace).
 const ROOM1_BACKDROP_BASE: [u8; 5] = [0x3c, 0x72, 0x7f, 0x76, 0x84];
+
+// = seg001:1977 room1_backdrop_threshold — how far (in fine-latitude steps)
+// each location type stays in view; past it draw_outdoor_backdrop falls back
+// to the position-hashed desert terrain tile (seg000:3834 jnb loc_0384a).
+const ROOM1_BACKDROP_THRESHOLD: [u8; 5] = [5, 4, 5, 4, 4];
 
 // = chani struct PalaceRoom (seg001:1225 palace_rooms et al). The first byte
 // selects the room's SAL sub-chunk and sprite sheet (see draw_SAL); the four
@@ -80,8 +85,9 @@ struct SceneRecord {
     //   0x00:        no exit in this direction
     //   0x01..0x7F:  destination room number — ui_click_move_room stores it as
     //                the new `location_and_room` low byte (seg000:3faa).
-    //   0x80..0xFF:  special-exit dispatch via the jump table at cs:1454h
-    //                (seg000:3fd2..3ff7). The 0xFB..0xFF subrange is what
+    //   0x80..0xFF:  special exit: walk out of the location into the desert
+    //                (seg000:3fd2), stepped by the desert_step_deltas word at
+    //                index -exit. The 0xFB..0xFF subrange is what
     //                rebuild_and_draw_room_nav_panel renders as a visible
     //                HUD arrow; the rest are in-scene/scripted exits.
     exits: [u8; 4],
@@ -196,6 +202,58 @@ const SCENE_RECORDS: [SceneRecord; 83] = [
     SceneRecord::new(0xa8, [0x00, 0x00, 0x01, 0x00]),
 ];
 
+// = seg001:1454 desert_step_deltas — per-direction desert step words, indexed
+// by bp = the compass direction (1..4, UP/RIGHT/DOWN/LEFT) or the negated
+// special-exit byte (0xff..0xfb -> 1..5). Each word is a packed step: the low
+// byte is a signed longitude delta, the high byte a signed fine-latitude
+// delta, applied by desert_apply_step_delta. Index 5 (exit 0xfb) is "no
+// movement" — step onto the map in place. Index 0 is unused (the DOS word
+// there, 0x0209, is unrelated data).
+const DESERT_STEP_DELTAS: [u16; 6] = [0x0209, 0xff00, 0x0001, 0x0100, 0x00ff, 0x0000];
+
+// = seg000:b5cf desert_apply_step_delta — apply a desert_step_deltas word to
+// the desert position: `x` is the longitude (0..0xffff around the planet, the
+// DOS dx), `latfine` packs the signed latitude row in its low byte (the DOS
+// bl, -97..97) and the fine sub-row position in its high byte (bh, 0..255
+// between latitude rows). The step's high byte moves the fine latitude,
+// carrying into the row clamped to row < 0x62 going one way and row > -0x62
+// going the other (a blocked step is undone); the low byte (sign-extended)
+// is added to the longitude.
+fn desert_apply_step_delta(step: u16, x: u16, latfine: u16) -> (u16, u16) {
+    let ah = (step >> 8) as u8;
+    let mut bl = (latfine & 0xff) as u8;
+    let mut bh = (latfine >> 8) as u8;
+    if (ah as i8) > 0 {
+        // = seg000:b5d5 add bh,ah; jnb loc_0b5f5 — no carry: done.
+        let (sum, carry) = bh.overflowing_add(ah);
+        bh = sum;
+        if carry {
+            // = seg000:b5d9 inc bl; cmp bl,62h; jl — clamp at row 0x62,
+            // undoing the whole step when it would cross.
+            bl = bl.wrapping_add(1);
+            if bl as i8 >= 0x62 {
+                bl = bl.wrapping_sub(1);
+                bh = bh.wrapping_sub(ah);
+            }
+        }
+    } else if (ah as i8) < 0 {
+        // = seg000:b5e6 add bh,ah; jb loc_0b5f5 — carry set: done.
+        let (sum, carry) = bh.overflowing_add(ah);
+        bh = sum;
+        if !carry {
+            // = seg000:b5ea dec bl; cmp bl,9eh; jg — clamp at row -0x62.
+            bl = bl.wrapping_sub(1);
+            if bl as i8 <= -0x62 {
+                bl = bl.wrapping_add(1);
+                bh = bh.wrapping_sub(ah);
+            }
+        }
+    }
+    // = seg000:b5f5 cbw; add dx,ax — the sign-extended longitude delta.
+    let x = x.wrapping_add((step as u8) as i8 as u16);
+    (x, ((bh as u16) << 8) | bl as u16)
+}
+
 // = seg000:5e4f calc_SAL_index. Maps a location's `apparence` byte to a SAL
 // index via ascending thresholds (0=SIET 1=PALACE 2=VILG 3/4=HARK).
 fn calc_sal_index(apparence: u8) -> usize {
@@ -231,8 +289,8 @@ fn compass_move_target(location_and_room: u16, exits: [u8; 4], direction: usize)
         return None;
     }
     // = seg000:3f70 js loc_03fd2 — sign bit set (0x80..0xFF) is a special exit
-    //   dispatched via the jump table at cs:1454h (0xFB..0xFF are compass-HUD
-    //   slot exits, 0x80..0xFA are scripted/in-scene exits). TODO: not ported.
+    //   into the desert; ui_click_move_room takes that branch before calling
+    //   here, so this guard only backstops direct callers (tests).
     if exit & 0x80 != 0 {
         return None;
     }
@@ -288,16 +346,12 @@ impl GameState {
     // `direction` is 1..4 (UP/N, RIGHT/E, DOWN/S, LEFT/W), DOS's bp: the
     // 1-based offset into the current scene record's exit bytes.
     //
-    // Two whole-subsystem gaps remain, both ending in the desert-position
-    // dispatch at loc_03ff5 (the step-delta table at seg001:1454, applied by
-    // loc_0b5cf, then the location-arrival resolution loc_04002..loc_0401f):
-    //   - the outdoor desert-walk branch (seg000:3f49, location_appearance low
-    //     byte != 0x80) — unreachable in the port, which only renders in-room
-    //     views (location_appearance low byte 0x80);
-    //   - the special-exit branch (seg000:3fd2, exit byte 0x80..0xFF): walking
-    //     out of the location into the desert. Its teardown (command_list_ptr
-    //     handoff, current_scene = 0xff) is deliberately not run here — without
-    //     the dispatch it would strand the player with no scene.
+    // Three paths: an in-room destination-room exit commits a plain room move;
+    // a special exit (0x80..0xFF) walks out of the location into the desert
+    // (loc_03fd2); and while already in the desert (location_appearance low
+    // byte != 0x80) every compass click steps the desert position. The two
+    // desert paths meet in the desert-position dispatch (loc_03ff5 ->
+    // desert_position_dispatch).
     // The create_save_cl autosave hooks (cl=2/3) are stubbed: the save system
     // is not ported (see start()).
     pub(crate) fn ui_click_move_room(&mut self, direction: usize) {
@@ -327,24 +381,64 @@ impl GameState {
             //   dispatch in the game loop, the low bits count steps.
             let steps = ((self.data_04735 & 0x7f) + 1).min(0x7f);
             self.data_04735 = steps | 0x80;
-            // = seg000:3f59..3f60 cap desert_walk_counter at 0x14.
-            if self.desert_walk_counter < 0x14 {
+            // = seg000:3f59..3f60 cap desert_walk_counter at 20.
+            if self.desert_walk_counter < 20 {
                 self.desert_walk_counter += 1;
             }
-            // = seg000:3f64 jmp loc_03ff5 — the desert-position dispatch.
-            // TODO: port the outdoor traversal (loc_03ff5/loc_0b5cf and the
-            //   arrival resolution loc_04002..loc_0401f); unreachable until an
-            //   outdoor view can be entered at all.
+            // = seg000:3f64 jmp loc_03ff5 — the desert-position dispatch, with
+            //   bp = the compass direction and the current desert position in
+            //   (location_and_room, location_appearance).
+            self.desert_position_dispatch(
+                direction,
+                self.location_and_room,
+                self.location_appearance,
+            );
             return;
         }
 
         let Some(exits) = self.current_scene_exits() else {
             return;
         };
-        // = seg000:3f70 js loc_03fd2 — a special exit (0x80..0xFF): leave the
-        //   location into the desert. TODO: port loc_03fd2's teardown + the
-        //   desert-position dispatch (see the function comment).
-        if exits[direction - 1] & 0x80 != 0 {
+        let exit = exits[direction - 1];
+        // = seg000:3f6c or dl,dl; 3f6e jz loc_03f14 — no exit in this
+        //   direction (also re-checked by compass_move_target below).
+        if exit == 0 {
+            return;
+        }
+        // = seg000:3f70 js loc_03fd2 — a special exit (0x80..0xFF): walk out
+        //   of the location into the desert.
+        if exit & 0x80 != 0 {
+            // = seg000:3fd2 mov [data_000e7],0 — a write-only desert-redraw
+            //   counter (no DOS reader); not modelled.
+            // = seg000:3fd7/3fd9 xor dh,dh; neg dl — bp = -exit, the
+            //   desert_step_deltas index (0xff..0xfb -> 1..5).
+            let bp = exit.wrapping_neg() as usize;
+            // = seg000:3fdd/3fdf xor si,si; xchg si,[current_location_ptr] —
+            //   detach the current location record (the desert has no verb
+            //   list); the record itself stays in last_location_ptr. (DOS
+            //   writes the pointer 0; the port's index form uses the 0xffff
+            //   "no location" sentinel.)
+            let loc_index = self.current_location_index as usize;
+            self.current_location_index = 0xffff;
+            let Some(location) = self.locations.get(loc_index) else {
+                return;
+            };
+            // = seg000:3fe3/3fe6/3fe9 seed the desert position from the
+            //   location's map cell: dx = map_x, bl = map_y, bh (the fine
+            //   latitude) = 0.
+            let x = location.map_x as u16;
+            let latfine = (location.map_y as u16) & 0xff;
+            // = seg000:3feb/3ff0 current_scene / data_00009 = 0xff — no room
+            //   scene; draw_room_scene now takes its desert branch.
+            self.data_00008 = 0xff;
+            self.data_00009 = 0xff;
+            // Exit bytes 0x80..0xFA would index past desert_step_deltas (DOS
+            // reads unrelated seg001 data there); only the compass-arrow
+            // exits 0xFB..0xFF are clickable on the HUD.
+            if bp >= DESERT_STEP_DELTAS.len() {
+                return;
+            }
+            self.desert_position_dispatch(bp, x, latfine);
             return;
         }
         // = seg000:3f67 loc_03f67 (the bl == 0x80 in-room path) -> loc_03efe
@@ -362,11 +456,9 @@ impl GameState {
             //   save system is not ported.
         }
 
-        // = seg000:3f84 mov si,[command_list_ptr] — the current location record
-        //   (the room verb list IS the location record, base seg001:0100). The
-        //   port derives its index from location_appearance's high byte, the
-        //   1-based location slot (the same index draw_location_room uses).
-        let loc_index = ((self.location_appearance >> 8) as usize).wrapping_sub(1);
+        // = seg000:3f84 mov si,[current_location_ptr] — the current location
+        //   record.
+        let loc_index = self.current_location_index as usize;
         if let Some(location) = self.locations.get_mut(loc_index) {
             // = seg000:3f88 test byte [si+0ah],10h — first in-room move inside
             //   an unvisited location.
@@ -412,20 +504,140 @@ impl GameState {
         // = seg000:3fca mov byte [data_00023], 5 — mark the committed transition.
         self.data_00023 = 5;
 
-        // = seg000:3fcf jmp loc_04057; 4057 call move_all_NPCs_whose_bit_6_of_
-        //   flags_is_set — companions in the room being left follow the player
-        //   to the destination. Runs before location_and_room is updated: the
-        //   scan matches against the room being left.
-        self.move_all_npcs_whose_bit_6_of_flags_is_set(new_room, self.location_appearance);
+        // = seg000:3fcf jmp loc_04057 — bx (the location appearance) is
+        //   unchanged on the in-room path.
+        self.commit_room_move(new_room, self.location_appearance);
+    }
+
+    // = seg000:3ff5 loc_03ff5 — the desert-position dispatch shared by the
+    // walk-out special exit and the in-desert compass moves: apply the
+    // direction's step to the desert position (dx = longitude, latfine =
+    // (fine << 8) | latitude row) and commit it; a step that lands exactly on
+    // a latitude row (fine == 0) first resolves whether a location occupies
+    // that map cell and enters its room 1 instead.
+    fn desert_position_dispatch(&mut self, direction: usize, x: u16, latfine: u16) {
+        // = seg000:3ff5/3ff7 ax = desert_step_deltas[bp]; 3ffb call
+        //   desert_apply_step_delta.
+        let step = DESERT_STEP_DELTAS[direction];
+        let (x, latfine) = desert_apply_step_delta(step, x, latfine);
+        // = seg000:3ffe or bh,bh; jnz loc_04057 — between latitude rows: just
+        //   commit the desert position.
+        if latfine & 0xff00 != 0 {
+            self.commit_room_move(x, latfine);
+            return;
+        }
+        // = seg000:4002 loc_04002 — on a latitude row: check for a location.
+        // = seg000:4002..4005 bx = the sign-extended latitude row.
+        let lat = (latfine as u8) as i8 as i16;
+        // = seg000:4007 call read_map_byte_at_dx_bl (then 400a xor bh,bh —
+        //   bh is already 0 on this path).
+        let offset = self.map_position_to_offset(x, lat);
+        let map_byte = self.map[offset];
+        // = seg000:400c test al,40h; jz loc_04057 — no location at this cell.
+        if map_byte & 0x40 == 0 {
+            self.commit_room_move(x, latfine);
+            return;
+        }
+        // = seg000:4010 call find_location_by_map_offset; jnz loc_04057.
+        let Some(loc_index) = self.find_location_by_map_offset(offset) else {
+            self.commit_room_move(x, latfine);
+            return;
+        };
+        // = seg000:4015 cmp dx,[si+2]; jnz loc_04057 — the walked longitude
+        //   must equal the location's snapped map_x exactly.
+        if self.locations[loc_index].map_x as u16 != x {
+            self.commit_room_move(x, latfine);
+            return;
+        }
+        // = seg000:401f arrive_at_location, falling through into loc_04057.
+        let (new_room, new_appearance) = self.arrive_at_location(loc_index);
+        self.commit_room_move(new_room, new_appearance);
+    }
+
+    // = seg000:401f arrive_at_location — walk-in arrival at a location from
+    // the desert. Returns the (location_and_room, location_appearance) pair
+    // for its entry room, which DOS falls through into loc_04057 to commit.
+    fn arrive_at_location(&mut self, loc_index: usize) -> (u16, u16) {
+        // = seg000:401f mov [data_04735],0 — reset the desert step counter
+        //   (and disarm the auto-action dispatch its high bit requests).
+        self.data_04735 = 0;
+        // = seg000:4024/4028 current_location_ptr / last_location_ptr = si — the
+        //   arrived-at location is the current location record again.
+        self.current_location_index = loc_index as u16;
+        self.last_location_index = loc_index;
+        // = seg000:402e call location_related_to_dying_if_arriving_at_
+        //   fortress_0503c — the occupation check (arms the night attack when
+        //   the location is enemy-held). TODO: needs the troop system.
+        // = seg000:4031/4037 data_0009a/data_00098 = 0 — the massive-attack
+        //   troop accumulators (seg000:7326); not modelled, no ported reader.
+        // = seg000:403d call location_mark_discovered.
+        self.location_mark_discovered(loc_index);
+        // = seg000:4040 call location_entry_room_dx_bx — dx = the location's
+        //   entry room 1, bx = the in-room appearance for its 1-based slot.
+        let new_room = ((self.locations[loc_index].appearance as u16) << 8) | 1;
+        let new_appearance = ((loc_index as u16 + 1) << 8) | 0x80;
+        // = seg000:4043/4047 current_scene = dh; data_00009 = bh.
+        self.data_00008 = (new_room >> 8) as u8;
+        self.data_00009 = (new_appearance >> 8) as u8;
+        // = seg000:404b cmp dh,20h; jb loc_04054; or [si+0ah],10h — arriving
+        //   at a non-sietch (city/palace) marks it visited immediately.
+        if new_room >> 8 >= 0x20 {
+            self.locations[loc_index].status |= 0x10;
+        }
+        // = seg000:4054 call iterate_over_allied_NPCs_and_locations — the
+        //   companion/NPC room shuffle on arrival. TODO: not ported.
+        (new_room, new_appearance)
+    }
+
+    // = seg000:425b location_mark_discovered — first arrival at an
+    // undiscovered location (status bit 0x80 set): clear the bit, zero
+    // discoverable_at_phase, count sietches in discovered_sietch_count, and
+    // advance the game phase when the location is Tuono-Harg.
+    fn location_mark_discovered(&mut self, loc_index: usize) {
+        let location = &mut self.locations[loc_index];
+        // = seg000:425b test [di+0ah],80h; jz ret.
+        if location.status & 0x80 == 0 {
+            return;
+        }
+        // = seg000:4261/4265 clear the bit, discoverable_at_phase = 0.
+        location.status &= 0x7f;
+        location.discoverable_at_phase = 0;
+        // = seg000:4269 cmp [di+8],20h; jnb ret — only sietches count.
+        if location.appearance >= 0x20 {
+            return;
+        }
+        // = seg000:426f inc [discovered_sietch_count].
+        self.discovered_sietch_count += 1;
+        // = seg000:4273 cmp word [di],603h — first_name 3 / last_name 6 is
+        //   Tuono-Harg; discovering it advances the story to phase 0x10.
+        if location.first_name == 3 && location.last_name == 6 {
+            // = seg000:427e call set_game_phase_and_trigger_callbacks(0x10) —
+            //   the phase-change trigger chain (seg000:121f) is unported.
+            self.game_phase = 0x10;
+        }
+    }
+
+    // = seg000:4057 loc_04057 — commit a move: move companion NPCs to the
+    // destination, record location_and_room / location_appearance, rotate
+    // current_room into previous_room, then redraw. Reached from the in-room
+    // move (seg000:3fcf), the desert-position dispatch, and the walk-in
+    // arrival fall-through.
+    fn commit_room_move(&mut self, new_room: u16, new_appearance: u16) {
+        // = seg000:4057 call move_all_NPCs_whose_bit_6_of_flags_is_set —
+        //   companions in the room being left follow the player to the
+        //   destination. Runs before location_and_room is updated: the scan
+        //   matches against the room being left.
+        self.move_all_npcs_whose_bit_6_of_flags_is_set(new_room, new_appearance);
         // = seg000:405a mov [location_and_room],dx — commit the destination
         //   (re-recorded by draw_location_room when the redraw runs below, but
         //   the no-redraw return paths still need it committed).
         self.location_and_room = new_room;
         // = seg000:405e..4064 rotate current_room into previous_room.
         self.previous_room = std::mem::replace(&mut self.current_room, (new_room & 0xff) as u8);
-        // = seg000:4067 mov [location_appearance],bx — bx is unchanged on the
-        //   in-room path, so this is a no-op here (the desert arrival paths
-        //   that enter loc_04057 with a new bx are not ported).
+        // = seg000:4067 mov [location_appearance],bx — unchanged on the
+        //   in-room path; the desert paths commit a new appearance (the
+        //   (fine << 8) | latitude position, or the arrival's room form).
+        self.location_appearance = new_appearance;
         // = seg000:406b cmp [data_046eb],0; js ret — no room redraw while the
         //   ornithopter/travel view owns the screen.
         if self.data_046eb & 0x80 != 0 {
@@ -443,10 +655,6 @@ impl GameState {
             return;
         }
 
-        // = seg000:407b jmp loc_02dbf — re-enter draw_room_game_screen at its
-        //   scene-reload entry to draw the destination room (draw_location_room
-        //   re-records location_and_room at seg001:0004).
-        self.draw_location_room(new_room, self.location_appearance);
         // The DOS room re-enter (loc_00d8e -> seg000:0dad jmp ui_toggle_room_view)
         // recomposes the left frieze + date/time indicator into fb1 — its
         // ui_set_and_draw_frieze_sides_closed_book runs offscreen — before the
@@ -460,8 +668,36 @@ impl GameState {
         self.gfx_call_bp_with_front_buffer_as_screen(|s| {
             s.ui_set_and_draw_frieze_sides_closed_book()
         });
-        self.draw_room_game_screen();
+        // = seg000:407b jmp loc_02dbf — re-enter draw_room_game_screen at its
+        //   scene-reload entry (NOT the seg000:2db1 top: the nav-panel
+        //   template is not re-installed on a move); its draw_room_scene
+        //   renders the destination (room or desert view) from the
+        //   just-committed globals.
+        self.draw_room_game_screen_scene_reload();
         self.send_frame_to_display();
+    }
+
+    // = seg000:37eb loc_037eb — the outdoor view composite, reached from
+    // draw_room_scene's desert branch (loc_037dc, current_scene == 0xff) and
+    // its first-room dispatch (loc_03a13): the sky + backdrop sprite, then the
+    // neighbouring-location horizon pass. The port calls it only from the
+    // desert branch; draw_location_room keeps its direct draw_outdoor_backdrop
+    // call for the first-room case.
+    pub(crate) fn draw_desert_view(&mut self) {
+        // = seg000:37c1 call clear_game_area — done in draw_room_scene's
+        // prologue in DOS (loc_037b5, shared with the SAL path where the
+        // port's draw_location_room clears); the desert branch needs it too so
+        // a backdrop sprite narrower than the game area leaves no leftovers.
+        self.clear_game_area();
+        self.draw_outdoor_backdrop();
+        // = seg000:37ee call loc_04e12 — resolve (and draw via loc_04ded) a
+        //   neighbouring location's entrance on the horizon when within ±4
+        //   longitude cells of it. TODO: not ported.
+        // = seg000:37f1 jmp loc_04d06 — the location-entrance proximity pass:
+        //   standing on a location's longitude within its visibility distance
+        //   animates the walk-up (loc_04d57/loc_04bdf) and plays SN5.VOC.
+        //   TODO: not ported (data_04733 stays 0, which disables it in DOS
+        //   too).
     }
 
     // = seg000:40c3 move_all_NPCs_whose_bit_6_of_flags_is_set — via
@@ -504,23 +740,28 @@ impl GameState {
     // different way, is not ported. The caller still owns setting
     // `persons_in_room` before drawing.
     pub fn draw_location_room(&mut self, location_and_room: u16, location_appearance: u16) {
-        // = seg001:0004 location_and_room: record the room being drawn so
+        // = seg000:08f8/08fc (loc_008f0) — record the scene being drawn so
         // get_location_and_room / add_room_frame_task can read it back.
         self.location_and_room = location_and_room;
+        self.location_appearance = location_appearance;
+        // = seg000:0900 mov [current_scene],dh.
+        self.data_00008 = (location_and_room >> 8) as u8;
 
         let dh = (location_and_room >> 8) as usize;
         let dl = (location_and_room & 0xff) as usize;
         let bh = (location_appearance >> 8) as usize;
 
+        // = seg000:0904..090b (loc_008f0) — every scene open recomputes the
+        // current-location record from the 1-based location slot bh.
+        self.current_location_index = bh as u16 - 1;
+
         // = loc_008f0 / open_SAL_resource / calc_SAL_index: locations[bh-1]
         //   .apparence picks the SAL. open_SAL_resource maps a calc result of
         //   4 back to 3, so SAL indices clamp to the four SAL files.
         let apparence = self.locations[bh - 1].appearance;
-        // open_SAL_resource clamps a calc result of 4 back to 3 for the four SAL
-        // files; the outdoor-backdrop table (draw_outdoor_backdrop) keeps the
-        // unclamped 0..4 index, so capture it before clamping.
-        let sal_index = calc_sal_index(apparence);
-        let sal_name = SAL_NAMES[sal_index.min(3)];
+        // open_SAL_resource clamps a calc result of 4 back to 3 for the four
+        // SAL files (draw_outdoor_backdrop keeps the unclamped 0..4 index).
+        let sal_name = SAL_NAMES[calc_sal_index(apparence).min(3)];
 
         // = loc_03efe: pick scene record (dl-1) in the table starting at
         //   SCENE_DISPATCH[dh]. The record's `background` byte drives draw_SAL.
@@ -552,8 +793,10 @@ impl GameState {
             // (location_and_room low byte == 1) instead draws an outdoor view
             // sprite behind the SAL via loc_037eb -> loc_0380c. (The dh == 0x21
             // sub-case at seg000:3a06 only randomises which SAL room is drawn, not
-            // the backdrop, so the backdrop runs for all first rooms.)
-            self.draw_outdoor_backdrop(location_appearance, sal_index);
+            // the backdrop, so the backdrop runs for all first rooms. The
+            // loc_037eb tail — loc_04e12 + loc_04d06, the neighbouring-location
+            // horizon sprites — also runs here in DOS; see draw_desert_view.)
+            self.draw_outdoor_backdrop();
         }
 
         self.draw_sal_room(sal_name, room, sheet_name);
@@ -660,49 +903,93 @@ impl GameState {
         });
     }
 
-    // = seg000:380c draw_outdoor_backdrop (reached via loc_037eb from
-    // draw_room_scene's seg000:3a02..3a16 dispatch). The outdoor "window/balcony"
-    // view drawn behind the SAL for the first room of every location
-    // (location_and_room low byte == 1): install the sky-gradient palette, pick a
-    // backdrop sprite sheet from room1_backdrop_base (seg001:1972), open it and
-    // draw its sprite 0 (loc_0c2f2, = open_spritesheet +
-    // draw_active_bank_sprite). draw_room_scene runs
-    // this before draw_SAL, so the SAL architecture (e.g. BALCON.HSQ for palace
-    // room 0x2001) composites over the desert view; without it the game area
-    // behind the SAL's window opening is left blank.
+    // = seg000:380c draw_outdoor_backdrop (reached via loc_037eb, from both
+    // draw_room_scene's first-room dispatch at seg000:3a02..3a16 and the
+    // desert-view branch loc_037dc). The outdoor view drawn as (or behind) the
+    // scene: install the sky-gradient palette, pick a full-screen backdrop
+    // sprite sheet, open it and draw its sprite 0 (loc_0c2f2, =
+    // open_spritesheet + draw_active_bank_sprite). For a location's first room
+    // the SAL architecture (e.g. BALCON.HSQ for palace room 0x2001) composites
+    // over it; in the desert it IS the scene.
     //
-    // Only the special-room branch (location_appearance low byte == 0x80) is
-    // modelled — the path the intro/start scenes use. There al starts at 0, stays
-    // below room1_backdrop_threshold (seg001:1977), and the resource is simply
-    // ROOM1_BACKDROP_BASE[sal_index] (= 0x72 DP1 for the palace). The other two
-    // branches are not ported: seg000:382d fades in a still keyed on the
-    // location's own game_time field, and seg000:384a runs get_map_position /
-    // map_func to pick a DN20..DN38 / VG.. desert tile from where the player
-    // stands on the map. Both need the per-location structs and the map model the
-    // port does not have yet.
-    fn draw_outdoor_backdrop(&mut self, location_appearance: u16, sal_index: usize) {
+    // The backdrop selection (al = the distance the location backdrop is seen
+    // from): in a room (location_appearance low byte 0x80) al = 0; in the
+    // desert on the location's longitude al = the fine latitude walked; other
+    // desert cells (or past room1_backdrop_threshold) fall back to the
+    // position-hashed terrain tile.
+    fn draw_outdoor_backdrop(&mut self) {
         // = seg000:380c mov [sky_skydn_selector],1; 3811 call set_sky_palette —
         // the backdrop sits under the sky gradient, so install it first.
         self.sky_skydn_selector = 1;
         self.set_sky_palette();
 
-        // = seg000:3827 cmp al,80h — al is location_appearance's low byte. Only
-        // the special-room path (== 0x80) is ported.
-        if location_appearance & 0xff != 0x80 {
-            return;
-        }
+        // = seg000:3814 si = [last_location_ptr]; 3818/381b bx = 1972h +
+        // calc_SAL_index — the nearby location picks the backdrop family.
+        let location = &self.locations[self.last_location_index];
+        let sal_index = calc_sal_index(location.appearance);
 
-        // = seg000:3829 mov al,0 -> 3834 cmp al,room1_backdrop_threshold[bx]: al
-        // (0) is always below the threshold (>= 4), so the jnb to the map branch is
-        // not taken and 3839 add al,room1_backdrop_base[bx] yields al =
-        // ROOM1_BACKDROP_BASE[sal_index]. The 0x7f (VILG) entry's extra
-        // randomisation at seg000:383f reads a
-        // per-location field the port lacks; for the palace (0x72) it is not hit.
-        let resource = ROOM1_BACKDROP_BASE[sal_index] as i16;
+        // = seg000:3820/3824 dx = location_and_room, ax = location_appearance.
+        let bl = (self.location_appearance & 0xff) as u8;
+        let bh = (self.location_appearance >> 8) as u8;
+        // = seg000:3827..3832 — al = 0 in a room (bl == 0x80); in the desert
+        // al = the fine latitude (bh) when standing on the location's
+        // longitude (dx == [si+2]), else the terrain-tile branch (loc_0384a).
+        let distance = if bl == 0x80 {
+            Some(0u8)
+        } else if self.location_and_room == location.map_x as u16 {
+            Some(bh)
+        } else {
+            None
+        };
+
+        let resource = match distance {
+            // = seg000:3834 cmp al,room1_backdrop_threshold[bx]; jnb loc_0384a.
+            Some(al) if al < ROOM1_BACKDROP_THRESHOLD[sal_index] => {
+                // = seg000:3839 add al,room1_backdrop_base[bx].
+                let resource = ROOM1_BACKDROP_BASE[sal_index].wrapping_add(al);
+                // = seg000:383b..3845 the VILG base at distance 0 (al == 7fh)
+                // varies the village view by the location's first_name:
+                // al += first_name/2 - 5 (VIL1.. 0x7a..0x80).
+                if resource == 0x7f {
+                    (resource
+                        .wrapping_add(location.first_name >> 1)
+                        .wrapping_sub(5)) as i16
+                } else {
+                    resource as i16
+                }
+            }
+            _ => self.desert_tile_resource(),
+        };
 
         // = seg000:3847 jmp loc_0c2f2 — open the backdrop bank (applies its
         // palette) and draw sprite 0 at (0,0).
         self.open_resource_and_draw_sprite0(resource);
+    }
+
+    // = seg000:384a loc_0384a — the desert terrain tile: the DN20..DN38 dune
+    // set, or the VG01..VG10 rock set when the nearby location's status bit 0
+    // is set or any of the four map bytes around the player's cell is rock
+    // terrain ((byte & 0x30) == 0x10). The tile within the set is a hash of
+    // the desert position, so a cell always shows the same view.
+    fn desert_tile_resource(&mut self) -> i16 {
+        // = seg000:384a di = [last_location_ptr]; 384e test [di+0ah],1.
+        let location = &self.locations[self.last_location_index];
+        let rock_set = if location.status & 1 != 0 {
+            true
+        } else {
+            // = seg000:3854/3857 get_map_position + map_func; 385a dec di;
+            // 385b..3868 scan the 4 bytes at cell-1 .. cell+2.
+            let (x, lat) = self.get_map_position();
+            let offset = self.map_position_to_offset(x, lat);
+            (offset - 1..offset + 3).any(|o| self.map[o] & 0x30 == 0x10)
+        };
+        // = seg000:386a/386d dunes: 0x13 tiles from 0x42 (DN20);
+        // = seg000:3872/3875 rock: 0x0a tiles from 0x88 (VG01).
+        let (count, base) = if rock_set { (0x0a, 0x88) } else { (0x13, 0x42) };
+        // = seg000:3878..3888 hash: (swapped location_appearance ^
+        // location_and_room + 1) % count + base.
+        let hash = (self.location_appearance.swap_bytes() ^ self.location_and_room).wrapping_add(1);
+        (hash % count + base) as i16
     }
 
     // = seg000:3b59 draw_SAL (inner work). Open the sprite-sheet resource
@@ -1071,6 +1358,162 @@ mod tests {
         // LEFT (exit 0x00): no exit -> no move.
         assert_eq!(compass_move_target(0x2001, exits, 3), None);
     }
+    // = the desert_step_deltas/desert_apply_step_delta pair driving the walk:
+    // stepping DOWN (south) off a cell bumps the fine latitude; stepping UP
+    // undoes it; the fine-latitude carry into the row clamps at ±0x62.
+    #[test]
+    fn desert_steps_move_and_clamp() {
+        // Palace exit 0xfd = DOWN = index 3: fine latitude +1, longitude kept.
+        assert_eq!(
+            desert_apply_step_delta(DESERT_STEP_DELTAS[3], 6421, 0x00fc),
+            (6421, 0x01fc)
+        );
+        // UP (index 1) steps straight back onto the row.
+        assert_eq!(
+            desert_apply_step_delta(DESERT_STEP_DELTAS[1], 6421, 0x01fc),
+            (6421, 0x00fc)
+        );
+        // RIGHT/LEFT move only the longitude.
+        assert_eq!(
+            desert_apply_step_delta(DESERT_STEP_DELTAS[2], 6421, 0x01fc),
+            (6422, 0x01fc)
+        );
+        assert_eq!(
+            desert_apply_step_delta(DESERT_STEP_DELTAS[4], 6421, 0x01fc),
+            (6420, 0x01fc)
+        );
+        // Index 5 (exit 0xfb) steps onto the map in place.
+        assert_eq!(
+            desert_apply_step_delta(DESERT_STEP_DELTAS[5], 6421, 0x00fc),
+            (6421, 0x00fc)
+        );
+        // The southern clamp: row 0x61 fine 0xff refuses to cross into 0x62.
+        assert_eq!(
+            desert_apply_step_delta(DESERT_STEP_DELTAS[3], 0, 0xff61),
+            (0, 0xff61)
+        );
+        // The northern clamp: row -0x61 fine 0 refuses to cross into -0x62.
+        assert_eq!(
+            desert_apply_step_delta(DESERT_STEP_DELTAS[1], 0, 0x009f),
+            (0, 0x009f)
+        );
+    }
+
+    // = the walk-out special exit (loc_03fd2) + the desert-position dispatch
+    // (loc_03ff5) + the walk-in arrival (loc_04002/arrive_at_location), end to
+    // end: clicking DOWN in palace room 1 (exit 0xfd) walks one step south
+    // into the desert (the outdoor palace view), clicking UP walks back onto
+    // the palace's map cell and re-enters its entry room.
+    #[test]
+    #[ignore = "needs assets/DUNE.DAT"]
+    fn walking_out_of_the_palace_and_back() {
+        use std::sync::mpsc;
+
+        use crate::dat_file::DatFile;
+
+        let dat_path = concat!(env!("CARGO_MANIFEST_DIR"), "/../../assets/DUNE.DAT");
+        let Ok(dat_file) = DatFile::open(dat_path) else {
+            eprintln!("skipping: {dat_path} not found");
+            return;
+        };
+        let (tx, _rx) = mpsc::sync_channel(64);
+        let mut game = GameState::new(dat_file, tx);
+        game.set_headless();
+        game.start(true);
+        // = the seg000:02b8 -> loc_008f0 startup: the throne room is the
+        // palace, so the centre palace-plan button [17] shows from the very
+        // first nav-panel rebuild (regression: the rebuild runs before the
+        // first draw_location_room, so intro2's tail must have recorded the
+        // current location already).
+        assert_eq!(game.current_location_index, 0);
+        assert_eq!(game.ui_elements[17].flags, 0x80);
+        // Stand in the palace entry room (0x2001), the room with the DOWN
+        // compass arrow (exit 0xfd).
+        game.location_and_room = 0x2001;
+        game.location_appearance = 0x180;
+        game.current_room = 1;
+        game.draw_room_game_screen();
+
+        // DOWN: the special exit walks one step south of the palace cell.
+        game.ui_click_move_down();
+        assert_eq!(game.location_and_room, 6421, "longitude = palace map_x");
+        assert_eq!(
+            game.location_appearance, 0x01fc,
+            "fine latitude 1, latitude row -4"
+        );
+        assert_eq!(game.data_00008, 0xff, "no room scene in the desert");
+        assert_eq!(
+            game.current_location_index, 0xffff,
+            "the walk-out detaches the current location"
+        );
+        // = the loc_03073 alt rebuild leaves the centre button [17] as the
+        // entry room set it (hidden) — the move commit enters at loc_02dbf,
+        // past the nav-panel template copy.
+        assert_eq!(game.ui_elements[17].flags, 0x20);
+        let desert = game.active_fb_mut().pixels().to_vec();
+
+        // UP: back onto the palace cell -> the walk-in arrival puts us in the
+        // palace entry room.
+        game.ui_click_move_up();
+        assert_eq!(game.location_and_room, 0x2001);
+        assert_eq!(game.location_appearance, 0x0180);
+        assert_eq!(game.data_00008, 0x20);
+        assert_eq!(game.current_room, 1);
+        assert_eq!(game.current_location_index, 0);
+        assert_eq!(game.last_location_index, 0);
+        // = seg000:3039..304e the centre palace-plan button [17]: hidden in
+        // the palace entry room, visible in its inner rooms.
+        assert_eq!(game.ui_elements[17].flags, 0x20);
+        game.ui_click_move_up(); // room 1 -> room 2 (exit 0x02)
+        assert_eq!(game.location_and_room, 0x2002);
+        assert_eq!(game.ui_elements[17].flags, 0x80);
+        game.ui_click_move_down(); // room 2 -> room 1 (exit 0x01)
+        assert_eq!(game.location_and_room, 0x2001);
+        let room = game.active_fb_mut().pixels().to_vec();
+
+        let differing = desert.iter().zip(&room).filter(|(a, b)| a != b).count();
+        assert!(
+            differing > 10_000,
+            "the desert view and the room render must differ (changed {differing} pixels)"
+        );
+
+        // Walk four steps south: fine latitudes 1..3 show the receding palace
+        // backdrops, fine latitude 4 crosses room1_backdrop_threshold and
+        // renders the position-hashed terrain tile (desert_tile_resource).
+        for _ in 0..4 {
+            game.ui_click_move_down();
+        }
+        assert_eq!(game.location_appearance, 0x04fc);
+        // A sideways step moves only the longitude (still the tile branch,
+        // now off the palace's longitude).
+        game.ui_click_move_left();
+        assert_eq!(game.location_and_room, 6420);
+        assert_eq!(game.location_appearance, 0x04fc);
+        if std::env::var_os("WRITE_PNG").is_some() {
+            let fb = game.active_fb_mut().clone();
+            fb.write_png_scaled(&game.palette, "/tmp/desert_walk_far.png")
+                .expect("write png");
+            eprintln!("wrote /tmp/desert_walk_far.png");
+        }
+
+        // Retrace the steps: back east onto the palace longitude, then four
+        // steps north re-enter the palace entry room.
+        game.ui_click_move_right();
+        for _ in 0..4 {
+            game.ui_click_move_up();
+        }
+        assert_eq!(game.location_and_room, 0x2001);
+        assert_eq!(game.location_appearance, 0x0180);
+
+        if std::env::var_os("WRITE_PNG").is_some() {
+            game.ui_click_move_down();
+            let fb = game.active_fb_mut().clone();
+            fb.write_png_scaled(&game.palette, "/tmp/desert_walk.png")
+                .expect("write png");
+            eprintln!("wrote /tmp/desert_walk.png");
+        }
+    }
+
     // = the seg000:3a24..3a7b orni pass: with available ornithopters on a
     // first-room sky scene, draw_location_room composites parked ornis from
     // ORNY.HSQ onto the landing pad; with none the scene is unchanged. Renders

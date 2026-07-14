@@ -26,6 +26,8 @@ mod intro2;
 mod language;
 mod lipsync;
 mod locations;
+mod map;
+mod map_renderer;
 mod midi;
 mod mouse;
 mod music;

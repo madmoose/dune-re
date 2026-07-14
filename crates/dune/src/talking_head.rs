@@ -287,7 +287,7 @@ impl GameState {
         } else if id as usize == HEAD_SMUG {
             // = char_to_sprite_smug (seg000:912f): for the SMUG smuggler head the
             // idle expression is data_047d0 = (command_menu_x >> 1) + 1, read from
-            // the active verb-list header byte [command_list_ptr][0] (the menu's x
+            // the active verb-list header byte [current_location_ptr][0] (the menu's x
             // pixel origin; see set_command_menu_origin seg000:2e98).
             //
             // INCOMPLETE: not ported. The command-list data model doesn't exist in

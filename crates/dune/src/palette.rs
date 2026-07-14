@@ -75,13 +75,7 @@ impl Palette {
             let index = read_u8? as usize;
             let mut count = r.read_u8()? as usize;
 
-            // = seg000:c1bf `cmp ax, 100h; jnz ...; add si, 3` — the chunk
-            // (index 0, count 1) is skipped, not applied. lodsw reads the pair
-            // little-endian as ax = index | (count << 8), so 0x0100 means
-            // index==0, count==1. Sprite sheets carry a placeholder colour here
-            // (EQUI's is grey 22,22,22); skipping it preserves the global black
-            // at palette index 0, which is what the cleared-framebuffer borders
-            // (rows 0..23 and 176..199) display.
+            // = seg000:c1bf `cmp ax, 100h; jnz ...; add si, 3`
             if index == 0 && count == 1 {
                 r.seek_relative(3)?;
                 continue;
