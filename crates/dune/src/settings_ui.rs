@@ -30,7 +30,7 @@ use crate::{
 
 /// One 8-byte settings record (= the seg001 slider/knob layout at
 /// 288e/2896/289e and 28a6/28ae/28b6): `[value:u8, drawn_flag:u8, dx:u16,
-/// screen_y:u16, apply_ofs:u16]`. `value` and `drawn_flag` are mutated as the
+/// y:u16, apply_ofs:u16]`. `value` and `drawn_flag` are mutated as the
 /// panel is drawn and dragged; the other three are static layout. `[si+6]`
 /// (`apply_ofs`) is the seg000 offset of the audio-apply callback.
 #[derive(Clone, Copy)]
@@ -40,22 +40,22 @@ pub(crate) struct SettingsRecord {
     /// = `[si+1]` — set to 1 once drawn; gates the drag hit-test (loc_0a685).
     pub drawn_flag: u8,
     /// = `[si+2]` — panel-local x of the slider track / indicator.
-    pub dx: i16,
+    pub x: i16,
     /// = `[si+4]` — panel-local y of the handle, recomputed each draw for the
     /// volume sliders; static for the balance knobs.
-    pub screen_y: i16,
+    pub y: i16,
     /// = `[si+6]` — seg000 offset of the audio-apply callback the drag commits
     /// (loc_0a637 PCM voices / loc_0a650 MIDI music / loc_0d917 no-op),
     /// dispatched by `settings_ui_apply`.
     pub apply_ofs: u16,
 }
 
-const fn sr(value: u8, drawn_flag: u8, dx: i16, screen_y: i16, apply_ofs: u16) -> SettingsRecord {
+const fn sr(value: u8, drawn_flag: u8, x: i16, y: i16, apply_ofs: u16) -> SettingsRecord {
     SettingsRecord {
         value,
         drawn_flag,
-        dx,
-        screen_y,
+        x,
+        y,
         apply_ofs,
     }
 }
@@ -76,12 +76,12 @@ pub(crate) const SETTINGS_RECORD_BALANCE_MUSIC_DURING_VOICES: usize = 5;
 /// knob the balance (`ah`). GameState owns a mutable copy (`settings_records`);
 /// this constant only seeds it.
 pub(crate) const SETTINGS_RECORDS_INIT: [SettingsRecord; 6] = [
-    sr(0xff, 0, 0x0c, 0x22, 0xa637), // 288e VOICES (digital PCM) volume
-    sr(0xe6, 0, 0x32, 0x22, 0xa650), // 2896 MUSIC (MIDI) volume
-    sr(0xb4, 0, 0x58, 0x22, 0xd917), // 289e MUSIC during voices (MIDI duck level)
-    sr(0x64, 0, 0x11, 0x67, 0xa637), // 28a6 VOICES balance/pan knob
-    sr(0x78, 0, 0x37, 0x67, 0xa650), // 28ae MUSIC balance/pan knob (center)
-    sr(0x8c, 0, 0x5d, 0x67, 0xd917), // 28b6 MUSIC-during-voices balance/pan knob
+    sr(255, 0, 12, 34, 0xa637),  // 288e VOICES (digital PCM) volume
+    sr(230, 0, 50, 34, 0xa650),  // 2896 MUSIC (MIDI) volume
+    sr(180, 0, 88, 34, 0xd917),  // 289e MUSIC during voices (MIDI duck level)
+    sr(100, 0, 17, 103, 0xa637), // 28a6 VOICES balance/pan knob
+    sr(120, 0, 55, 103, 0xa650), // 28ae MUSIC balance/pan knob (center)
+    sr(140, 0, 93, 103, 0xd917), // 28b6 MUSIC-during-voices balance/pan knob
 ];
 
 /// = seg001:2886 - the settings panel rect
@@ -219,18 +219,18 @@ impl GameState {
     }
 
     // = seg000:a502 settings_ui_draw_slider — draw volume slider record `i`: the
-    // track sprite (1) at the record's (dx, 0x22) + global offset, then compute
-    // the handle's y from the value byte (`((~value) >> 2) + 0x22`), store it
-    // into the record's screen_y, and draw the handle sprite (2). Marks the
-    // record drawn (drawn_flag = 1) so it becomes draggable.
+    // track sprite (1) at the record's (x, 34) + global offset, then compute
+    // the handle's y from the value byte (`((~value) >> 2) + 34`), store it
+    // into the record's y, and draw the handle sprite (2). Marks the record
+    // drawn (drawn_flag = 1) so it becomes draggable.
     fn settings_ui_draw_slider(&mut self, i: usize) {
         // = a502 push [active_seg]; set_screen_as_active_framebuffer.
         let saved = self.active_fb();
         self.set_screen_as_active_framebuffer();
         // = a50a open MIXR.
         self.open_sprite_bank(sprite_bank::MIXR);
-        // = a510 dx=record.dx, bx=0x22; add_global_offset — the track position.
-        let track_x = self.settings_records[i].dx + SETTINGS_RECT.x0;
+        // = a510 dx=record.dx, bx=34; add_global_offset — the track position.
+        let track_x = self.settings_records[i].x + SETTINGS_RECT.x0;
         let track_y = 34 + SETTINGS_RECT.y0;
         // = a519 draw sprite 1 (the slider track).
         self.draw_active_bank_sprite(1, track_x, track_y);
@@ -240,8 +240,8 @@ impl GameState {
         // = a524 ax=~value; a526 al >>= 2; a52a cbw; a52b ax += track_y — the
         // handle's screen y.
         let handle_y = ((!value) >> 2) as i16 + track_y;
-        // = a52f ax -= gy; a533 store the handle's panel-local y in record.screen_y.
-        self.settings_records[i].screen_y = handle_y - SETTINGS_RECT.y0;
+        // = a52f ax -= gy; a533 store the handle's panel-local y in record.y.
+        self.settings_records[i].y = handle_y - SETTINGS_RECT.y0;
         // = a536 draw sprite 2 (the slider handle) at (track_x, handle_y).
         self.draw_active_bank_sprite(2, track_x, handle_y);
         // = a53c pop [active_seg].
@@ -267,7 +267,7 @@ impl GameState {
 
     // = seg000:a49c settings_ui_draw_balance_knob — draw one balance/pan knob:
     // its needle sprite is `value / 10 + 3` (aam 0ah), 25 frames sweeping
-    // left<->right over value 0..0xf0, drawn at the record's (dx, screen_y) +
+    // left<->right over value 0..0xf0, drawn at the record's (x, y) +
     // global offset. Marks the record drawn.
     fn settings_ui_draw_balance_knob(&mut self, i: usize) {
         // = a49c push [active_seg]; set_screen_as_active_framebuffer.
@@ -279,9 +279,9 @@ impl GameState {
         let sprite = (self.settings_records[i].value / 10 + 3) as u16;
         // = a4b2 mark drawn (record.drawn_flag = 1).
         self.settings_records[i].drawn_flag = 1;
-        // = a4b6 dx=record.dx, bx=record.screen_y; add_global_offset.
-        let x = self.settings_records[i].dx + SETTINGS_RECT.x0;
-        let y = self.settings_records[i].screen_y + SETTINGS_RECT.y0;
+        // = a4b6 x=record.x, bx=record.y; add_global_offset.
+        let x = self.settings_records[i].x + SETTINGS_RECT.x0;
+        let y = self.settings_records[i].y + SETTINGS_RECT.y0;
         // = a4be draw the indicator sprite.
         self.draw_active_bank_sprite(sprite, x, y);
         // = a4c1 pop [active_seg].
@@ -306,7 +306,7 @@ impl GameState {
     }
 
     // = seg000:a435 loc_0a435 — draw a panel button for input `al`: its sprite
-    // is `al * 2 + 0x1c`, drawn at the position loc_0a465 computes from `al`.
+    // is `al * 2 + 28`, drawn at the position loc_0a465 computes from `al`.
     fn settings_ui_draw_button(&mut self, al: u8) {
         // = a435 push [active_seg]; set_screen_as_active_framebuffer.
         let saved = self.active_fb();
@@ -314,7 +314,7 @@ impl GameState {
         // = a43d call loc_0a465 — the draw position (al preserved across it).
         let (x, y) = self.settings_ui_button_pos(al);
         // = a440 shl ax,1; add al,1ch — the button sprite.
-        let sprite = (al as u16) * 2 + 0x1c;
+        let sprite = (al as u16) * 2 + 28;
         // = a444 draw the button sprite.
         self.draw_active_bank_sprite(sprite, x, y);
         // = a447 pop [active_seg].
@@ -437,8 +437,7 @@ impl GameState {
 
     // = seg000:a685 loc_0a685 / a6b2 loc_0a6b2 — slider-handle hit-test: the
     // record must be drawn (drawn_flag == 1), and the panel-local pointer must
-    // fall in the `w` x `h` box anchored at the record's (dx, screen_y). The
-    // volume sliders use a 0x16 x 5 box, the balance knobs 0x0d x 0x0b.
+    // fall in the `w` x `h` box anchored at the record's (x, y).
     // Returns the pointer's `(rx, ry)` offset into the box on a hit.
     fn settings_handle_hit(
         &self,
@@ -453,13 +452,13 @@ impl GameState {
         if r.drawn_flag != 1 {
             return None;
         }
-        // = a68c ax = lx - dx; a691 bp = ly - screen_y; a696/a69b range checks
+        // = a68c ax = lx - dx; a691 bp = ly - y; a696/a69b range checks
         // (unsigned, so a pointer above/left of the box wraps high and misses).
 
-        if !rect(r.dx, r.screen_y, r.dx + w, r.screen_y + h).in_rect(lx, ly) {
+        if !rect(r.x, r.y, r.x + w, r.y + h).in_rect(lx, ly) {
             return None;
         }
-        Some((lx - r.dx, ly - r.screen_y))
+        Some((lx - r.x, ly - r.y))
     }
 
     // = seg000:a5b0 loc_0a5b0 — a button-grid click. Map the row
@@ -517,8 +516,8 @@ impl GameState {
                 if dy == 0 {
                     return;
                 }
-                // = a61c ax = screen_y + dy - 0x22; a624 cmp ax,40h; jnb ret.
-                let raw = self.settings_records[i].screen_y + dy - 0x22;
+                // = a61c ax = y + dy - 34; a624 cmp ax,40h; jnb ret.
+                let raw = self.settings_records[i].y + dy - 34;
                 if !(0..64).contains(&raw) {
                     return;
                 }
@@ -528,17 +527,17 @@ impl GameState {
                 // run the audio-apply hook (bracketed by the cursor lift).
                 self.settings_ui_commit_drag(i, false);
             }
-            // = a5ee a balance knob: turn it, nudging the value by +/-0x0a per
+            // = a5ee a balance knob: turn it, nudging the value by +/-10 per
             // the 2D (rotary) drag direction.
             2 => {
                 // = a5f5 if (lx - dx) < 6, negate the X delta's contribution (cx).
                 let cx = if rx < 6 { -dy } else { dy };
 
-                // = a5fc if (prev_ly - screen_y) >= 5, negate di.
+                // = a5fc if (prev_ly - y) >= 5, negate di.
                 let di = if bp_off >= 5 { -dx } else { dx };
 
-                // = a603 step = +0x0a when (cx + di) >= 0, else -0x0a.
-                let step: i8 = if cx + di >= 0 { 0x0a } else { -0x0a };
+                // = a603 step = +10 when (cx + di) >= 0, else -10.
+                let step: i8 = if cx + di >= 0 { 10 } else { -10 };
                 // = a60b al = record.value + step; a60d cmp al,0f1h; jnb ret.
                 let new_value = self.settings_records[i]
                     .value
