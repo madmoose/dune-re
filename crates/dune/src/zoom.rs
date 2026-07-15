@@ -27,7 +27,7 @@
 //!     the current (close-up) frame, 0 terminates. With `[227dh] != 0` (its
 //!     intro value, 1) the full sequence seg001:2792 is used; otherwise one of
 //!     two shorter sequences is chosen at random. After the sequence the scene
-//!     is redrawn 1:1 (loc_0c4dd).
+//!     is redrawn 1:1 (present_game_area).
 
 use crate::GameState;
 
@@ -216,7 +216,7 @@ impl GameState {
             }
         }
 
-        // = loc_0c8bd: call loc_0c4dd — final 1:1 reveal of the whole scene.
+        // = loc_0c8bd: call present_game_area — final 1:1 reveal of the whole scene.
         self.gfx_copy_whole_framebuf_to_screen();
         self.send_frame_to_display();
     }

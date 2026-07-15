@@ -164,7 +164,7 @@ const NAV_PANEL_ROOM: [UiElement; NAV_PANEL_RECORD_COUNT] = [
 /// = seg001:1cca the alternate (ornithopter/travel) navigation panel template,
 /// used when `data_046eb` is set.
 #[rustfmt::skip]
-const NAV_PANEL_ALT: [UiElement; NAV_PANEL_RECORD_COUNT] = [
+pub(crate) const NAV_PANEL_ALT: [UiElement; NAV_PANEL_RECORD_COUNT] = [
     ui1(266, 171, 285, 184, 0x0080, 41, 0x5b05),
     ui1(267, 162, 284, 171, 0x4080, 37, 0x8829),
     ui1(285, 171, 297, 184, 0x4080, 38, 0x8824),
@@ -320,8 +320,9 @@ impl GameState {
 
         // = seg000:d208 test data_00008[si],40h — clear the element's rect first.
         if e.flags & UI_ELEMENT_CLEAR_FLAG != 0 {
-            // = seg000:d213 call gfx_vtable_vga_clear_rect (rect = the record).
-            gfx::vga_clear_rect(self, e.x0, e.y0, e.x1, e.y1);
+            // = seg000:d20e mov es, [_word_2D08A_framebuffer_active_seg];
+            //   seg000:d213 call gfx_vtable_vga_clear_rect (rect = the record).
+            gfx::vga_clear_rect(self, self.active_fb(), e.x0, e.y0, e.x1, e.y1);
         }
 
         // = seg000:d218 test data_00008[si],20h — 0x20 skips the sprite draw.
@@ -478,9 +479,15 @@ impl GameState {
     pub(crate) fn ui_draw_nav_panel(&mut self) {
         // = seg000:d741 loc_0d741 — when record[2].sprite_id is in 3..6 (the
         // closed/open-book frieze states), fill the nav-panel rect (seg001:2458)
-        // with colour 0xf0 before drawing the compass over it.
+        // with colour 0xf0 before drawing the panel's records over it.
         if (self.ui_elements[2].sprite_id as u16).wrapping_sub(3) < 3 {
-            gfx::vga_fill_rect(self, 254, 162, 296, 193, 0xf0);
+            // = seg000:d74f mov es, [_word_2D088_screen_buffer_seg] — the fill
+            // targets the FRONT buffer, like every draw_ui_element (the one
+            // fill site that does not load the active seg): when a panel
+            // switch happens with fb1 active (e.g. map_screen_open installing
+            // the alt panel), it must still erase the previous panel on the
+            // visible screen.
+            gfx::vga_fill_rect(self, self.screen_buffer, 254, 162, 296, 193, 0xf0);
         }
         // = seg000:d738 si=1b8eh; cx=6; draw records 12..18.
         self.draw_ui_elements_list(NAV_PANEL_RECORD_OFFSET, NAV_PANEL_RECORD_COUNT);

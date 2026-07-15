@@ -28,6 +28,7 @@ mod lipsync;
 mod locations;
 mod map;
 mod map_renderer;
+mod map_screen;
 mod midi;
 mod mouse;
 mod music;

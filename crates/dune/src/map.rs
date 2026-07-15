@@ -73,6 +73,15 @@ impl GameState {
         }
     }
 
+    // = seg000:5b5d set_zoomed_globe_pos_from_map_position — seed the
+    // map/globe view centre from the player's current map position; falls
+    // into set_zoomed_globe_pos (seg000:5b60, the two stores).
+    pub(crate) fn set_zoomed_globe_pos_from_map_position(&mut self) {
+        let (x, lat) = self.get_map_position();
+        self.zoomed_globe_longitude = x;
+        self.zoomed_globe_latitude = lat;
+    }
+
     // = seg000:409a find_location_by_map_offset — scan locations[] for the
     // entry whose cached map-byte offset matches. None when no location
     // claims the cell (DOS returns the table's end sentinel with ZF clear).

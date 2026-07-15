@@ -61,6 +61,9 @@ pub(crate) enum TaskId {
     // VOC (loc_0a9b9); the consolidated dnsdb driver owns the whole clip in the
     // port, so only the music-restore half remains.
     PcmVoiceMusicRestore,
+    // = seg000:046b5 map_caption_frame_task — the map screen's "SELECT
+    // DESTINATION ON MAP" typewriter: one glyph per firing (interval 0x18).
+    MapCaption,
 }
 
 pub(crate) struct FrameTask {
@@ -376,6 +379,15 @@ pub struct GameState {
     // Static-inits to 0.
     pub(crate) data_011cb: u8,
 
+    // = seg001:197c _word_20E2C_zoomed_globe_longitude / seg001:197e
+    // _word_20E2E_zoomed_globe_latitude — the map/globe view centre.
+    // set_zoomed_globe_pos_from_map_position seeds them from the player's map
+    // position when the map screen opens; map_draw_zoomed_globe clamps the
+    // latitude to the window (and the nav-panel scroll buttons move them —
+    // not ported).
+    pub(crate) zoomed_globe_longitude: u16,
+    pub(crate) zoomed_globe_latitude: i16,
+
     // = seg001:1ae4 _word_20F94_ui_elements — the in-game HUD element table.
     pub(crate) ui_elements: [UiElement; 24],
 
@@ -520,11 +532,23 @@ pub struct GameState {
     // and a plain palette+blit when the day/night state changed.
     pub(crate) data_046e0: u8,
 
+    // = seg001:46e3 data_046e3_rect — the map window rect the map screen draws
+    // the desert map into; copied from map_view_rect_template (seg001:149c,
+    // (81,45)-(241,134)) when the map screen opens.
+    pub(crate) map_view_rect: Rect,
+
     // = seg001:46eb data_046eb — selects the navigation panel template in
     // ui_setup_and_draw_nav_panel: nonzero picks the alternate (ornithopter/travel)
-    // panel (1cca). Set by the travel/globe routines (e.g. seg000:4323/49a6),
-    // cleared back to 0 for the plain room view.
+    // panel (1cca) and the windowed map drawing (map_draw_zoomed_globe: bit 0x80
+    // = full globe, bit 0x40 = suppress the map blit). Set to 1 by
+    // map_screen_open (seg000:4323) and the travel routines (seg000:49a6),
+    // cleared back to 0 by map_screen_cleanup for the plain room view.
     pub(crate) data_046eb: u8,
+
+    // = seg001:46fc data_046fc — the map screen's hover tracker state (the
+    // location-marker / travel-arrow direction cache loc_04586 maintains).
+    // Cleared on map open; the live hover tracking is not ported.
+    pub(crate) data_046fc: u16,
 
     // = seg001:46ff
     pub(crate) available_equipment: Equipment,
@@ -534,6 +558,48 @@ pub struct GameState {
     // travel pump) returns immediately when this is 0. Cleared on travel
     // arrival (seg000:4fcb).
     pub(crate) data_04727: u8,
+
+    // = seg001:4728 data_04728 — positive once a travel destination is armed on
+    // the map screen; map_screen_cleanup then enters the travel departure
+    // (loc_049d4, not ported). Reset by loc_049ea when the map screen opens.
+    pub(crate) data_04728: i8,
+
+    // = seg001:473e map_ornithopter_mode — nonzero while the map screen is in
+    // ornithopter (cockpit) mode: set to 1 by TAKE AN ORNITHOPTER
+    // (seg000:42f5), cleared by CALL A WORM (seg000:42b0). Selects the ORNYPAN
+    // cockpit drawing and caption style on the map screen.
+    pub(crate) map_ornithopter_mode: u8,
+
+    // = seg001:473f/4741 data_0473f/data_04741 — the far pointer into the
+    // COMMAND string the map caption typewriter draws next (0 = disarmed).
+    // The port stores the resolved string plus an index; an empty string is
+    // the disarmed state map_add/remove_select_destination_text_task and the
+    // seg000:4658 idempotence check test.
+    pub(crate) map_caption_text: Vec<u8>,
+    pub(crate) map_caption_pos: usize,
+    // = seg001:4743 data_04743 / seg001:4745 data_04745 — the caption pen
+    // (x, y); the typewriter task stores the advanced pen back after each
+    // glyph.
+    pub(crate) map_caption_x: u16,
+    pub(crate) map_caption_y: u16,
+    // = seg001:4747 data_04747 — the caption colour word
+    // ((bg << 8) | fg, the font_draw_fg_color/font_draw_bg_color pair).
+    pub(crate) map_caption_color: u16,
+
+    // = seg001:487e travel_vehicle_mode — the vehicle for the pending map
+    // travel: 1 = worm (CALL A WORM, seg000:42aa), 2 = ornithopter (TAKE AN
+    // ORNITHOPTER, seg000:42ff / seg000:50db). loc_04ec6 refines it into
+    // hnm_active_video_id (the day/night flight HNM variants 2..5).
+    pub(crate) travel_vehicle_mode: u16,
+
+    // = seg001:472d orni_hotspot_x / seg001:472f orni_hotspot_y — the parked-
+    // ornithopter hover hotspot (the first orni's position + (0xc, 8)),
+    // recorded by the draw_room_scene orni pass (seg000:3a5a..3a67) and
+    // cleared (x = 0 = no ornis) at every scene draw (seg000:37b8).
+    // person_hit_test's orni tail (seg000:92ab) resolves the cursor against it
+    // to the 0x2f pseudo-person.
+    pub(crate) orni_hotspot_x: u16,
+    pub(crate) orni_hotspot_y: u16,
 
     // = seg001:4731 orni_anim_frame — the orni animation frame counter. 0 =
     // parked (rotor idle); the take-off sequence (loc_047fb, not ported) steps
@@ -991,6 +1057,8 @@ impl GameState {
             game_screen_mode_flags: 0,
             data_011ca: 0,
             data_011cb: 0,
+            zoomed_globe_longitude: 0,
+            zoomed_globe_latitude: 0,
             ui_elements: UI_ELEMENTS_INIT,
             command_menu_records: Vec::new(),
             menu_npc_actions_talk_text_id: 0x90,
@@ -1019,9 +1087,21 @@ impl GameState {
             new_time_period_pending: 0,
             sky_fade_active: false,
             data_046e0: 0,
+            map_view_rect: Rect::default(),
             data_046eb: 0,
+            data_046fc: 0,
             available_equipment: Equipment::default(),
             data_04727: 0,
+            data_04728: 0,
+            orni_hotspot_x: 0,
+            orni_hotspot_y: 0,
+            map_ornithopter_mode: 0,
+            map_caption_text: Vec::new(),
+            map_caption_pos: 0,
+            map_caption_x: 0,
+            map_caption_y: 0,
+            map_caption_color: 0,
+            travel_vehicle_mode: 0,
             orni_anim_frame: 0,
             data_04732: 0,
             data_04735: 0,
@@ -1645,6 +1725,9 @@ impl GameState {
                 TaskId::PcmVoiceMusicRestore => {
                     self.tick_pcm_voice_music_restore();
                 }
+                TaskId::MapCaption => {
+                    self.tick_map_caption();
+                }
             }
         }
     }
@@ -2106,6 +2189,73 @@ impl GameState {
 
         self.frame_sink
             .publish(self.screen.clone(), self.screen_pal.clone());
+    }
+
+    // = seg000:c4dd present_game_area — present the game-area rect (0,0)-
+    // (320,152) from fb1 to the visible screen. Used wherever a screen redraws
+    // its game area directly (the talking-head composite, the map screen, the
+    // message viewer, ...).
+    pub(crate) fn present_game_area(&mut self) {
+        // = seg000:c4dd cmp mouse_pos_y,98h; jnb +; call call_restore_cursor —
+        // repaint the saved background under the cursor when it sits in the game
+        // area, so a stale cursor image is not baked into the pushed rect.
+        if self.mouse_pos_y < 152 {
+            self.restore_cursor_over_panel();
+        }
+        // = seg000:c4e8 si = _word_20920_game_area_rect (0,0,320,152); jmp
+        // present_screen_rect.
+        let yoff = self.y_offset as i16;
+        self.present_screen_rect(Rect {
+            x0: 0,
+            y0: yoff,
+            x1: 320,
+            y1: yoff + 152,
+        });
+    }
+
+    // = seg000:c4f0 present_screen_rect — the tail of the presentation chain
+    // (present_game_area jumps here, as does the settings-panel repaint).
+    // Redraw the HUD head into fb1 when `rect` overlaps the head box (c4fb),
+    // then push `rect` from fb1 to the visible screen (copy_rect_fb1_to_screen).
+    pub(crate) fn present_screen_rect(&mut self, rect: Rect) {
+        // = seg000:c4fb the head-redraw half — redraw the HUD head when the
+        // 240..255 sky is not suppressed and `rect` overlaps the head box (x in
+        // [0x7e,0xc2), bottom edge >= 0x89). The head must land in fb1 so the
+        // copy below carries it, so force fb1 active around the draw (DOS's
+        // callers already have fb1 active here).
+        if self.data_0227d == 0 && rect.y1 >= 137 && rect.x1 >= 126 && rect.x0 < 194 {
+            let saved = self.active_fb();
+            self.set_fb1_as_active_framebuffer();
+            self.ui_hud_head_draw();
+            self.active_fb = saved;
+        }
+        // = seg000:c4fb falls through into c51e.
+        self.copy_rect_fb1_to_screen(rect);
+    }
+
+    // = seg000:c51e copy_rect_fb1_to_screen — copy `rect` from fb1 to the
+    // visible screen. Called on its own (e.g. the night-attack particles,
+    // seg000:c7cc) as well as via the present_screen_rect fall-through. An
+    // empty rect does nothing; the copy is skipped while the front buffer is
+    // redirected to fb1 (offscreen render, where DOS's copy targets fb1 and the
+    // real screen must stay untouched) or the mixer panel owns the mouse
+    // handlers (loc_0c526).
+    pub(crate) fn copy_rect_fb1_to_screen(&mut self, rect: Rect) {
+        // = seg000:c51e sub bp,dx / sub ax,bx — bail on a zero-area rect.
+        if rect.x1 <= rect.x0 || rect.y1 <= rect.y0 {
+            return;
+        }
+        // = seg000:c526 cmp active_mouse_handlers,1ad6h; jz ret.
+        if self.front_buffer_is_fb1()
+            || std::ptr::eq(
+                self.active_mouse_handlers,
+                &crate::game_ui::MIXER_MOUSE_HANDLERS,
+            )
+        {
+            return;
+        }
+        gfx::vga_copy_rect(&mut self.screen, &self.framebuffer, rect);
+        self.send_frame_to_display();
     }
 
     // = seg000:127c is_Gurney_Halleck_and_between_game_phases_15_and_20 — true

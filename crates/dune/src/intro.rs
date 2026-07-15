@@ -1075,9 +1075,10 @@ impl GameState {
         // = seg000:0886 open_spritesheet(30h) — BACK.HSQ + palette.
         self.open_sprite_bank(BACK);
 
-        // = seg000:088c..0895 vga_fill_rect(_word_20920_game_area_rect, 0deh):
-        // the game area is (0,0)..(0x140,0x98).
-        gfx::vga_fill_rect(self, 0, 0, 0x140, 0x98, 0xde);
+        // = seg000:088c..0895 vga_fill_rect(_word_20920_game_area_rect, 0deh,
+        // es = [_word_2D08A_framebuffer_active_seg]): the game area is
+        // (0,0)..(0x140,0x98).
+        gfx::vga_fill_rect(self, self.active_fb(), 0, 0, 0x140, 0x98, 0xde);
 
         // = seg001:154e icon list: sprite 4 mirrored at x=0, sprite 4 at x=236.
         const PANELS: [(u16, i16, i16); 2] = [(0x4004, 0, 0), (0x0004, 236, 0)];
@@ -1148,7 +1149,7 @@ impl GameState {
     //   loc_008c5:                                           ; per frame:
     //     copy_game_area_to_screen_fb2_to_fb1               ;  restore the Baron
     //     draw_sprite_clipped(5, dx, 13); draw_sprite_clipped(6, dx, 13)
-    //     loc_0c4dd                                          ;  flush to screen
+    //     present_game_area                                          ;  flush to screen
     //     dx += 32; while dx <= 0                            ;  -96,-64,-32,0
     //
     // Sprites 5+6 are the same left-guard pair BACK.HSQ uses for Feyd; here they
@@ -1172,7 +1173,7 @@ impl GameState {
                 // = draw_sprite_clipped(5/6, dx, 13): the guard pair at the
                 // current slide x, clipped to the game area.
                 s.draw_sprite_list_clipped_to_game_area(&[(5, dx, 13), (6, dx, 13)], sheet);
-                // = loc_0c4dd: copy the game area fb1 -> screen and present.
+                // = present_game_area: copy the game area fb1 -> screen and present.
                 s.gfx_copy_whole_framebuf_to_screen();
                 s.present_transition_frame();
 

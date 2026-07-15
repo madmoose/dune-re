@@ -742,7 +742,7 @@ impl GameState {
             // whole, then the speech mouth on top.
             let rect = self.composite_head_layers(&[(0, 0), (lip_anim, frame)]);
             // = the seg000:9e48..9e54 draw tail (loc_0908c -> restore_mouse_if_
-            // rect_intersects -> draw_hud_head_if_needed_and_update_screen_rect_
+            // rect_intersects -> present_screen_rect (c4f0)
             // at_si -> draw_mouse_cursor_if_needed) — the same shared present
             // chain as the idle animator's.
             self.present_head_dirty_rect(rect);

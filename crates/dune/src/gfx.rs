@@ -27,7 +27,7 @@
 use std::mem::swap;
 
 use crate::{
-    Color, CursorShapeId, FrameBuffer, GameState, Rect, SpriteSheet, cursor_shape,
+    Color, CursorShapeId, FbId, FrameBuffer, GameState, Rect, SpriteSheet, cursor_shape,
     draw_sprite_from_sheet, sprite_blitter,
 };
 
@@ -1116,8 +1116,8 @@ pub fn draw_sprite_on_framebuffer_flipped(
         .draw()
 }
 
-pub fn vga_clear_rect(state: &mut GameState, x0: u16, y0: u16, x1: u16, y1: u16) {
-    vga_fill_rect(state, x0, y0, x1, y1, 0);
+pub fn vga_clear_rect(state: &mut GameState, dest: FbId, x0: u16, y0: u16, x1: u16, y1: u16) {
+    vga_fill_rect(state, dest, x0, y0, x1, y1, 0);
 }
 
 // = segvga vga_copy_rect_ds (gfx_vtable_vga_copy_rect_ds; the inner blit
@@ -1263,11 +1263,23 @@ pub fn scroll_rect_up_pass(
 }
 
 // = segvga vga_fill_rect (gfx_vtable_vga_fill_rect, seg001:38dd). Fill the
-// half-open rect [x0,x1) × [y0,y1) of the active framebuffer with `color`,
-// applying fb_base_ofs (y_offset) like every other segvga primitive.
-pub fn vga_fill_rect(state: &mut GameState, x0: u16, y0: u16, x1: u16, y1: u16, color: u8) {
+// half-open rect [x0,x1) × [y0,y1) of the framebuffer `dest` with `color`,
+// applying fb_base_ofs (y_offset) like every other segvga primitive. `dest`
+// is the DOS caller's es load: [_word_2D08A_framebuffer_active_seg]
+// (state.active_fb()) at every site except the nav-panel background fill
+// (seg000:d74f), which loads [_word_2D088_screen_buffer_seg]
+// (state.screen_buffer).
+pub fn vga_fill_rect(
+    state: &mut GameState,
+    dest: FbId,
+    x0: u16,
+    y0: u16,
+    x1: u16,
+    y1: u16,
+    color: u8,
+) {
     let yoff = state.y_offset;
-    let fb = state.active_fb_mut();
+    let fb = state.fb_mut(dest);
     let w = fb.w();
     let h = fb.h();
     for y in y0..y1 {
@@ -1277,6 +1289,88 @@ pub fn vga_fill_rect(state: &mut GameState, x0: u16, y0: u16, x1: u16, y1: u16, 
         }
         for x in x0..x1.min(w) {
             fb.set(x, py, color);
+        }
+    }
+}
+
+// = segvga:2384 map_globe_edge_insets — per-row edge insets for map rows at
+// |latitude| 0x46..0x57: the number of pixels vga_blit_shaded trims from each
+// side of the row, giving the windowed map its curved-globe top/bottom edges.
+const MAP_GLOBE_EDGE_INSETS: [u8; 18] = [
+    0x02, 0x04, 0x06, 0x08, 0x0b, 0x0e, 0x10, 0x13, 0x16, 0x19, 0x1c, 0x20, 0x24, 0x29, 0x2f, 0x36,
+    0x41, 0x4b,
+];
+
+// = segvga:23eb vga_blit_shaded (gfx_vtable_vga_blit_shaded) — blit the map
+// row buffer (`rows`, stride 0xc8, one raw map cell per byte) to the active
+// framebuffer at (x0, y0), remapping every cell from palette bank 0 to bank 1
+// (pixel = (cell & 0x0f) + 0x10). `top_lat` is the top row's latitude: rows at
+// |latitude| >= 0x46 are trimmed by map_globe_edge_insets on both sides —
+// black up to four shade bytes 0x1c,0x19 / 0x18,0x17 toward the map — for the
+// curved globe edge. DOS blits bottom-to-top; row order does not matter here.
+pub fn vga_blit_shaded(
+    state: &mut GameState,
+    rows: &[u8],
+    width: usize,
+    height: usize,
+    x0: i16,
+    y0: i16,
+    top_lat: i16,
+) {
+    let yoff = state.y_offset as usize;
+    let fb = state.active_fb_mut();
+    for (row, src) in rows.chunks_exact(0xc8).take(height).enumerate() {
+        let y = y0 as usize + row + yoff;
+        let mut x = x0 as usize;
+        let mut put = |x: &mut usize, c: u8| {
+            fb.set(*x as u16, y as u16, c);
+            *x += 1;
+        };
+        // = segvga:2396 loc_segvga_02396 — the left edge inset for this row's
+        //   latitude.
+        let lat = (top_lat + row as i16).unsigned_abs() as usize;
+        let inset = if lat >= 0x46 {
+            MAP_GLOBE_EDGE_INSETS[(lat - 0x46).min(MAP_GLOBE_EDGE_INSETS.len() - 1)] as usize
+        } else {
+            0
+        };
+        // = segvga:23b2 sub cx,dx twice; jb loc_segvga_023cc — a row narrower
+        //   than twice the inset is entirely off the globe: fill it black.
+        if width < 2 * inset {
+            for _ in 0..width {
+                put(&mut x, 0x00);
+            }
+            continue;
+        }
+        // = segvga:23b6..23c7 the left edge: black up to the four shade bytes
+        //   0x1c,0x19 (only when the inset is at least four) then 0x18,0x17.
+        if inset > 0 {
+            for _ in 0..inset.saturating_sub(4) {
+                put(&mut x, 0x00);
+            }
+            if inset >= 4 {
+                put(&mut x, 0x1c);
+                put(&mut x, 0x19);
+            }
+            put(&mut x, 0x18);
+            put(&mut x, 0x17);
+        }
+        // = segvga:2422..2434 the row kernel: and 0x0f, add 0x10.
+        for &cell in &src[inset..width - inset] {
+            put(&mut x, (cell & 0x0f) + 0x10);
+        }
+        // = segvga:23d7 loc_segvga_023d7 — the mirrored right edge: 0x17,0x18,
+        //   then 0x19,0x1c and black when the inset is at least four.
+        if inset > 0 {
+            put(&mut x, 0x17);
+            put(&mut x, 0x18);
+            if inset >= 4 {
+                put(&mut x, 0x19);
+                put(&mut x, 0x1c);
+                for _ in 0..inset - 4 {
+                    put(&mut x, 0x00);
+                }
+            }
         }
     }
 }

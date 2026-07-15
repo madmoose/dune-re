@@ -55,7 +55,7 @@ impl GameState {
             self.midi_duck_music_volume();
             // = seg000:023d start_narration_voice_clip — open + queue the next
             // PZ\PZ00<si>I.VOC narration clip.
-            self.intro2_start_narration_voice(scene);
+            self.start_narration_voice_clip(scene);
 
             // = seg000:0241 kb_check_for_esc_key_hit; seg000:0244 jz loc_00292 —
             // abort the whole act if ESC was pressed during the transition/voice.
@@ -406,7 +406,7 @@ impl GameState {
             s.draw_sprite_centered_clipped(sheet, count + 3, x, 79, clip);
         });
 
-        // = seg000:0aca jmp loc_0c4dd — restore cursor + update the game-area
+        // = seg000:0aca jmp present_game_area — restore cursor + update the game-area
         // screen rect. Here the scene composes offscreen (front buffer = fb1) and
         // is revealed by the following 0x3a transition, so that copy is superseded.
     }
@@ -525,25 +525,27 @@ impl GameState {
         self.remove_frame_task(crate::TaskId::PcmVoiceMusicRestore);
     }
 
-    // = seg000:ab4f start_narration_voice_clip — open and start the next WORMSUIT narration voice
-    // clip. DOS receives the scene index in ax (the saved si): builds the filename
-    // via create_voc_file_name_from_bx (seg000:a8bc) from a "PF\PF001I .VOC"
+    // = seg000:ab4f start_narration_voice_clip — open and start a PZ narration
+    // voice clip. DOS receives the clip index in ax: builds the filename via
+    // create_voc_file_name_from_bx (seg000:a8bc) from a "PF\PF001I .VOC"
     // template at seg001:37da, with bx=0x19 supplying the directory letter
-    // ('A'+0x19='Z' → "PZ\PZ") and the saved ax supplying the 3-hex-digit clip
-    // index (001..008). The trailing letter is a language suffix: DOS picks 'I'
-    // (international) here because data_00006 == 0x80 at intro2 and no language
-    // override is set — and indeed only PZ\PZNNNI.VOC entries exist in DUNE.DAT.
+    // ('A'+0x19='Z' → "PZ\PZ") and ax supplying the 3-hex-digit clip index.
+    // The trailing letter is a language suffix: DOS picks 'I' (international)
+    // here — and indeed only PZ\PZNNNI.VOC entries exist in DUNE.DAT. Callers:
+    // the WORMSUIT intro narration (seg000:023d, clips 001..008), the message
+    // viewer (seg000:261c) and the map screen open (seg000:4340, clip 2BC).
     //
     // DOS streams the clip in chunks through a loc_0ab92 frame task that polls
     // open_pcm_voice_file and steps _dword_22CC1_pcm_voc_resource_offset by 0x1a
     // bytes per refill. The port loads the whole .voc in one go via voc::parse
     // and hands it to the PCM mixer, so the streaming offset and frame task have
     // no equivalent. Missing file / disabled PCM is silent (= seg000:ab73 jb
-    // loc_0ab8d / seg000:ab67 jz loc_0ab44).
-    fn intro2_start_narration_voice(&mut self, si: u16) {
-        // = seg000:a8bc create_voc_file_name_from_bx with bx=0x19, ax=si: the
-        // template yields "PZ\PZ00<si>I.VOC" for si in 1..=8.
-        let name = format!("PZ\\PZ00{si:X}I.VOC");
+    // loc_0ab8d / seg000:ab67 jz loc_0ab44). DOS also refuses to interrupt a
+    // clip already playing (seg000:ab5f is_voc_pcm_playing; jnz ret).
+    pub(crate) fn start_narration_voice_clip(&mut self, ax: u16) {
+        // = seg000:a8bc create_voc_file_name_from_bx with bx=0x19: the
+        // template yields "PZ\PZ<ax:3-hex>I.VOC".
+        let name = format!("PZ\\PZ{ax:03X}I.VOC");
 
         // = seg000:ab70 open_pcm_voice_file; seg000:ab73 jb loc_0ab8d — bail on
         // missing resource (DAT without narration, e.g. floppy distributions).

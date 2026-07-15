@@ -103,9 +103,9 @@ impl GameState {
         self.dismiss_stacked_overlays();
         // = seg000:190f call set_fb1_as_active_framebuffer — compose offscreen.
         self.set_fb1_as_active_framebuffer();
-        // = seg000:1912 si=data_0143c; al=0f1h; vga_fill_rect — the plan's
-        //   right-side backing rect.
-        gfx::vga_fill_rect(self, 160, 0, 320, 116, 0xf1);
+        // = seg000:1912 si=data_0143c; al=0f1h; es=[_word_2D08A_framebuffer_
+        //   active_seg]; vga_fill_rect — the plan's right-side backing rect.
+        gfx::vga_fill_rect(self, self.active_fb(), 160, 0, 320, 116, 0xf1);
         // = seg000:191f si=data_01444; al=0f7h; loc_05b6e — the 4-deep bevel.
         self.draw_nested_rect_outline(164, 4, 316, 112, 0xf7);
         // = seg000:1927 ax=21h (PALPLAN.HSQ); open_spritesheet.

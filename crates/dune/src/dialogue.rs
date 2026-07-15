@@ -255,8 +255,8 @@ impl GameState {
         self.ui_hud_head_save_rect();
         // = seg000:93d2 call update_screen_palette.
         self.update_screen_palette();
-        // = seg000:93d5 call loc_0c4dd — present the head rect to the screen.
-        self.present_dialogue_head();
+        // = seg000:93d5 call present_game_area — present the head rect to the screen.
+        self.present_game_area();
         // = seg000:93d9 call set_dialogue_speaker — record the speaker and arm
         // the dialogue verb panel.
         self.set_dialogue_speaker(person_index);
@@ -743,9 +743,9 @@ impl GameState {
             // = seg000:a0b9 call start_room_lip_sync (978e) — sheet parse, idle
             //   task and first head render (already bundled into the port's
             //   setup_talking_head); mirror its visible tail: 97c8 call
-            //   update_screen_palette, 97cb jmp loc_0c4dd.
+            //   update_screen_palette, 97cb jmp present_game_area.
             self.update_screen_palette();
-            self.present_dialogue_head();
+            self.present_game_area();
             // = seg000:a0bd cmp data_04774,0; jnz -> a0c5 call loc_02ebf — while
             //   a dialogue is active, push the screen element at [data_02220].
             //   TODO: that element (the dialogue text window) is not modelled.
@@ -846,77 +846,12 @@ impl GameState {
         //   rect (the element-19 rect); the port restores the whole game area, a
         //   clean superset of it.
         self.copy_game_area_fb2_to_fb1();
-        // = seg000:98dc..98df si = 1bf0h; call draw_hud_head_if_needed_and_
-        //   update_screen_rect_at_si — push the restored area to the screen
-        //   (present_dialogue_head pushes the game-area rect through the same
+        // = seg000:98dc..98df si = 1bf0h; call present_screen_rect — push the
+        //   restored area to the screen
+        //   (present_game_area pushes the game-area rect through the same
         //   c4f0 chain).
-        self.present_dialogue_head();
+        self.present_game_area();
         // = seg000:98e2 jmp stop_lip_sync_and_remove_idle_head_task (loc_09b8b).
         self.stop_lip_sync_and_remove_idle_head_task();
-    }
-
-    // = seg000:c4dd loc_0c4dd — present the freshly-composited talking head and
-    // its zoomed backdrop to the visible screen.
-    pub(crate) fn present_dialogue_head(&mut self) {
-        // = seg000:c4dd cmp mouse_pos_y,98h; jnb +; call call_restore_cursor —
-        // repaint the saved background under the cursor when it sits in the game
-        // area, so a stale cursor image is not baked into the pushed rect.
-        if self.mouse_pos_y < 0x98 {
-            self.restore_cursor_over_panel();
-        }
-        // = seg000:c4e8 si = _word_20920_game_area_rect (0,0,320,152); jmp
-        // present_screen_rect.
-        let yoff = self.y_offset as i16;
-        self.present_screen_rect(Rect {
-            x0: 0,
-            y0: yoff,
-            x1: 320,
-            y1: yoff + 152,
-        });
-    }
-
-    // = seg000:c4f0 present_screen_rect — the
-    // tail of the head-presentation chain (present_dialogue_head jumps here, as
-    // does the settings-panel repaint). Redraw the HUD head into fb1 when `rect`
-    // overlaps the head box (c4fb), then push `rect` from fb1 to the visible
-    // screen (copy_rect_fb1_to_screen).
-    pub(crate) fn present_screen_rect(&mut self, rect: Rect) {
-        // = seg000:c4fb draw_hud_head_if_needed_and_update_screen_rect — redraw
-        // the HUD head when the 240..255 sky is not suppressed and `rect` overlaps
-        // the head box (x in [0x7e,0xc2), bottom edge >= 0x89). The head must land
-        // in fb1 so the copy below carries it, so force fb1 active around the draw
-        // (DOS's callers already have fb1 active here).
-        if self.data_0227d == 0 && rect.y1 >= 137 && rect.x1 >= 126 && rect.x0 < 194 {
-            let saved = self.active_fb();
-            self.set_fb1_as_active_framebuffer();
-            self.ui_hud_head_draw();
-            self.active_fb = saved;
-        }
-        // = seg000:c4fb falls through into c51e.
-        self.copy_rect_fb1_to_screen(rect);
-    }
-
-    // = seg000:c51e copy_rect_fb1_to_screen — copy `rect` from fb1 to the
-    // visible screen. Called on its own (e.g. seg000:c7cc) as well as via the
-    // present_screen_rect fall-through. An empty rect does nothing; the copy is
-    // skipped while the front buffer is redirected to fb1 (offscreen render,
-    // where DOS's copy targets fb1 and the real screen must stay untouched) or
-    // the mixer panel owns the mouse handlers (loc_0c526).
-    pub(crate) fn copy_rect_fb1_to_screen(&mut self, rect: Rect) {
-        // = seg000:c51e sub bp,dx / sub ax,bx — bail on a zero-area rect.
-        if rect.x1 <= rect.x0 || rect.y1 <= rect.y0 {
-            return;
-        }
-        // = seg000:c526 cmp active_mouse_handlers,1ad6h; jz ret.
-        if self.front_buffer_is_fb1()
-            || std::ptr::eq(
-                self.active_mouse_handlers,
-                &crate::game_ui::MIXER_MOUSE_HANDLERS,
-            )
-        {
-            return;
-        }
-        gfx::vga_copy_rect(&mut self.screen, &self.framebuffer, rect);
-        self.send_frame_to_display();
     }
 }

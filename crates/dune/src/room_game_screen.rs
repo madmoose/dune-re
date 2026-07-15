@@ -31,7 +31,7 @@ pub(crate) struct CommandMenuRecord {
     pub handler: u16,
 }
 
-const fn rec(text_id: u16, handler: u16) -> CommandMenuRecord {
+pub(crate) const fn rec(text_id: u16, handler: u16) -> CommandMenuRecord {
     CommandMenuRecord { text_id, handler }
 }
 
@@ -277,6 +277,10 @@ pub(crate) enum ScreenElement {
     // the only identity the port maps to 0x2012. Its cleanup func is
     // loc_019fc (palace_plan_cleanup).
     PalacePlan,
+    // = menu_multiple_cancel (seg001:212e, priority byte 0xf8) — the map/globe
+    // main view (map_screen_open, seg000:430b) with its single Cancel verb.
+    // Its cleanup func is map_screen_cleanup (seg000:4415).
+    MapScreen,
 }
 
 impl ScreenElement {
@@ -291,7 +295,9 @@ impl ScreenElement {
         match self {
             ScreenElement::RoomCommandMenu | ScreenElement::LookAwayFromMirror => 0xff,
             ScreenElement::NpcActionsMenu => 0xfc,
-            ScreenElement::MixerPanel | ScreenElement::PalacePlan => 0xf8,
+            ScreenElement::MixerPanel | ScreenElement::PalacePlan | ScreenElement::MapScreen => {
+                0xf8
+            }
             ScreenElement::ExitGameConfirmation => 0xf6,
         }
     }
@@ -561,9 +567,12 @@ impl GameState {
             // = seg000:003a exit_to_dos — the confirmation submenu's YES verb
             // (menu_exit_game_confirmation 0xb8): quit the game to the OS.
             0x003a => self.exit_to_dos(),
+            // = seg000:42e9 — the TAKE AN ORNITHOPTER room verb (CMD_TAKE_
+            // ORNITHOPTER): open the map screen in ornithopter mode.
+            0x42e9 => self.menu_callback_choice_map_main_take_an_ornithopter_notransition(),
             // TODO: the other mirror-menu verbs (RESTART 0x0e47, LOAD 0xb29e,
-            // SAVE 0xb28c) and the room verbs (SEE DUNE MAP 0x186b, ornithopter
-            // travel, ...) are not ported.
+            // SAVE 0xb28c) and the room verbs (SEE DUNE MAP 0x186b, CALL A
+            // WORM 0x42d1, ...) are not ported.
             0xd2e2 => self.menu_callback_choice_exit_menu(),
             _ => {
                 println!("dispatch_command_handler: unhandled 0x{handler:04x}");
@@ -636,6 +645,9 @@ impl GameState {
             // = seg000:19fc loc_019fc — restore the room view the PALACE PLAN
             //   overlay covered.
             ScreenElement::PalacePlan => self.palace_plan_cleanup(),
+            // = seg000:4415 map_screen_cleanup — leave the map/globe view and
+            //   restore the room screen.
+            ScreenElement::MapScreen => self.map_screen_cleanup(),
             // RoomCommandMenu is the stack base; it has no cleanup func.
             _ => {}
         }
@@ -712,8 +724,8 @@ impl GameState {
         // = seg000:988f call ui_hud_head_save_rect — grab the game-area strip under
         //   the HUD head out of the new fb1 before the head rises.
         self.ui_hud_head_save_rect();
-        // = seg000:9892 call loc_0c4dd — present the un-zoomed game area to screen.
-        self.present_dialogue_head();
+        // = seg000:9892 call present_game_area — present the un-zoomed game area to screen.
+        self.present_game_area();
         // = seg000:9895 jmp ui_hud_head_animate_up — raise the small HUD head
         //   ornament back into view now the conversation is over.
         self.ui_hud_head_animate_up();
@@ -839,8 +851,8 @@ impl GameState {
     // handler armed on ui_elements[21]/[22].
     //
     // Not modelled: the bp==1f7e dialogue branch (loc_09248), the person
-    // index >= 0x0f / cl==0x2f branches (loc_09240 / 09282), and the no-person
-    // room-edge up-travel branch (loc_09263 -> ui_click_room_up).
+    // index >= 0x0f branch (loc_09240), and the no-person room-edge up-travel
+    // branch (loc_09263 -> ui_click_room_up).
     pub(crate) fn callback_main_ui_element_21_22(&mut self) {
         // = seg000:9215 get_active_screen_element; cmp bp,1f0eh; jnz loc_09248.
         // = seg000:921e cmp game_screen_mode_flags,0; jnz loc_09281.
@@ -853,6 +865,13 @@ impl GameState {
         let Some(person_id) = self.person_hit_test() else {
             return;
         };
+        // = seg000:922a cmp cl,2fh; jz loc_09282 — a click on the parked
+        // ornithopter opens the map screen in ornithopter mode (jmp
+        // menu_callback_choice_map_main_take_an_ornithopter_notransition).
+        if person_id == 0x2f {
+            self.menu_callback_choice_map_main_take_an_ornithopter_notransition();
+            return;
+        }
         // = seg000:922f cmp cl,0fh; jnb loc_09240 — only person index < 0x0f
         // dispatches a room_persons handler here.
         if (person_id as usize) < 0x0f {
@@ -1448,11 +1467,13 @@ impl GameState {
 
     // = seg000:9285 person_hit_test_at_cursor — hit-test the cursor against the
     // on-screen person markers (character_screen_pos, seg001:47f8), returning the
-    // person id (0..0x16) of the first marker the cursor falls in, or None. The
-    // marker is each person's draw anchor (top-left); the test is a fixed
-    // person-sized box below-and-right of it — mouse_x 1..=32 px right of the
-    // anchor and mouse_y 1..=80 px below it. Gated on mouse_pos_y < 0x98 (the
-    // room scene area).
+    // person id (0..0x16) of the first marker the cursor falls in; when no person
+    // matches, against the parked-ornithopter hotspot (orni_hotspot_x/y),
+    // returning the 0x2f ornithopter pseudo-person; else None. The person marker
+    // is each person's draw anchor (top-left); the test is a fixed person-sized
+    // box below-and-right of it — mouse_x 1..=32 px right of the anchor and
+    // mouse_y 1..=80 px below it. Gated on mouse_pos_y < 0x98 (the room scene
+    // area).
     pub(crate) fn person_hit_test(&self) -> Option<u8> {
         let mouse_x = self.mouse_pos_x;
         let mouse_y = self.mouse_pos_y;
@@ -1482,7 +1503,28 @@ impl GameState {
                 return Some(id);
             }
         }
-        None
+        // = seg000:92ab the loop fall-through — no person matched: test the
+        // parked-ornithopter hotspot. 0 = no ornis in this scene (cleared at
+        // every scene draw, recorded by draw_room_ornis).
+        let (ox, oy) = (self.orni_hotspot_x, self.orni_hotspot_y);
+        if ox == 0 {
+            return None;
+        }
+        // = seg000:92b2 sub ax,dx; cmp ax,0ffb2h; cmc; jnb loc_092c8 — the hit
+        // needs (ox - mouse_x) in [0xffb2, 0xffff] (signed -78..-1): the cursor
+        // 1..=78 px right of the hotspot.
+        if ox.wrapping_sub(mouse_x) < 0xffb2 {
+            return None;
+        }
+        // = seg000:92ba ax = bx - [orni_hotspot_y]; cmp ax,3ch; jnb loc_092c8 —
+        // the cursor 0..=59 px below the hotspot (unsigned, so above misses).
+        if mouse_y.wrapping_sub(oy) >= 0x3c {
+            return None;
+        }
+        // = seg000:92c5 cx = 0x2f — the ornithopter pseudo-person id. Its verb
+        // text is 0x78 + 0x2f = 0xa7, TAKE AN ORNITHOPTER, so the hover
+        // highlight (slot_for_person_text_id) needs no special case.
+        Some(0x2f)
     }
 
     // = seg000:d48a draw_command_menu_item — draw one verb slot (`slot` 0..4,
@@ -1543,9 +1585,10 @@ impl GameState {
         }
 
         // = seg000:d4e9 fill the rest of the row (current pen x .. 0xe3, y .. y+7)
-        // with the background colour, clearing whatever the slot held before.
+        // with the background colour, clearing whatever the slot held before
+        // (seg000:d502 es = [_word_2D08A_framebuffer_active_seg]).
         let (pen_x, pen_y) = self.font_get_draw_position();
-        gfx::vga_fill_rect(self, pen_x, pen_y, 0xe3, pen_y + 7, bg);
+        gfx::vga_fill_rect(self, self.active_fb(), pen_x, pen_y, 0xe3, pen_y + 7, bg);
 
         // = seg000:d50a pop [active_seg].
         self.active_fb = saved;
@@ -1825,7 +1868,7 @@ impl GameState {
     // leaves whatever `ui_setup_and_draw_nav_panel` already placed for those modes
     // and only customizes the standard palace/sietch room path. The data_01cc4
     // mirror of the centre flags is dropped — no consumer is ported yet.
-    fn rebuild_and_draw_room_nav_panel(&mut self) {
+    pub(crate) fn rebuild_and_draw_room_nav_panel(&mut self) {
         // = seg000:2ffb cmp byte ptr [night_attack_stage], 0; jnz loc_0301a (alt). The
         // night-attack path leaves the existing panel in place and just
         // redraws.
@@ -2026,7 +2069,7 @@ impl GameState {
     // = seg000:5ba0 copy_game_area_rect_to_unknown_rect — copy the game-area rect
     // (si=1470h) to the backdrop buffer (di=0d83ch) before drawing the room.
     // TODO: port; no-op stub.
-    fn copy_game_area_rect_to_unknown_rect(&mut self) {}
+    pub(crate) fn copy_game_area_rect_to_unknown_rect(&mut self) {}
 
     // = seg000:37b2 draw_room_scene — clear the game area and draw the current
     // location/room scene (= draw_SAL, seg000:3b59). The port's draw_location_room
@@ -2040,6 +2083,9 @@ impl GameState {
         // talking head (and its idle/voc frame tasks) before redrawing the room,
         // so the LOOK AT MIRROR head stops compositing once the player looks away.
         self.reset_scene_lip_sync_state();
+        // = seg000:37b8 orni_hotspot_x = 0 — no parked-orni hover hotspot until
+        // this scene's orni pass (draw_room_ornis) records one.
+        self.orni_hotspot_x = 0;
         // = seg000:37c4..37d7 ax = 0xffff; cmp [current_scene],al; jz — no room
         // scene (the desert, current_scene 0xff) short-circuits the scene-record
         // lookup and lands in the sign-bit branch loc_037dc. (An in-room scene
@@ -2320,7 +2366,7 @@ mod tests {
             "expected the zoom + head to redraw most of the game area, only {changed} px changed"
         );
 
-        // present_dialogue_head (loc_0c4dd) must push the zoomed backdrop + head to
+        // present_game_area (present_game_area) must push the zoomed backdrop + head to
         // the visible SCREEN, and the panel fold (play_pending_panel_fold / play_pending_panel_fold)
         // must present its 17 frames. Collect every frame the dialogue presented.
         let frames: Vec<_> = std::iter::from_fn(|| rx.try_recv().ok()).collect();
@@ -2544,7 +2590,7 @@ mod tests {
              ({vs_zoomed} px differ) than to the plain room ({vs_plain} px differ)"
         );
 
-        // present_dialogue_head (loc_0c4dd) pushed the un-zoomed game area to the
+        // present_game_area (present_game_area) pushed the un-zoomed game area to the
         // visible screen: the last presented frame's game area matches fb1.
         let frames: Vec<_> = std::iter::from_fn(|| rx.try_recv().ok()).collect();
         let (screen, _palette) = frames.last().cloned().expect("STOP TALKING presented");

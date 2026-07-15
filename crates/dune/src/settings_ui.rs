@@ -587,7 +587,7 @@ impl GameState {
         self.clear_some_mouse_rect();
         // = a54a call select_room_ui_table — restore the room handlers.
         self.select_room_ui_table();
-        // = a54d si=2886; jmp draw_head_if_needed_and_update_screen_rect_at_si.
+        // = a54d si=2886; jmp present_screen_rect.
         self.settings_ui_repaint_panel_rect();
     }
 

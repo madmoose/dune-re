@@ -747,6 +747,14 @@ impl GameState {
         // = seg000:0900 mov [current_scene],dh.
         self.data_00008 = (location_and_room >> 8) as u8;
 
+        // = seg000:37b8 orni_hotspot_x = 0 — every DOS room draw runs the
+        // loc_037b5 prologue (draw_room_scene, and the zoom re-render via
+        // seg000:3b2d), clearing the parked-orni hover hotspot until this
+        // draw's orni pass records one. Notably the dialogue-zoom re-render
+        // clears it and its orni pass skips the re-record (render flags 0x81),
+        // so the orni is not clickable behind a talking head.
+        self.orni_hotspot_x = 0;
+
         let dh = (location_and_room >> 8) as usize;
         let dl = (location_and_room & 0xff) as usize;
         let bh = (location_appearance >> 8) as usize;
@@ -841,16 +849,18 @@ impl GameState {
             self.open_sprite_bank(sprite_bank::ORNY);
             // = seg000:3a57 get_orni_position.
             let (mut x, mut y) = self.get_orni_position();
-            // The seg000:3a5a..3a67 stores of the first orni's hover hotspot
-            // (orni_hotspot_x/y = x+0xc, y+8, for the seg000:92ab room hover
-            // scan) are not ported — nothing reads them yet.
-            //
+            // = seg000:3a5a..3a67 record the first orni's hover hotspot
+            // (position + (0xc, 8)) for person_hit_test's orni tail
+            // (seg000:92ab) — hovering/clicking the parked orni resolves to
+            // the 0x2f pseudo-person (the TAKE AN ORNITHOPTER verb).
+            self.orni_hotspot_x = (x + 0xc) as u16;
+            self.orni_hotspot_y = (y + 8) as u16;
             // = seg000:3a6a..3a79 draw_ornis_loop: one orni per available
             // ornithopter, each stepped down-right by (0x46, 0x0a).
             for _ in 0..count {
                 self.draw_orni(x, y);
-                x += 0x46;
-                y += 0x0a;
+                x += 70;
+                y += 10;
             }
         }
         // = seg000:3a41 push 388dh — the pass exits through set_sky_palette so
