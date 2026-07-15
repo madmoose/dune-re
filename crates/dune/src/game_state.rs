@@ -339,22 +339,17 @@ pub struct GameState {
     pub(crate) troops: [Troop; 68],
 
     // = seg001:114e current_location_ptr — the locations[] index of the
-    // location the player is currently inside; any out-of-table value (>=
-    // 70) means "outside any location". DOS holds the record's seg001
-    // offset (0x100 + 0x1c * index): its static init 0xffff and the
-    // cleared-to-0 of the desert walk-out (seg000:3fdd) and travel departure
-    // (seg000:4763, not ported yet) are both non-record values, which the
-    // port's index form folds into the one sentinel 0xffff. Recomputed on
-    // every scene open (loc_008f0, the port's draw_location_room) and set on
-    // walk-in arrival (arrive_at_location).
+    // location the player is currently inside. Recomputed on every scene open
+    // (loc_008f0, the port's draw_location_room) and set on walk-in arrival
+    // (arrive_at_location).
     pub(crate) current_location_index: u16,
 
     // = seg001:1150 last_location_ptr — the locations[] index of the location
     // the player is at or last left (static init 0x100 = locations[0], the
     // Atreides palace). Set on walk-in arrival (arrive_at_location); unlike
-    // current_location_ptr it is NOT cleared when walking out into the
-    // desert, so the desert renderer (draw_outdoor_backdrop) can still see
-    // the nearby location.
+    // current_location_ptr it is NOT cleared when walking out into the desert,
+    // so the desert renderer (draw_outdoor_backdrop) can still see the nearby
+    // location.
     pub(crate) last_location_index: usize,
 
     // = seg001:1152 companion_1 / seg001:1153 companion_2 — the icon state of the

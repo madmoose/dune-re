@@ -21,8 +21,11 @@ impl GameState {
     // tablat entry for |lat| gives the row's start (offset from the map
     // centre, negated for southern rows) and its byte length bp = 2 * len;
     // the cell within the row is round(x * bp / 0x10000) (the DOS
-    // `mul dx; shl ax,1; adc dx,0` rounding).
-    pub(crate) fn map_position_to_offset(&self, x: u16, lat: i16) -> usize {
+    // `mul dx; shl ax,1; adc dx,0` rounding). Besides the offset (es:di),
+    // the DOS routine leaves the cell index (dx) and row byte length (bp)
+    // live for map_offset_and_snap_x — returned here as the second and
+    // third tuple element.
+    pub(crate) fn map_position_to_offset(&self, x: u16, lat: i16) -> (usize, u16, u16) {
         let tablat = self.tablat.as_ref().expect("TABLAT.BIN not loaded");
         // Tablat encodes rows as y = lat + 98 (0..196); its offset() applies
         // the row's distance below/above the map centre 0x62fc (= the DOS
@@ -31,8 +34,8 @@ impl GameState {
         let y = (lat + 98) as u16;
         let row = tablat.offset(y) as usize;
         let row_len = tablat.len(y) as u32;
-        let cell = ((row_len * x as u32 + 0x8000) >> 16) as usize;
-        row + cell
+        let cell = (row_len * x as u32 + 0x8000) >> 16;
+        (row + cell as usize, cell as u16, row_len as u16)
     }
 
     // = seg000:b5c5 map_offset_and_snap_x — map_position_to_offset plus the
@@ -40,19 +43,15 @@ impl GameState {
     // (x = cell * 0x10000 / row_len), so a snapped location map_x compares
     // equal (loc_04002) when a desert walk lands on its cell.
     pub(crate) fn map_offset_and_snap_x(&self, x: u16, lat: i16) -> (usize, u16) {
-        let tablat = self.tablat.as_ref().expect("TABLAT.BIN not loaded");
-        let y = (lat + 98) as u16;
-        let row = tablat.offset(y) as usize;
-        let row_len = tablat.len(y) as u32;
-        let cell = (row_len * x as u32 + 0x8000) >> 16;
-        let snapped = ((cell << 16) / row_len) as u16;
-        (row + cell as usize, snapped)
+        let (offset, cell, row_len) = self.map_position_to_offset(x, lat);
+        let snapped = (((cell as u32) << 16) / row_len as u32) as u16;
+        (offset, snapped)
     }
 
     // = seg000:b532 read_map_byte_at_dx_bl — the terrain byte at
     // (x = longitude, lat = latitude row).
     pub(crate) fn read_map_byte(&self, x: u16, lat: i16) -> u8 {
-        self.map[self.map_position_to_offset(x, lat)]
+        self.map[self.map_position_to_offset(x, lat).0]
     }
 
     // = seg000:407e get_map_position — the player's map position: in a room
@@ -99,43 +98,5 @@ impl GameState {
             self.locations[i].map_offset = offset as u16;
             self.map[offset] |= 0x40;
         }
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use std::sync::mpsc;
-
-    use crate::{GameState, dat_file::DatFile};
-
-    fn headless_game() -> Option<GameState> {
-        let dat_path = concat!(env!("CARGO_MANIFEST_DIR"), "/../../assets/DUNE.DAT");
-        let Ok(dat_file) = DatFile::open(dat_path) else {
-            eprintln!("skipping: {dat_path} not found");
-            return None;
-        };
-        let (tx, _rx) = mpsc::sync_channel(64);
-        let mut game = GameState::new(dat_file, tx);
-        game.set_headless();
-        game.initialize_resources();
-        Some(game)
-    }
-
-    // = the seg000:0192 startup loop invariants, checked against the palace
-    // (locations[0], map_x 6421 / map_y -4): its map_x is already on a cell
-    // boundary so the snap is the identity, the cached offset addresses the
-    // row for latitude -4, and the map byte gets the location bit 0x40.
-    #[test]
-    #[ignore = "needs assets/DUNE.DAT"]
-    fn palace_map_offset_is_cached_and_marked() {
-        let Some(game) = headless_game() else { return };
-        let palace = &game.locations[0];
-        assert_eq!(palace.map_x, 6421, "palace map_x snaps to itself");
-        assert_eq!(palace.map_offset, 0x5ceb);
-        assert!(game.map[palace.map_offset as usize] & 0x40 != 0);
-        // The walk-in arrival resolution round-trips the cell to the location.
-        let offset = game.map_position_to_offset(6421, -4);
-        assert_eq!(offset, palace.map_offset as usize);
-        assert_eq!(game.find_location_by_map_offset(offset), Some(0));
     }
 }

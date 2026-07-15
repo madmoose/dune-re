@@ -531,7 +531,7 @@ impl GameState {
         let lat = (latfine as u8) as i8 as i16;
         // = seg000:4007 call read_map_byte_at_dx_bl (then 400a xor bh,bh —
         //   bh is already 0 on this path).
-        let offset = self.map_position_to_offset(x, lat);
+        let offset = self.map_position_to_offset(x, lat).0;
         let map_byte = self.map[offset];
         // = seg000:400c test al,40h; jz loc_04057 — no location at this cell.
         if map_byte & 0x40 == 0 {
@@ -980,7 +980,7 @@ impl GameState {
             // = seg000:3854/3857 get_map_position + map_func; 385a dec di;
             // 385b..3868 scan the 4 bytes at cell-1 .. cell+2.
             let (x, lat) = self.get_map_position();
-            let offset = self.map_position_to_offset(x, lat);
+            let offset = self.map_position_to_offset(x, lat).0;
             (offset - 1..offset + 3).any(|o| self.map[o] & 0x30 == 0x10)
         };
         // = seg000:386a/386d dunes: 0x13 tiles from 0x42 (DN20);
