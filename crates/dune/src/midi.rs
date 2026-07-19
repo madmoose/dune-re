@@ -83,6 +83,12 @@ impl Midi {
         self.current_song = None;
         self.initialized = false;
         let _ = self.cmd_tx.send(MidiCommand::Reset);
+        // The driver's MIDI_Reset returns al = 0, which DOS stores into
+        // midi_status synchronously (seg000:aec1); publish it now so
+        // is_playing() reads false the instant after a reset (the audio
+        // thread also clears it when it picks up the command — cf. the
+        // symmetric 0x80 store in midi_play_song).
+        self.shared.status.store(0, Ordering::Relaxed);
     }
 
     // = the MIDI_SetVolume vtable entry (seg001:3985) — set the master music
@@ -112,6 +118,25 @@ impl Midi {
             volume,
             _balance,
         });
+        // = DNADL's MIDI_SetDynamics raises status bit 0x40 while a song is
+        // playing (set_music_during_voices); the PIT-refreshed game status
+        // (_byte_2D07D_midi_status) sees it immediately. Publish it
+        // synchronously so is_fading() reads true before the audio thread
+        // picks the command up — the thread re-publishes every tick and the
+        // ramp-end clear (fade_step) wins from there.
+        let status = self.shared.status.load(Ordering::Relaxed);
+        if status & 0x80 != 0 {
+            self.shared.status.store(status | 0x40, Ordering::Relaxed);
+        }
+    }
+
+    // = the 0x40 bit of the driver status (_byte_2D07D_midi_status): a
+    // MIDI_SetDynamics volume ramp is in progress; the driver clears it when
+    // the ramp reaches its target (fade_step), and a completed fade to
+    // silence clears the whole status. service_midi_music treats a running
+    // ramp as permission to switch to the desired song (seg000:ae17).
+    pub fn is_fading(&self) -> bool {
+        (self.shared.status.load(Ordering::Relaxed) & 0x40) != 0
     }
 
     // = seg000:de0c midi_wait_until — block until current song position >= target.

@@ -1,3 +1,21 @@
+use crate::GameState;
+
+// = the seg001 locations[] addressing: the table starts at seg001:0100 and
+// each record is 0x1c bytes. Several DOS-side words (data_046fc,
+// current_location_ptr, ...) hold a record's ds pointer; the port keeps those
+// words in the same encoding so the 0/0xffff/0xfff0.. sentinels stay apart
+// from real locations, and converts at the accesses.
+pub(crate) const LOCATION_PTR_BASE: u16 = 0x100;
+pub(crate) const LOCATION_RECORD_SIZE: u16 = 0x1c;
+
+pub(crate) fn location_ptr(index: u16) -> u16 {
+    LOCATION_PTR_BASE + LOCATION_RECORD_SIZE * index
+}
+
+pub(crate) fn location_index_from_ptr(ptr: u16) -> usize {
+    ((ptr - LOCATION_PTR_BASE) / LOCATION_RECORD_SIZE) as usize
+}
+
 #[derive(Debug, Default)]
 pub struct Equipment {
     pub harvesters: u8,
@@ -2023,3 +2041,68 @@ pub(crate) const LOCATIONS: [Location; 70] = [
         water: 0x96,
     },
 ];
+
+impl GameState {
+    // = seg000:5d36 location_is_Atreides_05d36 — carry set (true) when the
+    // location is an Atreides holding: a city/village appearance (>= 0x28)
+    // with status bit 8.
+    pub(crate) fn location_is_atreides(&self, location_index: usize) -> bool {
+        let loc = &self.locations[location_index];
+        loc.appearance >= 0x28 && loc.status & 8 != 0
+    }
+
+    // = seg000:6231 get_location_type_string_offset — classify a location's
+    // appearance byte into its type-string offset: 0 for the sietches
+    // (< 0x20), 2 for 0x21..0x27, 3 for 0x28..0x2f, and 1 (the palaces) for
+    // both 0x20 and >= 0x30.
+    fn get_location_type_string_offset(&self, location_index: usize) -> u16 {
+        // = seg000:6232 bl = [di+8] (appearance); 6235..624e the threshold
+        //   ladder (the >= 0x30 tail lands on 3 - 2 = 1).
+        match self.locations[location_index].appearance {
+            0x00..0x20 => 0,
+            0x20 => 1,
+            0x21..0x28 => 2,
+            0x28..0x30 => 3,
+            _ => 1,
+        }
+    }
+
+    // = seg000:629d draw_string_location_type — draw the location's type
+    // string ("Sietch: ", "Palace: ", ...) at (x, y) with the given colour
+    // word.
+    pub(crate) fn draw_string_location_type(
+        &mut self,
+        location_index: usize,
+        color: u16,
+        x: u16,
+        y: u16,
+    ) {
+        // = seg000:629d call get_location_type_string_offset; 62a0 add
+        //   ax,44h; 62a3 jmp font_draw_phrase_or_command_string_with_color_
+        //   at_pos.
+        let index = self.get_location_type_string_offset(location_index) + 0x44;
+        self.font_draw_phrase_or_command_string_with_color_at_pos(index, color, x, y);
+    }
+
+    // = seg000:62a6 draw_location_name — draw a location's two-part name
+    // ("Tuono-Tabr") at (x, y) with the given colour word: the first-name
+    // string, a separator (a space before the house last names Atreides/
+    // Harkonnen, '-' before the sietch last names), then the last-name string
+    // (COMMAND entries 0xc + last_name).
+    pub(crate) fn draw_location_name(&mut self, location_index: usize, color: u16, x: u16, y: u16) {
+        let (first, last) = {
+            let loc = &self.locations[location_index];
+            (loc.first_name, loc.last_name)
+        };
+        // = seg000:62a6 al = [di] (first_name); 62aa add ax,0; 62ad call
+        //   font_draw_phrase_or_command_string_with_color_at_pos.
+        self.font_draw_phrase_or_command_string_with_color_at_pos(first as u16, color, x, y);
+        // = seg000:62b0 cmp byte ptr [di+1],3; 62b4/62b8 al = ' ' when the
+        //   last name is below 3 (Atreides/Harkonnen), else '-'; 62ba the
+        //   glyph func.
+        self.font_draw_glyph(if last < 3 { 0x20 } else { 0x2d });
+        // = seg000:62be al = [di+1] (last_name); 62c3 add ax,0ch; 62c6 jmp
+        //   font_draw_phrase_or_command_string.
+        self.font_draw_phrase_or_command_string(last as u16 + 0xc);
+    }
+}

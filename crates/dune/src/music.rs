@@ -15,9 +15,10 @@
 //!    `music_desired_song` whenever the driver is idle — so a song begins at
 //!    game start and loops/advances as situations change.
 //!
-//! Only the game-relative mode (`music_playlist_flags == 0`, the default) is
-//! ported; the CD-style playlist / shuffle modes (`loc_0ace6`, the order tables
-//! at seg001:37fa/3804) are deferred.
+//! Both jukebox modes are ported: the game-relative selector and the CD-style
+//! playlist (`music_cd_playlist_service` = `loc_0ace6`, stepped from
+//! `process_frame_tasks`), with the order tables at seg001:37fa/3804 and the
+//! in-place shuffle (`music_cd_playlist_shuffle` = `loc_0acbf`).
 
 use crate::GameState;
 
@@ -31,12 +32,19 @@ const SITUATION_SONG_TABLE: [u8; 14] = [
     0x82, 0x82, 0x01, 0x82, 0x84, 0x04, 0x85, 0x85, 0x87, 0x88, 0x86, 0x89, 0x83, 0x83,
 ];
 
+/// = seg001:3804 music_cd_standard_order — the pristine standard CD order
+/// (9 song numbers + the 0xff terminator) STANDARD ORDER copies into the
+/// working playlist. The working copy (seg001:37fa music_cd_playlist) is
+/// initialised to the same bytes.
+pub(crate) const MUSIC_CD_STANDARD_ORDER: [u8; 10] = [9, 6, 8, 1, 4, 3, 7, 5, 2, 0xff];
+
 impl GameState {
-    // = seg000:aec6 loc_0aec6 — gate the music service on the MIDI-enabled
-    // settings flag (loc_0ae28 = settings_flags bit 0x100). The DOS
-    // cmd_args_memory bit-4 menu-interaction guard is not modelled.
+    // = seg000:aec6 check_music_enabled — gate the music service: disabled when
+    // cmd_args_memory bit 4 (the MUSIC OFF menu toggle) is set or the MIDI
+    // settings flag (loc_0ae28 = settings_flags bit 0x100) is clear. DOS
+    // returns CF set when disabled.
     fn music_service_enabled(&self) -> bool {
-        self.settings_flags & 0x100 != 0
+        self.cmd_args_memory & 0x10 == 0 && self.settings_flags & 0x100 != 0
     }
 
     // = seg000:aa96 loc_0aa96 — classify the current game state into a music
@@ -116,8 +124,12 @@ impl GameState {
         // = ad63 call loc_0aa96.
         let index = self.music_situation_index();
         // = ad66 cmp music_playlist_flags,0; jz loc_0ad75 — game-relative mode.
-        // CD-style mode (bit set) services its own playlist and is not ported.
+        // = ad6d..ad72 CD-style mode: when the driver is idle, advance the
+        //   playlist right away (no end-of-song debounce on this path).
         if self.music_playlist_flags != 0 {
+            if !self.midi.is_playing() {
+                self.music_cd_playlist_advance();
+            }
             return;
         }
         // = loc_0ad75: bx = 375ch; xlat — the song for this situation.
@@ -135,11 +147,22 @@ impl GameState {
             // = loc_0ad89: the situation forces a specific song.
             let song = entry & 0x3f;
             self.music_desired_song = song;
-            // = ad8e cmp al,current_song_index; jnz loc_0adbe — switch now if it
-            // differs from what is playing. (DOS fades the old song out over
-            // 0x12c ticks; the port switches on the next service tick instead.)
+            // = ad8e cmp al,current_song_index; jnz loc_0adbe — a song other
+            // than the one playing begins the switch.
             if Some(song) != self.midi.current_song() {
-                self.music_force_restart = true;
+                // = loc_0adbe — fade the current song out rather than cutting
+                // over: music-enabled and playlist-off are already established
+                // on this path (= adbe/adc3); a ramp already in progress is
+                // left running (= adca test midi_status,40h; jnz ret); else
+                // MIDI_SetDynamics(0x12c ticks -> volume 0) (= add2..addb).
+                // The driver raises status bit 0x40 for the ramp, so the next
+                // service_midi_music call switches into the desired song
+                // (seg000:ae17) — in DOS that is the first takeoff frame after
+                // the travel confirm's disk-bound departure setup, giving the
+                // audible music stop before the flight theme starts.
+                if !self.midi.is_fading() {
+                    self.midi.set_ducking(0x12c, 0, 0);
+                }
             }
         }
     }
@@ -158,16 +181,143 @@ impl GameState {
         if self.music_playlist_flags & 1 != 0 {
             return;
         }
-        // = ae10: advance only when the driver is idle (status sign clear), or
-        // when a forced switch is pending (DOS: the status 0x40 "ready" bit).
-        if self.midi.is_playing() && !self.music_force_restart {
+        // = ae10 cmp midi_status,0; jns loc_0ae1e — the driver is idle (the
+        // song ended, or a forced-switch fade-out completed and silenced it);
+        // = ae17 test midi_status,40h; jz ret — or a dynamics ramp is still
+        // running, which DOS also takes as the go-ahead to switch. Every
+        // dynamics ramp raises 0x40 (ADLSetDynamicsCurve, dnadl seg001:035e)
+        // — narration ducks and their end-of-line restores included — which
+        // is why this function runs only from its few DOS call sites and NOT
+        // from the game loop: the per-frame pump is music_cd_playlist_
+        // service's idle-only branch (loc_0ad37).
+        if self.midi.is_playing() && !self.midi.is_fading() {
             return;
         }
-        self.music_force_restart = false;
-        // = loc_0ad43: play the desired song (0 = nothing to play).
+        self.music_start_desired_song();
+    }
+
+    // = seg000:ad43 loc_0ad43 — start the desired song (0 = nothing to play),
+    // shared by service_midi_music and the frame-task pump. DOS clears
+    // current_song_index first so midi_play_song's same-song skip never blocks
+    // a restart; the port calls the driver directly.
+    fn music_start_desired_song(&mut self) {
         if self.music_desired_song != 0 {
             let song = self.music_desired_song;
             self.midi.midi_play_song(song, &mut self.dat_file);
+            // = seg000:adb8/adba xor ax,ax; mov [music_song_end_tick_stamp],ax.
+            self.music_song_end_tick_stamp = 0;
         }
+    }
+
+    // = seg000:ace6 music_cd_playlist_service — the per-frame music pump,
+    // stepped from process_frame_tasks (seg000:d9d2) and the in-game HNM play
+    // loop (seg000:c913): the CD-playlist streamer, or in game-relative mode
+    // the idle-only desired-song start (loc_0ad37).
+    pub(crate) fn music_cd_playlist_service(&mut self) {
+        // = ace6 call is_voc_pcm_playing; jnz ret — stand down under a voice.
+        if self.pcm_player.is_playing() {
+            return;
+        }
+        // = aceb test music_playlist_flags,1; jz loc_0ad37 — with the CD mode
+        //   off this is the game-relative pump: = ad37 check_music_enabled;
+        //   = ad3c cmp midi_status,0; js ret — advance into the desired song
+        //   only when the driver is FULLY idle. Deliberately no 0x40 test
+        //   here: a dynamics ramp (a narration duck or its end-of-line
+        //   restore) must not restart the playing song from this per-frame
+        //   path; only service_midi_music's few call sites switch mid-ramp.
+        if self.music_playlist_flags & 1 == 0 {
+            if self.music_service_enabled() && !self.midi.is_playing() {
+                self.music_start_desired_song();
+            }
+            return;
+        }
+        // = acf2 cmp [suppress_sky_240_255],0; jnz ret.
+        if self.data_0227d != 0 {
+            return;
+        }
+        // = acf9 cmp midi_status,0; js ret — a song is still playing.
+        if self.midi.is_playing() {
+            return;
+        }
+        // = ad00..ad0a stamp the first idle sighting (0 = unset).
+        let now = self.game_ticks() as u16;
+        if self.music_song_end_tick_stamp == 0 {
+            self.music_song_end_tick_stamp = now;
+        }
+        // = ad0d..ad16 advance only 0xc8 ticks after the song ended.
+        if now.wrapping_sub(self.music_song_end_tick_stamp) < 0xc8 {
+            return;
+        }
+        // = ad18 falls into music_cd_playlist_advance.
+        self.music_cd_playlist_advance();
+    }
+
+    // = seg000:ad18 music_cd_playlist_advance — play the next CD-playlist
+    // entry: a high-bit terminator restarts the playlist, otherwise bump the
+    // cursor and play the song.
+    fn music_cd_playlist_advance(&mut self) {
+        // = ad18 si = [music_cd_playlist_cursor]; lodsb; or al,al; js — the
+        //   0xff terminator wraps to the top.
+        let entry = self.music_cd_playlist[self.music_cd_playlist_cursor];
+        if entry & 0x80 != 0 {
+            self.music_cd_playlist_restart();
+            return;
+        }
+        // = loc_0ad30 store the advanced cursor; jmp midi_play_song.
+        self.music_cd_playlist_cursor += 1;
+        self.midi_play_song_gated(entry);
+    }
+
+    // = seg000:ad21 music_cd_playlist_restart — restart the CD playlist from
+    // the top: in shuffle mode first permute the entries, then play the first.
+    pub(crate) fn music_cd_playlist_restart(&mut self) {
+        // = ad21 si = music_cd_playlist; lodsb.
+        // = ad25 test music_playlist_flags,2; jz loc_0ad30 — shuffle mode
+        //   permutes in place and re-reads the first entry.
+        if self.music_playlist_flags & 2 != 0 {
+            self.music_cd_playlist_shuffle();
+        }
+        let entry = self.music_cd_playlist[0];
+        // = loc_0ad30 store the cursor past entry 0; jmp midi_play_song.
+        self.music_cd_playlist_cursor = 1;
+        self.midi_play_song_gated(entry);
+    }
+
+    // = seg000:acbf music_cd_playlist_shuffle — shuffle the 9-entry playlist in
+    // place: 0x12 rounds of swapping two rand_iterated(8) slots, perturbing the
+    // rand seed with the PIT counter xor the loop counter between the draws.
+    // The terminator at index 9 is out of rand_iterated(8)'s range.
+    fn music_cd_playlist_shuffle(&mut self) {
+        // = acc2 cx = 12h (DOS counts 0x12 down to 1).
+        for cx in (1..=0x12u16).rev() {
+            // = acc8 call rand_iterated (bx = 8); si = the first slot.
+            let si = self.rand_iterated(8) as usize;
+            // = accd..acd2 seed += pit_counter ^ cx — timer entropy between
+            //   the two draws.
+            let perturb = (self.game_ticks() as u16) ^ cx;
+            self.rand_iterated_seed = self.rand_iterated_seed.wrapping_add(perturb);
+            // = acd6 call rand_iterated; di = the second slot.
+            let di = self.rand_iterated(8) as usize;
+            // = acdb..acdf swap playlist[si], playlist[di].
+            self.music_cd_playlist.swap(si, di);
+        }
+    }
+
+    // = seg000:ad95 midi_play_song — the gated play wrapper the CD paths jump
+    // to: bail when music is disabled (= ad97 check_music_enabled) or the song
+    // is already the current one (= ad9c), else load + start it (the port's
+    // driver-side midi_play_song) and clear the end-of-song stamp (= adba).
+    // DOS also passes music_playlist_flags & 1 to MIDI_Open as its al flag
+    // (seg000:adac); the port's driver always plays once and both modes
+    // reschedule externally (service_midi_music / the CD service).
+    fn midi_play_song_gated(&mut self, song: u8) {
+        if !self.music_service_enabled() {
+            return;
+        }
+        if self.midi.current_song() == Some(song) {
+            return;
+        }
+        self.midi.midi_play_song(song, &mut self.dat_file);
+        self.music_song_end_tick_stamp = 0;
     }
 }

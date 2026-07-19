@@ -79,9 +79,9 @@ pub struct CursorShape {
 
 // = seg001:cursor_image_ptr targets — the cursor shapes vga_draw_cursor renders.
 // get_mouse_cursor_image_addr (seg000:dc6a) picks between the arrow, the busy
-// hand (seg001:25c8) and the four room-edge travel arrows (up/right/down/left
-// at seg001:260c/2650/2694/26d8) by hover region; wiring that selection in is
-// still TODO.
+// hand (seg001:25c8) and the four map-edge travel arrows (up/right/down/left
+// at seg001:260c/2650/2694/26d8) by hover region against the mouse_nav_rect
+// hot-zone.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum CursorShapeId {
     Arrow,
@@ -531,9 +531,48 @@ impl GameState {
         if self.settings_drag_target != 0 {
             return CursorShapeId::Hand;
         }
-        // = dc74.. otherwise the arrow. DOS also returns the four room-edge travel
-        // arrows (CursorShapeId::Up/Right/Down/Left) when the pointer is over a
-        // navigation hot-zone (_word_2D108_mouse_some_rect / loc_0d6fe) — TODO.
+        // = seg000:dc77 cmp [data_04723],0; jnz — the map-main-menu busy flag
+        // also forces the hand; not modelled (nothing ported sets it).
+        // = seg000:dc7e di = [mouse_nav_rect_ptr]; or di,di; jz — no
+        // navigation hot-zone installed: the plain arrow.
+        let Some(rect) = self.mouse_nav_rect else {
+            return CursorShapeId::Arrow;
+        };
+        let x = self.mouse_pos_x as i16;
+        let y = self.mouse_pos_y as i16;
+        // = seg000:dc86 cmp bx,9bh; jge — below the game area (over the HUD)
+        // the hot-zone does not apply.
+        if y >= 0x9b {
+            return CursorShapeId::Arrow;
+        }
+        // = seg000:dc8c call rect_contains; dc8f bp = cursor_shape_hand; jb —
+        // strictly inside the hot-zone the cursor is the hand.
+        if rect.contains_interior(x, y) {
+            return CursorShapeId::Hand;
+        }
+        // = seg000:dc94..dc9c with y inside the zone's vertical span, the
+        // pointer sits in a horizontal scroll band.
+        if y >= rect.y0 && y < rect.y1 {
+            // = seg000:dc9e..dca8 within 0x32 left of the zone: the left arrow.
+            if (rect.x0.wrapping_sub(x) as u16) < 0x32 {
+                return CursorShapeId::Left;
+            }
+            // = seg000:dcaa..dcb5 within 0x32 right of it: the right arrow.
+            if (x.wrapping_sub(rect.x1) as u16) < 0x32 {
+                return CursorShapeId::Right;
+            }
+        } else if x >= rect.x0 && x < rect.x1 {
+            // = seg000:dcb9..dcc0 the vertical scroll bands.
+            // = seg000:dcc2..dccd within 0x19 above the zone: the up arrow.
+            if (rect.y0.wrapping_sub(y) as u16) < 0x19 {
+                return CursorShapeId::Up;
+            }
+            // = seg000:dccf..dcda within 0x19 below it: the down arrow.
+            if (y.wrapping_sub(rect.y1) as u16) < 0x19 {
+                return CursorShapeId::Down;
+            }
+        }
+        // = seg000:dcdc bp = cursor_shape_arrow.
         CursorShapeId::Arrow
     }
 }

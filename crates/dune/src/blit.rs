@@ -19,6 +19,7 @@ pub struct Blitter<'a> {
     scale: u8,
     pal_offset: u8,
     rle: bool,
+    opaque: bool,
 }
 
 impl<'a> Blitter<'a> {
@@ -36,6 +37,7 @@ impl<'a> Blitter<'a> {
             scale: 0,
             rle: false,
             pal_offset: 0,
+            opaque: false,
         }
     }
 
@@ -81,6 +83,15 @@ impl<'a> Blitter<'a> {
         self
     }
 
+    /// Write colour-0 pixels instead of treating them as transparent. The HNM
+    /// full-screen-copy clips (resource flag bits 0x30: the travel MNT*
+    /// flights, VER) raw-copy the whole decoded frame in DOS (seg000:ccae ->
+    /// loc_04afd/loc_04aeb), so their index-0 sky must land in the buffer.
+    pub fn opaque(mut self, opaque: bool) -> Self {
+        self.opaque = opaque;
+        self
+    }
+
     pub fn draw(self) -> std::io::Result<()> {
         draw(
             self.x,
@@ -93,6 +104,7 @@ impl<'a> Blitter<'a> {
             self.flip_y,
             self.scale,
             self.pal_offset,
+            self.opaque,
             self.data,
             self.framebuffer,
         )
@@ -110,6 +122,7 @@ fn draw(
     flip_y: bool,
     scale: u8,
     pal_offset: u8,
+    opaque: bool,
     data: &[u8],
     frame: &mut FrameBuffer,
 ) -> std::io::Result<()> {
@@ -155,11 +168,11 @@ fn draw(
         if rle {
             let data = unrle(data, pitch, height)?;
             draw_8bpp(
-                &data, frame, x, y, width, height, clip_rect, flip_x, flip_y, pal_offset,
+                &data, frame, x, y, width, height, clip_rect, flip_x, flip_y, pal_offset, opaque,
             );
         } else {
             draw_8bpp(
-                data, frame, x, y, width, height, clip_rect, flip_x, flip_y, pal_offset,
+                data, frame, x, y, width, height, clip_rect, flip_x, flip_y, pal_offset, opaque,
             );
         }
     } else if rle {
@@ -280,12 +293,13 @@ fn draw_8bpp(
     flip_x: bool,
     flip_y: bool,
     mode: u8,
+    opaque: bool,
 ) {
     for y in 0..height {
         for x in 0..width {
             let src_offset = y * width + x;
             let c = src[src_offset as usize];
-            if mode != 255 || c != 0 {
+            if opaque || mode != 255 || c != 0 {
                 let x = dst_x.saturating_add_unsigned(if flip_x { width - x - 1 } else { x });
                 let y = dst_y.saturating_add_unsigned(if flip_y { height - y - 1 } else { y });
 

@@ -224,8 +224,8 @@ impl GameState {
     // reselect the room mouse-handler table. screen_element_stack_pop_and_cleanup
     // invokes it by the PalacePlan identity.
     pub(crate) fn palace_plan_cleanup(&mut self) {
-        // = seg000:19fc call clear_some_mouse_rect.
-        self.clear_some_mouse_rect();
+        // = seg000:19fc call clear_mouse_nav_rect.
+        self.clear_mouse_nav_rect();
         // = seg000:19ff si=143ch; call copy_rect_fb2_to_fb1 — restore the right-
         //   side rect from the clean fb2 backup into fb1. The port's vga_copy_rect
         //   takes absolute coordinates, so apply fb_base_ofs (y_offset) here.

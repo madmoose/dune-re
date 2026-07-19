@@ -512,9 +512,10 @@ impl GameState {
     // = seg000:ab92 frame_task_callback_0ab92 — the per-frame monitor a ducked
     // voice clip installs (interval 1). Once PCM playback ends, ramp the music
     // back to its un-ducked level and remove this task. DOS also pumped the
-    // streaming-VOC refill here (loc_0a9b9) and ran the same body inline from the
-    // test-voice wait loop (loc_0aba9); the dnsdb driver owns the whole clip in
-    // the port, so the monitor only needs the music-restore half.
+    // streaming-VOC refill here (loc_0a9b9) and ran the same body inline from
+    // the blocking wait_for_narration_voice_clip loop (seg000:aba9); the dnsdb
+    // driver owns the whole clip in the port, so the monitor only needs the
+    // music-restore half.
     pub(crate) fn tick_pcm_voice_music_restore(&mut self) {
         // = ab95 check_pcm_voice_file_open; jnz loc_0ab44 — still playing, wait.
         if self.pcm_player.is_playing() {
@@ -564,6 +565,49 @@ impl GameState {
         // dnsdb driver. Mirrors the talking-head path (= seg000:a75c).
         self.pcm_player.stop();
         self.pcm_player.start_playback(&data, 0);
+    }
+
+    // = seg000:ab45 duck_music_and_start_narration_voice_clip — with PCM
+    // enabled, duck the score and start the narration clip.
+    pub(crate) fn duck_music_and_start_narration_voice_clip(&mut self, clip: u16) {
+        // = seg000:ab45 call check_pcm_enabled; jz loc_0ab44.
+        if !self.check_pcm_enabled() {
+            return;
+        }
+        // = seg000:ab4b call midi_duck_music_volume; ab4e falls into
+        //   start_narration_voice_clip.
+        self.midi_duck_music_volume();
+        self.start_narration_voice_clip(clip);
+    }
+
+    // = seg000:aba9 wait_for_narration_voice_clip — block until the narration
+    // voice clip drains, pumping the frame_task_callback_0ab92 monitor body
+    // each PIT tick (it restores the ducked score once playback ends), with a
+    // 1000-tick timeout; both exits fall into set_voc_pcm_is_not_playing.
+    pub(crate) fn wait_for_narration_voice_clip(&mut self) {
+        // = seg000:aba9 call check_pcm_enabled; jz loc_0ab44.
+        if !self.check_pcm_enabled() {
+            return;
+        }
+        // = seg000:abae bx = the PIT counter at entry.
+        let start = self.game_ticks();
+        // = seg000:abb6 call check_pcm_voice_file_open; jz — the clip drained.
+        while self.pcm_player.is_playing() {
+            // = seg000:abbc..abc4 the 0x3e8-tick timeout falls through into
+            //   set_voc_pcm_is_not_playing, force-stopping the clip.
+            if self.game_ticks() - start >= 0x3e8 {
+                self.pcm_player.stop();
+                break;
+            }
+            // DOS's loop body is the ab92 monitor (a no-op while the clip
+            // still plays); the port paces one frame per pass so the frame
+            // tasks and the PIT keep advancing.
+            self.tick_one_frame();
+        }
+        // = seg000:abb3 call frame_task_callback_0ab92 — on the pass after
+        //   playback ends the monitor swells the score back up. The port runs
+        //   that restore half here (cf. tick_pcm_voice_music_restore).
+        self.midi_restore_music_volume();
     }
 
     // = seg000:ddb0 wait_interruptable. Clear the pending scancode, then run the

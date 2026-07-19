@@ -151,6 +151,18 @@ pub(crate) const MENU_MIXER_PANEL: [CommandMenuRecord; 5] = [
     rec(0x00a1, 0xd2e2), // " Done"                  menu_callback_choice_exit_menu
 ];
 
+/// = seg001:206a menu_globe_music — the CD-order submenu menu_callback_choice_
+/// music_on_cd_style pushes over the mixer menu (leading priority word 0x00f6
+/// and the trailing 0-word fence are implicit). STANDARD ORDER / SHUFFLE pick
+/// the CD-playlist mode and start it; Cancel closes back down. The active
+/// order's record gets CMD_HIGHLIGHT before the push (DOS's cl pre-highlight).
+#[rustfmt::skip]
+pub(crate) const MENU_GLOBE_MUSIC: [CommandMenuRecord; 3] = [
+    rec(0x010d, 0xac97), // STANDARD ORDER menu_callback_choice_music_cd_order_standard
+    rec(0x010c, 0xac90), // SHUFFLE        menu_callback_choice_music_cd_order_shuffle
+    rec(0x00a3, 0xd2df), // "  Cancel"     menu_callback_choice_music_cd_order_cancel
+];
+
 /// = seg001:20b6 menu_exit_game_confirmation — the EXIT GAME confirmation submenu
 /// menu_callback_choice_exit_game pushes over the active menu. DOS stores a leading
 /// priority word (0x00f6) and a trailing 0-word fence, both implicit here. YES
@@ -172,8 +184,10 @@ pub(crate) const MENU_DONE: [CommandMenuRecord; 1] = [
 ];
 
 /// One entry of the seg001:0fd8 room-person table (= the chani `RoomPerson`
-/// struct). The DOS layout is 16 bytes; the eight bytes between `handler` and
-/// `person_index` are static-zero padding the port does not store.
+/// struct). The DOS layout is 16 bytes; of the eight bytes between `handler`
+/// and `person_index`, the words at +8/+0xa are the runtime travel timestamps
+/// (stored below), and the rest (+6, +0xc) are static-zero padding the port
+/// does not store.
 ///
 /// GameState owns a 16-entry mutable copy of this table (`room_persons`).
 /// Entries 12..16 have their `(location_and_room, location_appearance)` overwritten
@@ -190,12 +204,23 @@ pub(crate) struct RoomPerson {
     /// built command-menu record. Like CommandMenuRecord.handler, nothing reads
     /// it yet.
     handler: u16,
+    /// = entry word +8 (RoomPerson.time_joined) — game_time when the person
+    /// last joined the player (COME WITH ME, npc_refresh_travel_timestamp with
+    /// bx=0). loc_094f3 seeds for_condit_ds_16 from it while flags bit 0x40 is
+    /// set; that reader is not yet ported.
+    pub(crate) time_joined: u16,
+    /// = entry word +0xa (RoomPerson.time_dismissed) — game_time when the
+    /// person last stopped travelling (STAY HERE / npc_clear_travelling,
+    /// npc_refresh_travel_timestamp with bx=2).
+    pub(crate) time_dismissed: u16,
     /// 0..15, the bit position OR-ed into persons_in_room and the offset of the
     /// "&Person" text (0x78..0x87) the verb-menu record displays.
     pub(crate) person_index: u8,
-    /// Bit 0x40 splits the two scan passes (template loc_030b9 / loc_03120).
-    /// Static-data values are 0x00 / 0x02 / 0x80 — bit 0x40 is never set, so
-    /// the second pass never matches; the port keeps both passes for fidelity.
+    /// Bit 0x40 splits the two scan passes (template loc_030b9 / loc_03120):
+    /// static-data values are 0x00 / 0x02 / 0x80, and bit 0x40 is set at
+    /// runtime while the person travels with Paul (COME WITH ME, seg000:9608;
+    /// cleared by npc_clear_travelling), flipping their dialogue verb to STAY
+    /// HERE and their scan match to the second pass.
     pub(crate) flags: u8,
 }
 
@@ -210,6 +235,8 @@ const fn rp(
         location_and_room,
         location_appearance,
         handler,
+        time_joined: 0,
+        time_dismissed: 0,
         person_index,
         flags,
     }
@@ -271,6 +298,10 @@ pub(crate) enum ScreenElement {
     // CONTINUE) menu_callback_choice_exit_game pushes over the mixer or mirror
     // menu. Its cleanup func is nullsub_00f66 (a no-op).
     ExitGameConfirmation,
+    // = menu_globe_music (seg001:206a, leading priority byte 0xf6) — the CD-order
+    // submenu (STANDARD ORDER / SHUFFLE / Cancel) menu_callback_choice_music_on_
+    // cd_style pushes over the mixer menu. Its cleanup func is fn_0d917_noop.
+    MusicCdOrderMenu,
     // = menu_done (seg001:2012, priority byte 0xf8) — the full-screen PALACE PLAN
     // overlay ui_draw_palace_plan pushes over the room command menu. DOS shares
     // the menu_done header with the unported on-map troop screen; PalacePlan is
@@ -289,8 +320,9 @@ impl ScreenElement {
     // dismiss_stacked_overlays reads to decide what to drain): command_menu_buf
     // (seg001:1f0e) 0xff, menu_NPC_actions (1f7e) 0xfc, menu_mixer_panel (201a)
     // 0xf8, menu_done (2012) 0xf8, menu_exit_game_confirmation (20b6) 0xf6,
-    // menu_palace_mirror_room (20c2) 0xff. A low nibble of 0 or a value of 0xff
-    // marks a base/locked entry that the transient-overlay drain stops at.
+    // menu_globe_music (206a) 0xf6, menu_palace_mirror_room (20c2) 0xff. A low
+    // nibble of 0 or a value of 0xff marks a base/locked entry that the
+    // transient-overlay drain stops at.
     pub(crate) fn priority_byte(self) -> u8 {
         match self {
             ScreenElement::RoomCommandMenu | ScreenElement::LookAwayFromMirror => 0xff,
@@ -298,7 +330,7 @@ impl ScreenElement {
             ScreenElement::MixerPanel | ScreenElement::PalacePlan | ScreenElement::MapScreen => {
                 0xf8
             }
-            ScreenElement::ExitGameConfirmation => 0xf6,
+            ScreenElement::ExitGameConfirmation | ScreenElement::MusicCdOrderMenu => 0xf6,
         }
     }
 }
@@ -358,8 +390,10 @@ impl GameState {
 
         // = seg000:2dfb loc_02dfb — the normal room render path.
         if self.data_04732 & 1 != 0 {
-            // = seg000:2e02 call loc_0488a — draw the extra location overlay SAL.
-            self.draw_location_overlay_sal();
+            // = seg000:2e02 call travel_arrival_landing_sequence — the orni
+            //   arrival plays the approach video / landing animation before
+            //   the room renders.
+            self.travel_arrival_landing_sequence();
         }
         // = seg000:2e05 clear the active speaker and the day/night fade flag.
         self.persons_talking_to = 0;
@@ -507,7 +541,7 @@ impl GameState {
     // The `jmp bx` target: resolve the verb handler offset to its ported routine.
     // A match (not an `if`) because this is the verb-dispatch table; the TODO arm
     // below is where the remaining handlers slot in.
-    fn dispatch_command_handler(&mut self, handler: u16) {
+    pub(crate) fn dispatch_command_handler(&mut self, handler: u16) {
         match handler {
             // = seg000:92f2..9371 the per-character dialogue trampolines, each a
             // `mov al,N; jmp common_code_for_ui_dialogue_related_functions`
@@ -533,7 +567,12 @@ impl GameState {
             // before reaching the shared tail. TODO: port once the troop system
             // lands; fall through to the no-op below for now.
             0x9472 => self.menu_callback_choice_talk_to_me(),
-            // 0x95e2 => self.menu_callback_choice_come_with_me(),
+            0x95e2 => self.menu_callback_choice_come_with_me(),
+            0x9533 => self.menu_callback_choice_stay_here(),
+            // = seg000:95c1 menu_callback_choice_come_with_me_troop — the
+            // troop-leader (person 0x0e) variant with the charisma check; the
+            // troop dialogue entry (trampolines 9373/937e) is unported, so its
+            // verb never appears. TODO: port with the troop system.
             // 0x9ed5 => self.menu_callback_choice_what(),
 
             // = seg000:0ea6 loc_00ea6 — LOOK AT MIRROR (palace bedroom, slot 1 /
@@ -556,11 +595,14 @@ impl GameState {
             // audio mixer / settings overlay (settings_ui.rs).
             0xa3f0 => self.open_mixer_panel(),
             // = the mixer panel's music-menu verbs (MENU_MIXER_PANEL), shown in
-            // the command strip while the mixer is open. Stubbed: the jukebox /
-            // music-playlist feature (music_playlist_flags) is not ported.
+            // the command strip while the mixer is open, and the CD-order
+            // submenu (MENU_GLOBE_MUSIC) the CD-STYLE verb pushes over it.
             0xaeaf => self.menu_callback_choice_music_off(),
             0xac6e => self.menu_callback_choice_music_on_game_relative(),
             0xac7e => self.menu_callback_choice_music_on_cd_style(),
+            0xac97 => self.menu_callback_choice_music_cd_order_standard(),
+            0xac90 => self.menu_callback_choice_music_cd_order_shuffle(),
+            0xd2df => self.menu_callback_choice_music_cd_order_cancel(),
             // = seg000:0e3e menu_callback_choice_exit_game — the EXIT GAME verb
             // (mixer + mirror menus): opens the YES/NO confirmation submenu.
             0x0e3e => self.menu_callback_choice_exit_game(),
@@ -570,6 +612,12 @@ impl GameState {
             // = seg000:42e9 — the TAKE AN ORNITHOPTER room verb (CMD_TAKE_
             // ORNITHOPTER): open the map screen in ornithopter mode.
             0x42e9 => self.menu_callback_choice_map_main_take_an_ornithopter_notransition(),
+            // = the map-mode travel verbs (build_room_command_records'
+            // game_screen_mode_flags & 3 panel).
+            0x4ffb => self.menu_callback_choice_skip_to_destination(),
+            0x497a => self.menu_callback_choice_change_destination(),
+            0x50a5 => self.menu_callback_choice_back_to_starting_point(),
+            0x50c4 => self.menu_callback_choice_towards_nearest_place(),
             // TODO: the other mirror-menu verbs (RESTART 0x0e47, LOAD 0xb29e,
             // SAVE 0xb28c) and the room verbs (SEE DUNE MAP 0x186b, CALL A
             // WORM 0x42d1, ...) are not ported.
@@ -693,13 +741,12 @@ impl GameState {
     // scaled fb1); this cleanup re-renders the room at 1:1 and presents it, so
     // STOP TALKING returns to the un-zoomed room view.
     //
-    // TODO: 097cf also marks the active speaker's room_person (data_047a2->[0fh]:
-    // set 0x20, clear 0x04), clears data_047e1, restores the subtitle backdrop
-    // (subtitle_restore_prior), and rebuilds the room nav panel / NPC portraits
-    // (rebuild_and_draw_room_nav_panel / NPC_09655). Those read the active-speaker
-    // pointer, subtitle, and nav state not modelled yet. The data_00023-gated
-    // transition-reveal variant (loc_09898, a wiped re-render) is not ported; the
-    // port always takes the instant re-render path (loc_09879).
+    // TODO: 097cf also clears data_047e1 and restores the subtitle backdrop
+    // (subtitle_restore_prior) — subtitle state not modelled yet. The
+    // game_screen_mode_flags != 0 branch (97f2, the map/globe nav-panel rebuild)
+    // and the data_00023-gated transition-reveal variant (loc_09898, a wiped
+    // re-render + leave scan that lets an evicted companion speak) are not
+    // ported; the port always takes the instant re-render path (loc_09879).
     fn menu_npc_actions_cleanup(&mut self) {
         // = seg000:97cf call lip_sync_stop — stop the speaker's voice lip-sync
         //   (also patching the TALK TO ME verb template back to its idle text
@@ -709,6 +756,25 @@ impl GameState {
         //   active conversation, so there is nothing to restore.
         if self.current_lip_sync_resource_id == 0xffff {
             return;
+        }
+        // = seg000:97d9 si = [data_047a2] (the speaker's room_persons entry);
+        //   97dd or [si+0fh],20h; 97e1 and [si+0fh],0fbh — mark the speaker
+        //   talked-to (0x20) and drop bit 0x04 on the way out.
+        let speaker = self.current_lip_sync_resource_id as usize;
+        self.room_persons[speaker].flags = (self.room_persons[speaker].flags | 0x20) & !0x04;
+        // = seg000:9849 loc_09849 (the room_render_flags bit-7 dialogue-zoom
+        //   path, the one the port always takes) — retire the head overlay
+        //   element and update the companion HUD slots.
+        self.ui_elements[20].flags = 0;
+        // = seg000:984f test [si+0fh],40h; 9855 call npc_assign_companion_slot
+        //   — a travelling speaker (COME WITH ME set flags 0x40) takes a
+        //   companion HUD slot. Note the asymmetry: only the non-zoom branch
+        //   (loc_0982e, unreached in room dialogues since the first presented
+        //   line sets the zoom flag) removes a non-travelling speaker — after
+        //   STAY HERE the portrait stays until a travel departure detaches it
+        //   (npc_travel_detach_companion) or an eviction displaces it.
+        if self.room_persons[speaker].flags & 0x40 != 0 {
+            self.npc_assign_companion_slot(speaker);
         }
         // = seg000:9868 and room_render_flags,7fh — drop the redraw-for-zoom flag
         //   dialogue_zoom_room set, so the room renders un-zoomed from here on.
@@ -923,7 +989,7 @@ impl GameState {
     // dialogue (loc_0301a) and enqueues its render task; otherwise it builds and
     // draws the verb menu for current_location_ptr. Run via the offscreen helper from
     // draw_room_game_screen.
-    fn ui_draw_room_command_panel(&mut self) {
+    pub(crate) fn ui_draw_room_command_panel(&mut self) {
         // = seg000:2eb2 cmp data_04774,0; jnz -> the dialogue branch.
         if self.is_dialogue_active {
             // = seg000:2eb9 call loc_0301a (render the dialogue panel).
@@ -1055,8 +1121,14 @@ impl GameState {
                 recs.push(CMD_BACK_TO_STARTING_POINT);
                 recs.push(CMD_TOWARDS_NEAREST_PLACE);
             } else {
-                // = seg000:2fda si=21fch; "SKIP TO DESTINATION" default.
-                recs.push(CMD_SKIP_TO_DESTINATION);
+                // = seg000:2fda si=21fch; "SKIP TO DESTINATION" default. The
+                // template copy carries the live flags byte DOS patches in
+                // place (data_021fd, set_skip_to_destination_verb_flags).
+                recs.push(rec(
+                    CMD_SKIP_TO_DESTINATION.text_id
+                        | ((self.cmd_skip_to_destination_flags as u16) << 8),
+                    CMD_SKIP_TO_DESTINATION.handler,
+                ));
             }
             // = seg000:2ff2 si=21f8h; "CHANGE DESTINATION" trailing verb.
             recs.push(CMD_CHANGE_DESTINATION);
@@ -1625,7 +1697,10 @@ impl GameState {
     // `builder` with the entry and its 0..15 index. DOS passes the entry's
     // seg001 pointer in si; the index lets a builder reconstruct that pointer
     // when it stores it elsewhere (e.g. template-a's data_047aa write).
-    fn scan_matching_room_person_entries(&mut self, builder: fn(&mut Self, u8, &RoomPerson)) {
+    pub(crate) fn scan_matching_room_person_entries(
+        &mut self,
+        builder: fn(&mut Self, u8, &RoomPerson),
+    ) {
         // = seg000:36f0..36f6 si = 0fd8h; cx = 0x10; bx = location_appearance;
         //   dx = location_and_room.
         for index in 0..self.room_persons.len() {
@@ -1950,7 +2025,7 @@ impl GameState {
     // talking head and its frame tasks before the room/panel is re-presented.
     // Without this the LOOK AT MIRROR idle animator keeps compositing Paul over
     // the bedroom after the player looks away.
-    fn reset_scene_lip_sync_state(&mut self) {
+    pub(crate) fn reset_scene_lip_sync_state(&mut self) {
         // = seg000:98f5 loc_098f5 — clear the head/portrait/dialogue UI element
         // flags. Element 20 carries the LOOK AT MIRROR game-area hotspot that
         // callback_transition_look_at_mirror armed (flags = 0x80).
@@ -2061,10 +2136,94 @@ impl GameState {
         self.wait_frame_tasks_for_ticks(8);
     }
 
-    // = seg000:488a loc_0488a — draw the extra per-location overlay SAL (opened
-    // via calc_SAL_index entry 6) when data_04732 bit 0 is set.
-    // TODO: port; no-op stub.
-    fn draw_location_overlay_sal(&mut self) {}
+    // = seg000:488a travel_arrival_landing_sequence — the orni-arrival landing
+    // played before the arrival room renders (loc_02dfb gates it on data_04732
+    // bit 0).
+    fn travel_arrival_landing_sequence(&mut self) {
+        // = seg000:488a..4891 ax = 6; si = [current_location_ptr]; call
+        // calc_SAL_index — ax accumulates, so the result is directly the
+        // approach-video id: 6 SIET (sietch), 7 PALACE (Atreides palace),
+        // 8 (village), 9 FORT (Harkonnen fortress), 10 (Harkonnen palace).
+        let appearance = self.locations[self.current_location_index as usize].appearance;
+        let sal_video = 6 + crate::room_scene::calc_sal_index(appearance) as u16;
+        // = seg000:4894/4896 cmp al,8; jnb loc_048e5.
+        if sal_video < 8 {
+            // = seg000:489a call_restore_cursor; 489d travel_minimap_state =
+            // 0x80 — hide the minimap for the rest of the flight.
+            self.call_restore_cursor();
+            self.travel_minimap_state = 0x80u8 as i8;
+            // = seg000:48b4..48bd the handoff frame: the sietch approach cuts
+            // in at frame 0x3c of the sand loop, the palace at 0x16.
+            let handoff: u16 = if sal_video == 6 { 0x3c } else { 0x16 };
+            // = seg000:48a2 loc_048a2 — pump flight frames, forcing sand
+            // terrain so the loop point re-aims at MNT1 (48a6/48a8), until the
+            // playing clip has looped back into MNT1 (48ac) and its per-loop
+            // frame count reaches the handoff frame (48c0). The MNT clips'
+            // bit-4 resource flag presents each frame through
+            // hnm_present_flight_frame (seg000:ccee); the port runs it after
+            // the frame advances, like the travel pump.
+            loop {
+                if self.hnm_do_frame() {
+                    self.hnm_present_flight_frame();
+                }
+                self.travel_select_flight_video(0);
+                if self.hnm_video_id == 2 && self.hnm_counter_2 == handoff {
+                    break;
+                }
+                self.tick_one_frame();
+            }
+            // = seg000:48c6 call hnm_switch_active_video (bx = the approach
+            // video id, ax = the handoff frame) — the next loop-point check
+            // (seg000:cb00) redirects the stream into the approach clip.
+            self.hnm_switch_active_video(sal_video, handoff);
+            // = seg000:48c9 loc_048c9 — play the approach clip to completion
+            // (its resource flag has no loop bit, so the end marker finishes
+            // and closes it).
+            while !self.hnm_is_complete() {
+                if self.hnm_do_frame() {
+                    self.hnm_present_flight_frame();
+                }
+                self.tick_one_frame();
+            }
+            // DOS's streaming reader closes the resource itself as it runs
+            // out of file (seg000:cb58/cb5d); the single-buffer port closes
+            // it here.
+            self.hnm_close();
+            // = seg000:48d1 loc_048d1 — dec data_046e0: knock the saved
+            // sky-fade state out of sync so the room reveal after the approach
+            // runs the fade-in transition instead of a plain blit.
+            self.data_046e0 = self.data_046e0.wrapping_sub(1);
+        } else if sal_video == 9 {
+            // = seg000:48dd/48e0 bp = gfx_copy_whole_framebuf_to_screen; call
+            // loc_0c8fb — play the fortress approach FORT.HNM (ax is still the
+            // SAL video id, 9) to completion in the game area.
+            self.play_hnm_to_completion(9, gfx::gfx_copy_whole_framebuf_to_screen);
+            // = seg000:48e3 jmp loc_048d1 — the fade-in force, as above.
+            self.data_046e0 = self.data_046e0.wrapping_sub(1);
+        } else {
+            // = seg000:48e9..48fa the landing-pad types (village / Harkonnen
+            // palace): re-render the pad scene without the parked orni that is
+            // landing (orni_anim_frame = 0xff) into fb1 and snapshot it to fb2
+            // for the animation frames to restore from.
+            self.orni_anim_frame = 0xff;
+            self.set_fb1_as_active_framebuffer();
+            self.copy_game_area_rect_to_unknown_rect();
+            self.draw_room_scene();
+            self.update_screen_palette();
+            self.copy_active_framebuffer_to_framebuffer_2();
+            // = seg000:48fd..4909 the reverse landing animation: frames 0x1f
+            // down to 0 (cl = -1) over the SN7 engine sound.
+            self.orni_anim_frame = 0x1f;
+            self.audio_start_voc("SN7.VOC");
+            self.orni_anim_loop(-1);
+            // = seg000:490c orni_anim_frame = 0 — the orni is parked again.
+            self.orni_anim_frame = 0;
+        }
+        // = seg000:48d5 loc_048d5 — clear the arrival flags and reopen the
+        // room's SAL resource (jmp open_SAL_resource).
+        self.data_04732 = 0;
+        self.sal_open_resource();
+    }
 
     // = seg000:5ba0 copy_game_area_rect_to_unknown_rect — copy the game-area rect
     // (si=1470h) to the backdrop buffer (di=0d83ch) before drawing the room.
@@ -2078,7 +2237,7 @@ impl GameState {
     //
     // The DOS prologue (loc_098e6, loc_04d00, copy_game_area_rect_to_clip_rect)
     // is not ported yet.
-    fn draw_room_scene(&mut self) {
+    pub(crate) fn draw_room_scene(&mut self) {
         // = seg000:37b2 call reset_scene_lip_sync_state — tear down any active
         // talking head (and its idle/voc frame tasks) before redrawing the room,
         // so the LOOK AT MIRROR head stops compositing once the player looks away.
@@ -2102,6 +2261,31 @@ impl GameState {
             if self.game_screen_mode_flags & 3 == 0 {
                 // = seg000:37e9 falls into loc_037eb.
                 self.draw_desert_view();
+            } else {
+                // = seg000:37f4 loc_037f4 — the travel flight view: the
+                // minimap + trail into the back buffer and the flight HNM's
+                // first frame.
+                // = seg000:37f4 travel_minimap_state = 0.
+                self.travel_minimap_state = 0;
+                // = seg000:37f9 call travel_minimap_setup; 37fc call
+                //   travel_trail_redraw.
+                self.travel_minimap_setup();
+                self.travel_trail_redraw();
+                // = seg000:37ff/3802 ax = travel_vehicle_mode; call
+                //   hnm_load_first_frame — open the flight HNM by the vehicle
+                //   id (2 = MNT1) and decode its first frame at blit offset 0:
+                //   the 320x152 frames span the whole game area (the in-game
+                //   fb row offset is 0, clear_global_y_offset). The MNT clips'
+                //   bit-4 resource flag routes the frame through
+                //   hnm_present_flight_frame (seg000:ccee), which stamps the
+                //   minimap over it.
+                let id = self.travel_vehicle_mode;
+                self.hnm_load_first_frame_by_id(id, 0);
+                self.hnm_present_flight_frame();
+                // = seg000:3805 call [gfx_vtable_vga_save_palette_to_fade_
+                //   target]; 3809 jmp set_sky_palette.
+                gfx::vga_save_palette_to_fade_target(self);
+                self.set_sky_palette();
             }
             return;
         }
@@ -2144,7 +2328,7 @@ impl GameState {
     // = seg000:35ad loc_035ad — post-render room-screen bookkeeping (clears
     // data_0001a/047a7 and consumes data_047a6 when game_screen_mode_flags == 0).
     // TODO: port; no-op stub.
-    fn finish_room_screen_setup(&mut self) {}
+    pub(crate) fn finish_room_screen_setup(&mut self) {}
 
     // = seg000:3723 loc_03723 — handle the pending dialogue / auto-action queued
     // in data_04735.
@@ -2162,7 +2346,7 @@ mod tests {
     use std::sync::mpsc;
 
     use super::ScreenElement;
-    use crate::{Equipment, GameState, dat_file::DatFile};
+    use crate::{Equipment, GameState, dat_file::DatFile, gfx};
 
     // = seg000:7f27/7f2a — the location available-equipment computation: the
     // location's equipment row minus each stationed troop's held equipment, per
@@ -2200,6 +2384,62 @@ mod tests {
         assert_eq!(avail(2), [2, 2, 0, 0, 0, 1, 0]);
         // Loc 55: [2,1,1,1,1,1,0]; one ornithopter remains, the rest clamp at 0.
         assert_eq!(avail(55), [2, 1, 0, 0, 0, 0, 0]);
+    }
+
+    // The orni-arrival landing sequence (travel_arrival_landing_sequence,
+    // seg000:488a), approach-video branch: arriving at a sietch hides the
+    // minimap and keeps pumping the flight on the MNT1 sand loop until the
+    // per-loop frame count (hnm_counter_2) reaches 0x3c; the armed loop point
+    // (hnm_switch_active_video + hnm_counter_4, seg000:cb00) then redirects
+    // the stream into SIET.HNM, which plays to completion. Asset-gated and
+    // real-time paced; run with:
+    //   cargo test -p dune --bin dune -- --ignored travel_arrival_approach
+    #[test]
+    #[ignore = "needs assets/DUNE.DAT"]
+    fn travel_arrival_approach_video() {
+        let dat_path = concat!(env!("CARGO_MANIFEST_DIR"), "/../../assets/DUNE.DAT");
+        let Ok(dat_file) = DatFile::open(dat_path) else {
+            eprintln!("skipping: {dat_path} not found");
+            return;
+        };
+        let (tx, _rx) = mpsc::sync_channel(64);
+        let mut game = GameState::new(dat_file, tx);
+        game.set_headless();
+        game.start(true);
+        game.settings_flags &= !0x1; // no PCM, like the travel_flight test
+
+        // The state an orni arrival at a sietch leaves for the scene reload:
+        // the flight HNM open on the sand loop and the arrival bit armed.
+        let sietch = game
+            .locations
+            .iter()
+            .position(|l| l.appearance < 0x20)
+            .expect("no sietch location");
+        game.current_location_index = sietch as u16;
+        game.travel_vehicle_mode = 2;
+        game.hnm_load_first_frame_by_id(2, 0);
+        // The flight palette the room draw's travel branch establishes
+        // (seg000:3805/3809) — the MNT/SIET clips carry no header palette and
+        // rely on it.
+        gfx::vga_save_palette_to_fade_target(&mut game);
+        game.set_sky_palette();
+        game.data_04732 = 1;
+
+        game.travel_arrival_landing_sequence();
+
+        // The sequence hid the minimap, redirected the stream into the SIET
+        // approach clip and played it out (finished + closed), cleared the
+        // arrival bit and forced the sky-fade mismatch for the room fade-in.
+        assert_eq!(game.travel_minimap_state, 0x80u8 as i8);
+        assert_eq!(game.hnm_video_id, 6, "the stream never redirected to SIET");
+        assert!(game.hnm_is_complete(), "the approach clip did not finish");
+        assert!(!game.hnm_is_open(), "the approach clip was not closed");
+        assert_eq!(game.data_04732, 0);
+        assert_eq!(game.data_046e0, 0u8.wrapping_sub(1));
+
+        game.screen
+            .write_png_scaled(&game.palette, "travel_arrival_approach.png")
+            .expect("write travel_arrival_approach.png");
     }
 
     // The screen-element priority bytes drive dismiss_stacked_overlays: an element is
@@ -2702,6 +2942,314 @@ mod tests {
             head.prev_images.is_empty(),
             "prev_images must be dropped on voc end so the resumed idle redraws cleanly"
         );
+    }
+
+    // The COME WITH ME verb (menu_callback_choice_come_with_me, seg000:95e2)
+    // presents the speaker's topic-5 line and, when no spoken-line event drops
+    // the interrupt gate, marks them travelling: room-person flags bit 0x40
+    // (flipping the dialogue verb to STAY HERE on the next menu build) and
+    // their persons_travelling_with bit. STAY HERE (seg000:9533) presents the
+    // topic-6 line and undoes it (npc_clear_travelling). Asset-gated:
+    //   cargo test -p dune --lib -- --ignored come_with_me
+    #[test]
+    #[ignore = "needs assets/DUNE.DAT"]
+    fn come_with_me_recruits_leto_and_stay_here_dismisses_him() {
+        let dat_path = concat!(env!("CARGO_MANIFEST_DIR"), "/../../assets/DUNE.DAT");
+        let Ok(dat_file) = DatFile::open(dat_path) else {
+            eprintln!("skipping: {dat_path} not found");
+            return;
+        };
+        let (tx, _rx) = mpsc::sync_channel(64);
+        let mut game = GameState::new(dat_file, tx);
+        game.set_headless();
+        game.start(true);
+
+        game.common_dialogue(0x0); // Duke Leto; slot 1 offers COME WITH ME.
+        assert_eq!(game.command_menu_records[1].text_id, 0x91);
+        assert_eq!(game.command_menu_records[1].handler, 0x95e2);
+
+        // Click COME WITH ME. Leto's topic-5 record selects his refusal line:
+        // condition 32 `(byte[1b] == 0) |. (rand_bits & 4)` holds on the first
+        // ask (ds:1b is still 0), and the line carries the stay-here event 2,
+        // which drops the interrupt gate — Leto does not join.
+        game.dispatch_command_handler(0x95e2);
+        let phrase = game.current_subtitle_id;
+        assert!(
+            (0x800..=0xbff).contains(&phrase),
+            "expected a come-with-me phrase id, got {phrase:#x}"
+        );
+        assert_eq!(game.data_0001b, 1, "ds:1b use counter");
+        assert_eq!(game.data_00023, 0, "pending room-action cleared");
+        assert_eq!(
+            game.dialogue_interrupt_gate, 0,
+            "the refusal drops the gate"
+        );
+        assert_eq!(game.persons_travelling_with & 1, 0, "Leto must not join");
+        assert_eq!(game.command_menu_records[1].text_id, 0x91, "verb unchanged");
+
+        // Lady Jessica (person 1) accepts in game phases 6..8 (her topic-5
+        // condition 96, `(game_phase == 0x51) |. (game_phase - 6 < 3)` — the
+        // stage where she accompanies Paul to the Fremen). Enter dialogue with
+        // her and ask.
+        game.common_dialogue(0x1);
+        game.game_phase = 6;
+        game.dispatch_command_handler(0x95e2);
+        assert_eq!(game.dialogue_interrupt_gate, 0xff, "gate must stay armed");
+        assert_ne!(game.room_persons[1].flags & 0x40, 0, "flags bit 0x40");
+        assert_ne!(game.persons_travelling_with & 2, 0, "travelling bit");
+        // time_joined was refreshed: game_time 2 minus the static-zero
+        // time_dismissed passes the 2-tick debounce.
+        assert_eq!(game.room_persons[1].time_joined, game.game_time);
+
+        // Ending the conversation (STOP TALKING pops the menu and runs
+        // menu_npc_actions_cleanup, seg000:97cf) assigns the travelling
+        // speaker to companion HUD slot 1 (npc_assign_companion_slot,
+        // seg000:9855) and arms its 8-blink counter.
+        game.menu_callback_choice_exit_menu();
+        assert_eq!(game.companion_1, 1, "Jessica in companion slot 1");
+        assert_eq!(game.companion_2, -1, "slot 2 stays empty");
+        assert_eq!(game.ui_hud_companion_blink[0], 0x10, "blink armed");
+        assert_eq!(game.ui_elements[21].sprite_id, 0x42, "slot-1 portrait");
+        // The cleanup also marks the speaker talked-to (seg000:97dd).
+        assert_ne!(game.room_persons[1].flags & 0x20, 0, "flags bit 0x20");
+
+        // The game-loop blink task (ui_hud_companion_blink_task, seg000:d7b7)
+        // drains the 0x10 counter over 16 steps, blanking the fresh portrait
+        // on the 8 odd counts. Force each 64-tick step edge by un-latching
+        // instead of waiting ~5 s of real PIT time.
+        let mut blanks = 0;
+        for _ in 0..16 {
+            game.companion_blink_step_latch = ((game.game_ticks() >> 6) as u8).wrapping_add(1);
+            game.ui_hud_companion_blink_task();
+            if game.ui_elements[21].sprite_id == 0x40 {
+                blanks += 1;
+            }
+        }
+        assert_eq!(blanks, 8, "the new portrait blinks 8 times");
+        assert_eq!(game.ui_hud_companion_blink[0], 0, "blink counter drained");
+        assert_eq!(game.companion_1, 1, "the real pair is restored");
+        assert_eq!(
+            game.ui_elements[21].sprite_id, 0x42,
+            "portrait shown at the end"
+        );
+
+        // The next dialogue menu build offers STAY HERE in slot 1
+        // (setup_npc_dialogue_menu, seg000:9108..910e).
+        game.setup_npc_dialogue_menu(1);
+        assert_eq!(game.command_menu_records[1].text_id, 0x92);
+        assert_eq!(game.command_menu_records[1].handler, 0x9533);
+
+        // Click STAY HERE: the travelling state is cleared again.
+        // time_dismissed stays 0: the debounce reads time_joined (= game_time),
+        // and game_time has not advanced 2 ticks since.
+        game.dispatch_command_handler(0x9533);
+        assert_eq!(game.room_persons[1].flags & 0x40, 0, "flag cleared");
+        assert_eq!(
+            game.persons_travelling_with & 2,
+            0,
+            "travelling bit cleared"
+        );
+        assert_eq!(game.room_persons[1].time_dismissed, 0, "debounced");
+
+        // ...and the verb is COME WITH ME once more.
+        game.setup_npc_dialogue_menu(1);
+        assert_eq!(game.command_menu_records[1].text_id, 0x91);
+
+        // Closing the dialogue after STAY HERE does NOT vacate the HUD slot:
+        // the zoom-path cleanup (loc_09849) only assigns; DOS removes the
+        // portrait at travel departure (seg000:40f5) or on eviction.
+        game.menu_callback_choice_exit_menu();
+        assert_eq!(game.companion_1, 1, "dismissed portrait lingers (DOS)");
+
+        // The travel-departure detach (npc_remove_companion_slot, 40f5)
+        // vacates it and clears the blink counter.
+        game.npc_remove_companion_slot(1);
+        assert_eq!(game.companion_1, -1, "slot vacated");
+        assert_eq!(game.ui_hud_companion_blink[0], 0, "blink cleared");
+        assert_eq!(game.ui_elements[21].sprite_id, 0x40, "empty button frame");
+
+        // Eviction (seg000:968c..96a8): with both slots full, a third
+        // companion displaces slot 1 — the evictee's travelling state is
+        // cleared, their person code lands in pending_room_action (0x64 + p),
+        // slot 2 shifts down, and the newcomer takes slot 2.
+        game.companion_1 = 3; // Duncan
+        game.companion_2 = 4; // Gurney
+        game.room_persons[3].flags |= 0x40;
+        game.persons_travelling_with |= 1 << 3;
+        game.npc_assign_companion_slot(1);
+        assert_eq!(game.data_00023, 0x67, "evictee encoded as 0x64 + 3");
+        assert_eq!(game.room_persons[3].flags & 0x40, 0, "evictee detached");
+        assert_eq!(game.persons_travelling_with & (1 << 3), 0);
+        assert_eq!(game.companion_1, 4, "slot 2 shifted down");
+        assert_eq!(game.companion_2, 1, "newcomer in slot 2");
+        assert_eq!(game.ui_hud_companion_blink[1], 0x10, "newcomer blinks");
+        game.data_00023 = 0;
+
+        // TALK TO ME resets the ds:1b counter (seg000:947a).
+        game.menu_callback_choice_talk_to_me();
+        assert_eq!(game.data_0001b, 0, "TALK TO ME clears the use counter");
+    }
+
+    // Dialogue event 0x0b (callback_event_dialogue_line_0b_increase_game_phase_
+    // by_1_and_do_more, seg000:a219): a story line advances the game phase,
+    // zeroes the days-since-phase-change counter, runs the phase-trigger
+    // record (DIALOGUE slot 135), and — at phase 1 — reveals Duncan Idaho
+    // (room_persons[3].location_slot 0xff80 -> 0x0180). Covers the direct
+    // dispatch (0 -> 1, Duncan) and the genuine data path: Leto's rally-
+    // mission line (phrase 0x807) advancing phase 1 -> 2. Asset-gated:
+    //   cargo test -p dune --lib -- --ignored event_0x0b
+    #[test]
+    #[ignore = "needs assets/DUNE.DAT"]
+    fn event_0x0b_advances_game_phase_and_reveals_duncan() {
+        let dat_path = concat!(env!("CARGO_MANIFEST_DIR"), "/../../assets/DUNE.DAT");
+        let Ok(dat_file) = DatFile::open(dat_path) else {
+            eprintln!("skipping: {dat_path} not found");
+            return;
+        };
+        let (tx, _rx) = mpsc::sync_channel(64);
+        let mut game = GameState::new(dat_file, tx);
+        game.set_headless();
+        game.start(true);
+
+        assert_eq!(game.game_phase, 0, "a new game starts in phase 0");
+        assert_eq!(
+            game.room_persons[3].location_appearance, 0xff80,
+            "Duncan starts hidden"
+        );
+
+        // The 0 -> 1 bump is not dialogue-reachable (it comes from the
+        // unported troop-rally path via set_game_phase_and_trigger_callbacks),
+        // so dispatch the event directly: phase 1 reveals Duncan Idaho.
+        game.days_since_last_game_phase_change = 9;
+        game.dispatch_dialogue_line_event(0x0b, 0);
+        assert_eq!(game.game_phase, 1, "event 0x0b advances the phase");
+        assert_eq!(game.days_since_last_game_phase_change, 0, "ds:ff zeroed");
+        // = seg000:100b — Duncan's location_slot high byte flipped to 1: he
+        // now matches palace room 0x2004.
+        assert_eq!(
+            game.room_persons[3].location_appearance, 0x0180,
+            "Duncan Idaho revealed"
+        );
+
+        // An already-spoken line (word0 bit 0x80) is a no-op (seg000:a219).
+        game.dispatch_dialogue_line_event(0x0b, 0x80);
+        assert_eq!(game.game_phase, 1, "spoken bit gates a repeat");
+
+        // The genuine data path: with the rally mission fulfilled (2 rallied
+        // troops — the troop system that bumps the counter is unported),
+        // Leto's topic-1 walk reaches entry 0x012a (phrase 0x807, event 0x0b,
+        // condition 7 `(game_phase - 1 < 2) &. (rallied == 2)`) and advances
+        // phase 1 -> 2. Each conversation presents one line, so re-enter
+        // until it fires.
+        game.number_of_rallied_troops = 2;
+        // Entry 0x0116 (phrase 0x802, word0 bit 6 = repeatable) blocks the
+        // walk while Gurney (bit 0x10) is neither travelling nor present
+        // (condition 2) — take him along, as the rally storyline does.
+        game.persons_travelling_with |= 0x10;
+        for _ in 0..6 {
+            if game.game_phase != 1 {
+                break;
+            }
+            game.common_dialogue(0x0);
+        }
+        assert_eq!(game.game_phase, 2, "Leto's mission line advances the phase");
+        assert_eq!(game.current_subtitle_id, 0x807, "the event-0x0b line spoke");
+    }
+
+    // set_game_phase_and_trigger_callbacks (seg000:121f): raising the phase
+    // runs the phase-trigger record and the per-phase callback
+    // (array_callbacks_for_game_phase_change): palace doors unlock, persons
+    // move between rooms, locations appear on the map, charisma rises, and
+    // COMM sightings / vision messages queue up. Asset-gated:
+    //   cargo test -p dune --lib -- --ignored phase_callbacks
+    #[test]
+    #[ignore = "needs assets/DUNE.DAT"]
+    fn phase_callbacks_fire_on_phase_change() {
+        let dat_path = concat!(env!("CARGO_MANIFEST_DIR"), "/../../assets/DUNE.DAT");
+        let Ok(dat_file) = DatFile::open(dat_path) else {
+            eprintln!("skipping: {dat_path} not found");
+            return;
+        };
+        let (tx, _rx) = mpsc::sync_channel(64);
+        let mut game = GameState::new(dat_file, tx);
+        game.set_headless();
+        game.start(true);
+
+        // Phase 8 (callback_game_phase_change_08) unlocks palace room 2's
+        // scripted west exit: palace_rooms[1].exits[3] 0x8c -> 0x0c.
+        assert_eq!(game.scene_records[1].exits[3], 0x8c, "door starts locked");
+        game.set_game_phase_and_trigger_callbacks(8);
+        assert_eq!(game.game_phase, 8);
+        assert_eq!(game.scene_records[1].exits[3], 0x0c, "door unlocked");
+
+        // = seg000:121f cmp al,[game_phase]; jbe ret — a lower phase is a
+        // no-op: callback 4 (background dec + stillsuit-maker locations) must
+        // not run.
+        game.set_game_phase_and_trigger_callbacks(4);
+        assert_eq!(game.game_phase, 8, "phase never lowers");
+        assert_eq!(game.scene_records[1].background, 0x3a, "callback 4 skipped");
+
+        // Discovering Tuono-Harg (first_name 3 / last_name 6) advances to
+        // phase 0x10 through the dispatcher (seg000:427e): Leto moves to
+        // palace room 5, Jessica to room 9, and the Emperor's whereabouts
+        // (location 1, person 0x0b) reach the COMM room.
+        let th = game
+            .locations
+            .iter()
+            .position(|l| l.first_name == 3 && l.last_name == 6)
+            .expect("Tuono-Harg in locations[]");
+        assert_ne!(game.locations[th].status & 0x80, 0, "starts undiscovered");
+        game.location_mark_discovered(th);
+        assert_eq!(game.game_phase, 0x10);
+        assert_eq!(
+            game.room_persons[0].location_and_room, 0x2005,
+            "Leto in room 5"
+        );
+        assert_eq!(
+            game.room_persons[1].location_and_room, 0x2009,
+            "Jessica in room 9"
+        );
+        assert_eq!(
+            game.comm_sightings,
+            vec![0x10b],
+            "Emperor sighting recorded"
+        );
+
+        // Phase 0x2c (met Stilgar): +0x14 charisma, Thufir restationed in
+        // room 8 (slot 0x180), Paul-event bit 0x10 set, and Stilgar's five
+        // sietches revealed on the map.
+        let charisma_before = game.charisma;
+        game.set_game_phase_and_trigger_callbacks(0x2c);
+        assert_eq!(game.charisma, charisma_before + 0x14);
+        assert_eq!(game.room_persons[2].location_and_room, 0x2008);
+        assert_eq!(game.room_persons[2].location_appearance, 0x180);
+        assert_ne!(game.bitfield_paul_events & 0x10, 0);
+        for i in [45, 44, 46, 48, 49] {
+            assert_eq!(
+                game.locations[i].status & 0x80,
+                0,
+                "locations[{i}] revealed"
+            );
+        }
+
+        // Phase 0x30 queues vision message 4 — but only once Paul has had his
+        // first vision (bitfield_Paul_events bit 0, seg000:29f0); without it
+        // the message is dropped. The Baron's sighting is recorded either way.
+        game.set_game_phase_and_trigger_callbacks(0x30);
+        assert!(game.vision_messages.is_empty(), "vision gated on bit 0");
+        assert_eq!(game.comm_sightings, vec![0x10b, 0x1409]);
+
+        // Phase 0x4c (Leto killed) with the vision bit set: message 0x105
+        // queues and Jessica moves to room 2.
+        game.bitfield_paul_events |= 1;
+        game.set_game_phase_and_trigger_callbacks(0x4c);
+        assert_eq!(game.vision_messages, vec![(0x105, 0)]);
+        assert_eq!(game.room_persons[1].location_and_room, 0x2002);
+
+        // Phase 0x38 was skipped over, so its callback (hide Leto,
+        // location_slot high byte -> 0xff) never ran — DOS behaves the same:
+        // only the final phase's callback fires.
+        assert_eq!(game.room_persons[0].location_appearance, 0x180);
     }
 
     // The TALK TO ME verb text tracks the voice (mark_talk_to_me_verb_talking /

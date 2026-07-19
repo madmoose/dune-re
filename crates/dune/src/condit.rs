@@ -13,13 +13,16 @@ fn condit_var_name(addr: u16) -> Option<(&'static str, bool)> {
         0x0e => ("persons_met", true),
         0x10 => ("persons_travelling_with", true),
         0x12 => ("persons_in_room", true),
+        0x1b => ("stay_here_come_with_me_count", false),
         // 0x23 => ("data_00023", false),
         0x25 => ("number_of_sietches_visited", false),
         0x26 => ("entering_new_sietch", false),
         0x28 => ("number_of_rallied_troops", false),
+        0x29 => ("charisma", false),
         0x2a => ("game_phase", false),
         0x2b => ("night_attack_stage", false),
         0xf4 => ("desert_walk_counter", false),
+        0xff => ("days_since_phase_change", false),
         // 0xfc => ("data_000fc", true),
         _ => return None,
     })
@@ -35,6 +38,9 @@ impl GameState {
             0x0c => self.pending_destination_room,
             // = seg001:000d previous_room.
             0x0d => self.previous_room,
+            // = seg001:001b related_to_stay_here_come_with_me_ds_1b — the
+            // COME WITH ME / STAY HERE use counter (cleared by TALK TO ME).
+            0x1b => self.data_0001b,
             // = seg001:0023 data_00023 — the room-leave / dialogue-scan state;
             // condition 0x1c tests it == 1.
             0x23 => self.data_00023,
@@ -43,16 +49,20 @@ impl GameState {
             // maintains.
             0x25 => self.number_of_sietches_visited,
             0x26 => self.entering_new_sietch,
-            // = seg001:0028 number_of_rallied_troops — the troop-rally system
-            // is not ported; 0 in a new game. TODO: a real field when it lands
-            // (conditions 4/5/7 gate early-game Leto lines on it).
-            0x28 => 0,
+            // = seg001:0028 number_of_rallied_troops — conditions 4/5/7 gate
+            // early-game Leto lines on it. The troop-rally system that bumps
+            // it is not yet ported.
+            0x28 => self.number_of_rallied_troops,
+            // = seg001:0029 charisma.
+            0x29 => self.charisma,
             // = seg001:002a game_phase.
             0x2a => self.game_phase,
             // = seg001:002b night_attack_stage.
             0x2b => self.night_attack_stage,
             // = seg001:00f4 desert_walk_counter.
             0xf4 => self.desert_walk_counter,
+            // = seg001:00ff number_of_days_since_last_game_phase_change_ds_ff.
+            0xff => self.days_since_last_game_phase_change,
             // = seg001:00fc data_000fc.
             0xfc => self.data_000fc,
             _ => return None,
@@ -79,11 +89,9 @@ impl GameState {
         } else {
             self.condit_ds_byte(addr).map(u16::from)
         };
-        value.unwrap_or_else(|| {
-            let width = if word { "word" } else { "byte" };
-            eprintln!("CONDIT: read of unmodelled {width} ds:[{addr:#04x}]");
-            0
-        })
+        // Unmodelled addresses read as 0. Debug print when hunting gaps:
+        // eprintln!("CONDIT: read of unmodelled ds:[{addr:#04x}] (word: {word})");
+        value.unwrap_or(0)
     }
 
     // = seg000:a30b read_condit_operand.
@@ -162,12 +170,12 @@ impl GameState {
     /// prior always-first-entry dialogue stub.
     pub(crate) fn condition_holds(&self, index: u16) -> bool {
         let holds = self.evaluate_condition(index) != 0;
-        println!(
-            "CONDITION {:3} {}: {}",
-            index,
-            if holds { "HOLDS" } else { "FAILS" },
-            self.format_condition(index)
-        );
+        // println!(
+        //     "CONDITION {:3} {}: {}",
+        //     index,
+        //     if holds { "HOLDS" } else { "FAILS" },
+        //     self.format_condition(index)
+        // );
         holds
     }
 

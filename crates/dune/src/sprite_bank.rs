@@ -432,6 +432,7 @@ impl GameState {
             FbId::Screen => &mut self.screen,
             FbId::Fb1 => &mut self.framebuffer,
             FbId::Saved => &mut self.framebuffer_saved,
+            FbId::Back => &mut self.framebuffer_back,
         };
         let _ = draw_sprite_from_sheet(sheet, sprite_id, x, physical_y, fb);
     }

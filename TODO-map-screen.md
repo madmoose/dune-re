@@ -1,31 +1,42 @@
 # Map screen — remaining work
 
-Status as of 2026-07-15. The TAKE AN ORNITHOPTER verb (seg000:42e9) is ported
+Status as of 2026-07-17. The TAKE AN ORNITHOPTER verb (seg000:42e9) is ported
 and wired end-to-end in `crates/dune/src/map_screen.rs`: the screen opens with
 the ORNYPAN cockpit, the windowed one-cell-per-pixel map (curved globe edges),
 the alternate nav panel, the Cancel menu, and the "select destination"
-narration clip; Cancel restores the room. Verify with
-`cargo test -p dune --bin dune -- --ignored ornithopter`
-(writes `crates/dune/ornithopter_map.png`).
+narration clip; Cancel restores the room; hovering resolves markers/compass
+rays into the label strip, and clicking a destination narrates it, plays the
+ornithopter takeoff, closes back to the room and flies there: the travel pump
+drives the MNT flight HNM with the minimap + trail in the top-right, lands
+at the destination and plays the arrival approach video / orni landing.
+Verify with
+`cargo test -p dune --bin dune -- --ignored ornithopter` (writes
+`crates/dune/ornithopter_map.png`),
+`cargo test -p dune --bin dune -- --ignored map_hover`,
+`cargo test -p dune --bin dune -- --ignored map_scrolling` and
+`cargo test -p dune --bin dune -- --ignored travel_flight` (writes
+`crates/dune/travel_flight.png` + `travel_arrival.png`).
 
 Everything below is stubbed (each stub carries its `= seg000:xxxx` link) or
 not yet started.
 
 ## Map screen content
 
-- [ ] **Location markers** — `loc_05dce` builds the visible-location list into
-  `data_0a5c0` (entries `[location_ptr, cell, ...]`, 6 bytes each) using the
-  visibility/position helpers `location_062c9` / `loc_062d6`, and draws the
-  ICONES markers + name labels over the map window, clipped to
-  `data_046e3_rect` (`loc_05b93` — the port passes `map_view_rect` as an
-  explicit clip instead). `map_screen_cleanup` clears the list head. Also
-  needed by SEE DUNE MAP.
-- [ ] **Marker blink frame task** — `map_arm_location_marker_task`
-  (seg000:445d, currently a no-op stub) resolves the location at the current
-  map position, computes the marker rect (`data_04749`) from ICONES
-  sub-resource 0x4c, and (re-)adds `frame_task_callback_044ab` at interval
-  0x12c. Needs a new `TaskId` variant; `map_screen_cleanup` must then remove
-  it (seg000:4429).
+- [x] **Location markers** — DONE 2026-07-16:
+  `map_build_and_draw_location_markers` (seg000:5dce) rebuilds
+  `visible_location_markers` (= `data_0a5c0`) and draws the tiered ICONES
+  markers (`calc_location_marker_sprite`, base 0x3a, +5 distant-sietch variant
+  past `location_visibility_distance`) through the projection chain
+  `location_visible_on_map` (62c9) → `map_position_to_screen_if_visible`
+  (62d6) → `map_position_to_screen` (b647, using
+  `Tablat::lng_units_per_cell` = the seg001:4880 table). The globe-mode
+  rotated-offset precompute (`loc_0633b`) is still TODO with the full globe.
+  Hover NAME labels belong to the mouse-handler item below.
+- [x] **Player marker blink task** — DONE 2026-07-16:
+  `map_arm_player_marker_task` (seg000:445d) + `tick_map_player_marker`
+  (seg000:44ab, `TaskId::MapPlayerMarker`, interval 0x12c): the "you are
+  here" ICONES sprite 0x4c blinks over the player's projected position,
+  restoring from fb1 on even phases; `map_screen_cleanup` removes it.
 - [x] **"SELECT DESTINATION ON MAP" caption** — DONE 2026-07-15: the
   typewriter (`map_caption_frame_task`, seg000:46b5 — one glyph per firing,
   spaces free, high-bit terminator) is ported as `tick_map_caption` +
@@ -35,49 +46,200 @@ not yet started.
   (`restore_mouse_if_rect_intersects` on the `data_014a4` strip /
   `draw_mouse_cursor_if_needed`) once the live cursor can sit over the
   caption.
-- [ ] **Tablat cell caching** — `map_copy_window_row` (seg000:b7d2) caches each
-  row's longitude cell in the tablat entry's +6 scratch word; the marker
-  positioning reads it back. Not modelled in `Tablat` yet (the port recomputes
-  instead) — decide when porting the markers.
+- [x] **Tablat cell caching** — RESOLVED 2026-07-16, no port needed:
+  `map_copy_window_row` (seg000:b7e3) is the only writer and
+  `map_screen_to_position` (seg000:b62c, only caller `arm_pending_travel`
+  seg000:4950) is the only reader of the +6 scratch word — the port already
+  recomputes the identical truncating `len * lng >> 16` cell at the read
+  site, and the value can never go stale because every longitude change
+  (scroll/recentre/open) redraws before any click can read it. The globe
+  path reuses +4..+7 as a different quantity entirely (the band's 32-bit
+  fixed-point rotated offset, `Tablat::rotated_offset` — written by
+  vga_globe_init, read at seg000:b627/bb27/bd9c), so there is no shared
+  cache to model. Both `.chani` comments (b7d2/b5f9) now document the
+  writer/reader pair.
 
 ## Interaction
 
-- [ ] **Live mouse handlers** (`mouse_handlers_01ac8`, stubs in
-  `MAP_MOUSE_HANDLERS`):
-  - idle/drag hover tracker `loc_04586` — location-marker hover and the
-    edge-scroll travel-arrow direction cache in `data_046fc`, plus the cursor
-    shape switch (the 4 travel arrows, seg001:2650/2694/260c/26d8).
-  - LMB destination click `loc_0450e` — select the clicked location/cell as
-    the travel destination (arms `data_04728`).
-- [ ] **Map scrolling** — the alternate nav panel buttons (NAV_PANEL_ALT
-  func_ptrs seg000:5b05 / 8829 / 8824 / 882e / 881f) move
-  `zoomed_globe_longitude/latitude` and re-run the view redraw. Requires the
-  ui_element click dispatch to reach them.
-- [ ] **`current_main_view_drawing_function` hookup** (`_word_23B9D`) — the
-  game loop calls the installed redraw (seg000:4346 installs `map_view_redraw`
-  = seg000:4377); the port has no function-pointer main-view redraw yet.
-  `map_view_redraw`'s screen push is also simplified: it presents the whole
-  game area instead of `update_screen_at_sprite_rect_updating_head`
-  (seg000:4399).
-- [ ] **`set_some_mouse_rect`** (seg000:4331) — the map-window mouse hotspot
-  installed on open; skipped until the hotspot machinery is ported.
+- [x] **Live mouse handlers** — DONE 2026-07-16 (`mouse_handlers_01ac8`,
+  wired in `MAP_MOUSE_HANDLERS`; verify with
+  `cargo test -p dune --bin dune -- --ignored map_hover`):
+  - idle/drag hover tracker `map_mouse_hover_tracker` (seg000:4586, was
+    loc_04586) — the hover state in `data_046fc` (location ptr / desert
+    compass ray 0xfff0+n / 0xffff in-window / 0 outside) via
+    `find_nearest_location_marker` (5e6d) + `compass_angle_from_delta`
+    (514e), and the hover label strip `map_draw_hover_label` (45de) with
+    `draw_string_location_type`/`draw_location_name` (629d/62a6).
+  - LMB destination click `map_mouse_lmb_select_destination` (seg000:450e,
+    was loc_0450e) — narrates the destination
+    (`map_hover_narration_clip` 456c, `duck_music_and_start_narration_
+    voice_clip` ab45, `wait_for_narration_voice_clip` aba9), blinks the
+    label 9 times, sets `data_04732 = 0x80` and enters the travel-confirm
+    chain (`map_confirm_travel_and_close`, DONE — see Travel below).
+  - the cursor shape switch (hand + the 4 travel arrows,
+    seg001:260c/2650/2694/26d8) — `get_mouse_cursor_image` now ports the
+    full seg000:dc6a hot-zone chain off `mouse_nav_rect`.
+- [x] **Map scrolling** — DONE 2026-07-16: the alternate nav panel buttons
+  (NAV_PANEL_ALT, now wired with handlers: `ui_click_map_center` seg000:5b05,
+  `ui_click_map_up/right/down/left` 8829/8824/882e/881f) add the
+  `map_scroll_delta_*` pairs (seg001:145e — ±12 latitude rows, ±0x1002
+  longitude units; LMB-gated by `test al,1`) to
+  `zoomed_globe_longitude/latitude` and redraw through
+  `map_refresh_main_view` (seg000:8850, was loc_08850). The arrow-cursor
+  pseudo-element dispatch (`set_di_to_ui_elements_ptr_based_on_cursor_image`,
+  seg000:d694 — an arrow cursor unconditionally hits live records 13..17) is
+  ported inside `hit_test_ui_elements`, and the arrows' 0x4000 flag rides the
+  already-ported held auto-repeat (seg000:d8da). Verify with
+  `cargo test -p dune --bin dune -- --ignored map_scrolling`. Remaining stubs:
+  `map_dismiss_troop_popups` (seg000:7b36 — the data_046f8/046fa
+  troop-contact gates are unmodelled, SEE DUNE MAP territory), the
+  full-globe scroll branches (seg000:8858 / loc_05beb) and the centre
+  button's globe-0x40 paths (loc_082a0 ZF → loc_0541f, the loc_05575 nav
+  rect).
+- [x] **`current_main_view_drawing_function` hookup** (`_word_23B9D`) — DONE
+  2026-07-16: `GameState::current_main_view_drawing_function`
+  (`Option<fn(&mut GameState)>`, None = the initial 0 word; DOS never clears
+  it). `map_screen_open` installs `map_view_redraw` (seg000:4346) and
+  `map_refresh_main_view` dispatches through it (seg000:8853). The other two
+  installers and three dispatch sites belong to unported flows and land with
+  them: the travel departure installs `loc_049a0` (seg000:499a) and
+  dispatches at seg000:49e6; SEE DUNE MAP installs
+  `ui_main_view_map_interface` (seg000:5a8f); the
+  run_events_for_current_time_period tail dispatches via `loc_05d6d`
+  (seg000:5d7e, the `data_046ec` gate) and CONTACT FREMEN TROOPS at
+  seg000:86c6. `map_view_redraw`'s screen push also matches DOS now: it
+  presents only the map window rect (`update_screen_at_sprite_rect_updating_
+  head`, seg000:c4ed = `present_screen_rect` on the `loc_05b93` sprite clip
+  rect), keeping the screen-only caption/hover strip intact across scrolls.
+- [x] **`set_mouse_nav_rect`** (seg000:4331) — DONE 2026-07-16 with the
+  mouse handlers: `mouse_nav_rect` (= `mouse_nav_rect_ptr`, seg001:dc58), installed on map open,
+  cleared by `map_screen_cleanup`, consumed by `get_mouse_cursor_image`.
 
 ## Travel
 
-- [ ] **Travel departure** — `map_screen_cleanup` enters `loc_049d4` (chain
-  seg000:4988 → 49e3 → 4a5a) when `data_04728 > 0` (currently a println stub):
-  the HNM flight sequence, selected by `travel_vehicle_mode` refined through
-  `loc_04ec6` into `hnm_active_video_id` (day/night variants 2..5), the travel
-  pump `loc_04f0c` (`data_04727`), and arrival (seg000:4fcb).
-- [ ] **`cmd_arg_list` waypoints** — the cs-resident travel waypoint array
-  (seg000:e40c, `[CmdArg; 23]`, words reset to 0x800 by `loc_049ea`); the
-  port's `map_reset_travel_state` only models the `data_04728 = 0` half.
-- [ ] **`data_011c5`** — pending-travel flag read by `map_screen_cleanup`
-  (seg000:443b) to keep `game_screen_mode_flags` across the departure; the
-  port resets unconditionally until travel exists.
-- [ ] **Map-mode verbs** — SKIP TO DESTINATION (0x4ffb), CHANGE DESTINATION
-  (0x497a), BACK TO STARTING POINT (0x50a5), TOWARDS NEAREST PLACE (0x50c4)
-  in `dispatch_command_handler`.
+- [x] **Travel confirm** (`map_confirm_travel_and_close`, seg000:4703, was
+  loc_04703) — DONE 2026-07-16 (covered by the `map_hover` test's click):
+  `arm_pending_travel` (4944: `travel_destination_ptr`/`travel_heading`/
+  `travel_heading_mode`, the desert-ray click through
+  `map_screen_to_position` (b5f9) → `compass_angle_to_map_position` (5133),
+  `adjust_travel_heading` (5119)), the mode-flag fold (`flags |= flags >>
+  2`), the map-screen pop (the cleanup's seg000:443b gate now keeps the
+  flags while `travel_destination_ptr` is armed), `ungrey_skip_to_
+  destination_verb` (41c5, via the new `cmd_skip_to_destination_flags`
+  template byte), the fb2 room snapshot (`copy_game_rect_fb1_to_fb2`,
+  c474 — renamed, it copies fb1 INTO fb2), `run_travel_departure_npc_scans`
+  (40d5), the ornithopter takeoff animation (`play_travel_departure_
+  transition` 4795 → `orni_anim_loop` 47fb → `orni_anim_draw_frame` 4821,
+  ORNYTK.HSQ + SN6.VOC), the first `travel_advance_step` (4b3b), the scene
+  reload (loc_02dbf) and the pump arm (`data_04727 = 0xff`, now named
+  `travel_active`). Remaining stubs inside it, each with its seg link:
+  - `run_events_for_n_time_periods` (seg000:0fd9) on every 16th step;
+  - the phase-0x50 branch of `play_travel_departure_transition`
+    (seg000:47a0..47ca, the worm/globe flows);
+  - the companion detach callees (`NPC_09556`/`NPC_09655`) in
+    `npc_travel_detach_companion` (40e6);
+  - the night-attack teardown (`loc_00b21`).
+- [x] **Travel departure** — DONE 2026-07-16 (verify with
+  `cargo test -p dune --bin dune -- --ignored travel_flight`, writes
+  `crates/dune/travel_flight.png` + `travel_arrival.png`): the room draw's
+  travel branch (loc_037f4) builds the flight view — the minimap + trail in
+  the NEW back framebuffer (`FbId::Back` = `_word_2D0E2_framebuffer_back`)
+  via `travel_minimap_setup`/`travel_minimap_redraw` (seg000:4988/49a0, which
+  install themselves as the main-view drawing function) and opens the flight
+  HNM by the vehicle id (`hnm_load_first_frame_by_id`, MNT1 = 2). The travel
+  pump (`travel_pump`, seg000:4f0c, was game_loop_sub_04f0c) drives one HNM
+  frame per game-loop pass — presented through `hnm_present_flight_frame`
+  (seg000:4afd: minimap restore rect from the back buffer over fb1, then the
+  game-area push; the decoder now writes index-0 pixels for the bit-0x30
+  full-screen-copy clips) — and a `travel_advance_step` every 0x300 ticks
+  with the REAL movement math (`travel_step_position` seg000:5206 +
+  `travel_update_heading` 51cb + `travel_heading_deltas` 5198: homing/fixed
+  headings, the 0x100-per-row step accumulator, the polar flip), the trail
+  stamp/append (`travel_trail_stamp_last`/`travel_trail_append`, 4a1a/4a00),
+  the auto-recenter (`travel_minimap_state` 1 when the marker leaves the
+  inset, consumed via `travel_refresh_view` 49d9), the live marker (ICONES
+  0x30), the terrain probe → flight-clip select (`travel_probe_terrain_
+  ahead`/`travel_select_flight_video`, 4e8e/4ec6; the HNM loop point now
+  switches clips when `hnm_active_video_id` differs, seg000:cb7c), and the
+  arrival (seg000:4fb0: pad landing, disarm, `desert_check_arrival` =
+  loc_04002 → `arrive_at_location` → scene reload). `map_screen_cleanup`'s
+  `travel_minimap_state > 0` gate re-enters the flight view
+  (`travel_enter_minimap_view`, 49d4). Remaining stub:
+  `travel_flyover_detect` (seg000:41e1, the cockpit fly-over silhouette
+  latch data_01968/196a/196c — its overlay consumer is unported).
+- [x] **Arrival landing / approach video** — DONE 2026-07-17
+  (`travel_arrival_landing_sequence`, seg000:488a, gated on `data_04732`
+  bit 0 at the scene reload's loc_02dfb; verify with
+  `cargo test -p dune --bin dune -- --ignored travel_arrival_approach`,
+  writes `crates/dune/travel_arrival_approach.png`, plus the end-to-end
+  `travel_flight`): branches on `6 + calc_SAL_index(current_location)`
+  (the seeded ax makes the SAL result directly the approach video id) —
+  the sietch/palace types (< 8) hide the minimap (`travel_minimap_state =
+  0x80`), pump flight frames forcing sand terrain until the clip loops
+  back to MNT1 and its per-loop frame count `hnm_counter_2` reaches
+  0x3c (SIET) / 0x16, then arm `hnm_switch_active_video` (seg000:ce4b:
+  active id = the approach clip, `hnm_counter_4` = the handoff frame) so
+  the loop point (seg000:cb00 — now modelled in `hnm_step_frame`:
+  reaching `hnm_counter_4` frames counts as the loop point) redirects
+  into SIET/PALACE.HNM mid-loop and plays it out; SAL 9 plays FORT.HNM
+  in the game area (loc_0c8fb = `play_hnm_to_completion`, bp =
+  gfx_copy_whole_framebuf_to_screen); the landing-pad types (8/10)
+  re-render the pad scene and run the reverse orni landing (frames
+  0x1f→0, SN7.VOC, `orni_anim_loop(-1)`). The `hnm_counter_2/4` pair is
+  modelled in hnm/mod.rs (counted per decoded frame — the same stream
+  position DOS's prefetcher counts ahead; reset at every loop rewind,
+  seg000:cb70/ce07). The approach clips carry empty header palettes, so
+  the port's redirect-by-reopen stays palette-identical to DOS's
+  jump-into-cached-body.
+- [x] **Flight-video loop-seam frame skip** — DONE 2026-07-17: the flag
+  bit-2 companion resources (video_id + 0x61, resources 0x63..0x68) are the
+  `.LOP` files (MNT1.LOP..PALACE.LOP): four size-prefixed full-frame video
+  chunks after a small header, which DOS splices into the stream as four
+  records at EVERY flight-clip loop point (seg000:cbb8..cc04, consumed by
+  the 'mm' handler at loc_0cd37) — the bridge frames played across the
+  loop seam before the (possibly redirected-to) body resumes. The port
+  queues them at the loop point (`hnm_lop_queue_bridge`) and
+  `hnm_step_frame` decodes one per pass through the shared
+  `hnm_decode_record`; they count in `hnm_frame_counter`/`hnm_counter_2`
+  like stream records (loc_0cc0c/loc_0cc4e), so the arrival handoff
+  arithmetic matches DOS exactly. Remaining jitter suspect (minor): the
+  PIT pacing carry across the rewind, which the port's
+  `hnm_last_frame_tick` tick pacing does not reproduce.
+- [x] **`cmd_arg_list` waypoints** — DONE 2026-07-16: it is the travel-trail
+  ring, now named `travel_trail_ring` (seg000:e40c, 276 (longitude, latitude)
+  pairs to loc_0e85c, empty sentinel 0x800, cursor seg001:149a
+  `travel_trail_cursor`), reset by `travel_reset_trail` (seg000:49ea, was
+  loc_049ea) and drawn as the minimap trail dots (ICONES 0x2f).
+- [x] **Map-mode verbs** — DONE 2026-07-17, wired in
+  `dispatch_command_handler` (verify with
+  `cargo test -p dune --bin dune -- --ignored map_mode_verbs`):
+  - SKIP TO DESTINATION (`menu_callback_choice_skip_to_destination`,
+    seg000:4ffb) — fast-forwards up to 0xc8 `travel_advance_step`s, checking
+    arrival (map offset == the destination's `map_offset`) and running the
+    per-step `travel_route_hostile_zone_check` (seg000:4182, was loc_04182 —
+    the Atreides-destination / terrain-0x30 gates, the `data_04726`
+    accumulator, the verb greying and `pending_room_action` 4); both the
+    arrival and step-exhaustion exits land through
+    `travel_finish_at_destination` (seg000:4fc3, was loc_04fc3 — now split
+    out of `travel_arrive` and shared with the pump's arrival).
+  - CHANGE DESTINATION (`menu_callback_choice_change_destination`,
+    seg000:497a) — reopens `map_screen_open` with the Cancel menu,
+    `travel_minimap_state` 1 so the cleanup re-enters the flight view.
+  - BACK TO STARTING POINT (`menu_callback_choice_back_to_starting_point`,
+    seg000:50a5) — restarts the flight clip and aims home at
+    `last_location_ptr` via `travel_aim_at_location` (seg000:4965, was
+    loc_04965) / `travel_commit_destination` (seg000:496a, was loc_0496a —
+    both split out of `arm_pending_travel`).
+  - TOWARDS NEAREST PLACE (`menu_callback_choice_towards_nearest_place`,
+    seg000:50c4) — `iterate_over_locations_and_coordinates` (seg000:5344,
+    the max(|Δlng|>>8, |Δlat|) byte-compare metric) into
+    `arm_pending_travel`.
+  Remaining stub inside the chain: the hostile-zone warning itself fires
+  from `finish_room_screen_setup` (seg000:35ad, the loc_02e52 settle), which
+  is still a no-op port stub. (The seg000:5116 tail into
+  `map_confirm_travel_and_close` belongs to the map-main-menu
+  `move_to_location` orni/worm verbs, seg000:50db/50ea — sibling entry
+  points, not these.)
 
 ## Sibling entry points sharing this code
 

@@ -13,6 +13,7 @@ mod fixed_point;
 mod font;
 mod frame_slot;
 mod framebuffer;
+mod game_phase;
 mod game_state;
 mod game_ui;
 mod gfx;

@@ -19,12 +19,14 @@
 //! (`pcm_player::balance_to_gains`). The button grid selects the voice-subtitle
 //! mode + language. The
 //! "test voice" button (loc_0a553) plays a sample line with the music ducked.
-//! Still deferred: the music-playlist (jukebox) controls (loc_0ac3a).
+//! The command strip carries the music-playlist (jukebox) verbs: MUSIC OFF /
+//! MUSIC ON in its two modes (game-relative and the CD-order submenu; the
+//! playlist machinery lives in `music.rs`).
 
 use crate::{
     GameState, Rect,
     rect::rect,
-    room_game_screen::{CMD_HIGHLIGHT, MENU_MIXER_PANEL, ScreenElement, grey_if},
+    room_game_screen::{CMD_HIGHLIGHT, MENU_GLOBE_MUSIC, MENU_MIXER_PANEL, ScreenElement, grey_if},
     sprite_bank,
 };
 
@@ -583,8 +585,8 @@ impl GameState {
     pub(crate) fn settings_ui_cleanup(&mut self) {
         // = a541 voice_subtitle_mode_default = voice_subtitle_mode.
         self.voice_subtitle_mode_default = self.voice_subtitle_mode;
-        // = a547 call clear_some_mouse_rect.
-        self.clear_some_mouse_rect();
+        // = a547 call clear_mouse_nav_rect.
+        self.clear_mouse_nav_rect();
         // = a54a call select_room_ui_table — restore the room handlers.
         self.select_room_ui_table();
         // = a54d si=2886; jmp present_screen_rect.
@@ -604,7 +606,7 @@ impl GameState {
 
     // = seg000:ae2f check_pcm_enabled — digital sound (PCM) present. Stubbed to
     // its steady state via settings_flags bit 0x1.
-    fn check_pcm_enabled(&self) -> bool {
+    pub(crate) fn check_pcm_enabled(&self) -> bool {
         self.settings_flags & 0x1 != 0
     }
 
@@ -701,8 +703,9 @@ impl GameState {
         // = a567 is_voc_pcm_playing=1; a56c si=3811h; a56f [pcm_vtable_start_playback]
         self.pcm_player.stop();
         self.pcm_player.start_playback(&data, 0);
-        // = a573 jmp loc_0aba9 — DOS blocks, pumping frame_task_callback_0ab92
-        // until the clip drains and it restores the music. The port's mixer
+        // = a573 jmp wait_for_narration_voice_clip (seg000:aba9) — DOS blocks,
+        // pumping frame_task_callback_0ab92 until the clip drains and it
+        // restores the music. The port's mixer
         // panel is event-driven, so install that monitor as a frame task
         // (interval 1) instead: it ramps the ducked music back up once the clip
         // ends, keeping the panel responsive meanwhile. Keep it a singleton so
@@ -727,9 +730,6 @@ impl GameState {
     // highlight (highlight_hovered_text_action_item reads slot_text_id, preserving
     // it). cl is 0xff (no highlight) when music is disabled.
     //
-    // The MUSIC OFF/ON click handlers (which would flip cmd_args bit 0x10 /
-    // music_playlist_flags and so move this highlight) and the jukebox playback are
-    // still stubbed, so the highlight reflects the default state (game-relative).
     pub(crate) fn settings_ui_update_music_playlist_flags(&mut self) {
         // = ac4b call loc_0ae28 — grey all three MUSIC entries (ac3d..ac45 set
         //   the 0x40 bit) unless music is enabled, in which case ac50..ac58 clear
@@ -763,32 +763,250 @@ impl GameState {
         }
     }
 
-    // ---- Music-menu verb handlers (stubs) ---------------------------------
+    // ---- Music-menu verb handlers -----------------------------------------
     //
-    // These are the MENU_MIXER_PANEL command-strip verbs. The whole background-
-    // music playlist / jukebox feature (music_playlist_flags, the CD-vs-game-
-    // relative song selection, and the CD-order sub-menu it opens) is not ported,
-    // so each handler is a logging stub for now. EXIT GAME / " Done" are routed to
-    // their real handlers (menu_callback_choice_exit_game stub / menu_callback_
-    // choice_exit_menu).
+    // These are the MENU_MIXER_PANEL command-strip verbs and the CD-order
+    // submenu (MENU_GLOBE_MUSIC) the CD-STYLE verb pushes over them. EXIT GAME
+    // / " Done" are routed to their own handlers (menu_callback_choice_exit_
+    // game / menu_callback_choice_exit_menu).
 
-    // = seg000:aeaf menu_callback_choice_music_off — MUSIC OFF: disable the background-music playlist.
-    // TODO: port the jukebox off path (music_playlist_flags / midi_reset).
+    // = seg000:aeaf menu_callback_choice_music_off — MUSIC OFF: set the
+    // music-off toggle, close the mixer panel, and silence the current song.
     pub(crate) fn menu_callback_choice_music_off(&mut self) {
-        println!("menu_callback_choice_music_off (seg000:aeaf): TODO — music playlist off");
+        // = seg000:aeaf or [cmd_args_memory],10h — check_music_enabled now
+        //   gates every music path.
+        self.cmd_args_memory |= 0x10;
+        // = seg000:aeb4 call menu_callback_choice_exit_menu — pop the mixer
+        //   panel (its settings_ui_cleanup runs) and fold the menu beneath in.
+        self.menu_callback_choice_exit_menu();
+        // = seg000:aeb7 falls into midi_reset — stop the playing song.
+        self.midi.midi_reset();
     }
 
-    // = seg000:ac6e menu_callback_choice_music_on_game_relative — MUSIC ON (GAME RELATIVE): play the song tied to
-    // the current game state. TODO: port the game-relative playlist mode.
+    // = seg000:ac6e menu_callback_choice_music_on_game_relative — MUSIC ON
+    // (GAME RELATIVE): re-enable music in the situation-driven jukebox mode.
     pub(crate) fn menu_callback_choice_music_on_game_relative(&mut self) {
-        println!(
-            "menu_callback_choice_music_on_game_relative (seg000:ac6e): TODO — game-relative music"
-        );
+        // = seg000:ac6e and [cmd_args_memory],0efh — clear the music-off toggle.
+        self.cmd_args_memory &= !0x10;
+        // = seg000:ac73 music_playlist_flags = 0 — game-relative mode.
+        self.music_playlist_flags = 0;
+        // = seg000:ac78 call menu_callback_choice_exit_menu — close the mixer.
+        self.menu_callback_choice_exit_menu();
+        // = seg000:ac7b jmp update_room_music (loc_0ad5e) — pick the song for
+        //   the current situation; service_midi_music starts it.
+        self.update_room_music();
     }
 
-    // = seg000:ac7e menu_callback_choice_music_on_cd_style — MUSIC ON (CD-STYLE): play the CD-jukebox order
-    // (opens the standard/shuffle/cancel sub-menu). TODO: port the CD-order menu.
+    // = seg000:ac7e menu_callback_choice_music_on_cd_style — MUSIC ON
+    // (CD-STYLE): push the CD-order submenu (STANDARD ORDER / SHUFFLE /
+    // Cancel) over the mixer menu, pre-highlighting the active order.
     pub(crate) fn menu_callback_choice_music_on_cd_style(&mut self) {
-        println!("menu_callback_choice_music_on_cd_style (seg000:ac7e): TODO — CD-style music");
+        // = seg000:ac7e bp = menu_globe_music; ac81 bx = fn_0d917_noop (the
+        //   no-op cleanup, modelled by the MusicCdOrderMenu identity);
+        //   ac84..ac8b cl = (music_playlist_flags & 2) >> 1 — the slot to
+        //   pre-highlight: 0 STANDARD ORDER, 1 SHUFFLE.
+        let mut records = MENU_GLOBE_MUSIC.to_vec();
+        let cl = ((self.music_playlist_flags & 2) >> 1) as usize;
+        // = loc_0d393 or [bx+si+3],80h — the pre-highlight bit on the record.
+        records[cl].text_id |= CMD_HIGHLIGHT;
+        // = seg000:ac8d jmp loc_0d32f — request the panel transition, insert
+        //   the submenu element, and fold it onto the screen.
+        self.screen_overlay_request_transition();
+        self.screen_element_stack_push(ScreenElement::MusicCdOrderMenu, records);
+        self.play_pending_panel_fold();
+    }
+
+    // = seg000:ac97 menu_callback_choice_music_cd_order_standard — the
+    // submenu's STANDARD ORDER choice: CD mode without shuffle, with the
+    // pristine order recopied over the working playlist.
+    pub(crate) fn menu_callback_choice_music_cd_order_standard(&mut self) {
+        // = seg000:ac97 or [music_playlist_flags],1; ac9c and 0fdh.
+        self.music_playlist_flags = (self.music_playlist_flags | 1) & !2;
+        // = seg000:aca1..acac rep movsb — music_cd_standard_order (9 bytes)
+        //   over music_cd_playlist (the port copies the terminator too; DOS's
+        //   9-byte copy leaves the working copy's own 0xff in place).
+        self.music_cd_playlist = crate::music::MUSIC_CD_STANDARD_ORDER;
+        // = seg000:acae falls into music_cd_start_selected_order.
+        self.music_cd_start_selected_order();
+    }
+
+    // = seg000:ac90 menu_callback_choice_music_cd_order_shuffle — the submenu's
+    // SHUFFLE choice: CD mode with the playlist reshuffled on every restart.
+    pub(crate) fn menu_callback_choice_music_cd_order_shuffle(&mut self) {
+        // = seg000:ac90 or [music_playlist_flags],3.
+        self.music_playlist_flags |= 3;
+        // = seg000:ac95 jmp music_cd_start_selected_order.
+        self.music_cd_start_selected_order();
+    }
+
+    // = seg000:acae music_cd_start_selected_order — the shared tail of the two
+    // order choices: stop the current song, close both the submenu and the
+    // mixer panel, clear the music-off toggle, and start the playlist.
+    fn music_cd_start_selected_order(&mut self) {
+        // = seg000:acae call midi_reset.
+        self.midi.midi_reset();
+        // = seg000:acb1 call screen_element_stack_pop_and_redraw — pop the
+        //   CD-order submenu and redraw the mixer menu beneath (the port's
+        //   pop_and_cleanup: MusicCdOrderMenu's cleanup is a no-op, matching
+        //   the DOS fn_0d917_noop it was inserted with).
+        self.screen_element_stack_pop_and_cleanup();
+        // = seg000:acb4 call menu_callback_choice_exit_menu — close the mixer
+        //   panel itself.
+        self.menu_callback_choice_exit_menu();
+        // = seg000:acb7 and [cmd_args_memory],0efh — music is on again.
+        self.cmd_args_memory &= !0x10;
+        // = seg000:acbc jmp music_cd_playlist_restart (loc_0ad21).
+        self.music_cd_playlist_restart();
+    }
+
+    // = seg000:d2df menu_callback_choice_music_cd_order_cancel — the submenu's
+    // Cancel: pop the submenu, then close the mixer panel (the fall-through
+    // into menu_callback_choice_exit_menu).
+    pub(crate) fn menu_callback_choice_music_cd_order_cancel(&mut self) {
+        // = seg000:d2df call screen_element_stack_pop_and_redraw.
+        self.screen_element_stack_pop_and_cleanup();
+        // = seg000:d2e2 falls into menu_callback_choice_exit_menu.
+        self.menu_callback_choice_exit_menu();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::mpsc;
+
+    use crate::{
+        GameState,
+        dat_file::DatFile,
+        music::MUSIC_CD_STANDARD_ORDER,
+        room_game_screen::{CMD_HIGHLIGHT, ScreenElement},
+    };
+
+    // The mixer panel's music verbs (MENU_MIXER_PANEL / MENU_GLOBE_MUSIC):
+    // MUSIC OFF (seg000:aeaf) sets cmd_args_memory bit 4, closes the mixer and
+    // silences the song; MUSIC ON GAME RELATIVE (seg000:ac6e) clears the bit
+    // and re-picks the situation song; MUSIC ON CD-STYLE (seg000:ac7e) opens
+    // the CD-order submenu whose STANDARD ORDER / SHUFFLE choices (seg000:
+    // ac97/ac90) arm the playlist and start it, and whose service
+    // (music_cd_playlist_service, seg000:ace6) advances it 0xc8 ticks after a
+    // song ends. Headless mode defaults to music off (the same bit).
+    // Asset-gated; run with:
+    //   cargo test -p dune --bin dune -- --ignored music_menu
+    #[test]
+    #[ignore = "needs assets/DUNE.DAT"]
+    fn music_menu_verbs_and_headless_default() {
+        let dat_path = concat!(env!("CARGO_MANIFEST_DIR"), "/../../assets/DUNE.DAT");
+        let Ok(dat_file) = DatFile::open(dat_path) else {
+            eprintln!("skipping: {dat_path} not found");
+            return;
+        };
+        let (tx, _rx) = mpsc::sync_channel(64);
+        let mut game = GameState::new(dat_file, tx);
+        game.set_headless();
+        // Headless defaults to music off: the same cmd_args_memory bit MUSIC
+        // OFF sets, so check_music_enabled gates every music path.
+        assert_eq!(game.cmd_args_memory & 0x10, 0x10, "headless music not off");
+        game.start(true);
+        assert_eq!(game.midi.current_song(), None, "a song started while off");
+        assert_eq!(game.music_desired_song, 0, "a song was picked while off");
+
+        // MUSIC ON (GAME RELATIVE): clears the off bit, closes the mixer, and
+        // re-picks the situation song, which the service then starts.
+        game.open_mixer_panel();
+        assert_eq!(game.get_active_screen_element(), ScreenElement::MixerPanel);
+        game.menu_callback_choice_music_on_game_relative();
+        assert_eq!(game.cmd_args_memory & 0x10, 0);
+        assert_eq!(game.music_playlist_flags, 0);
+        assert_eq!(
+            game.get_active_screen_element(),
+            ScreenElement::RoomCommandMenu
+        );
+        assert_ne!(game.music_desired_song, 0, "no situation song picked");
+        game.service_midi_music();
+        assert_eq!(game.midi.current_song(), Some(game.music_desired_song));
+
+        // MUSIC OFF: sets the bit, closes the mixer and silences the song.
+        game.open_mixer_panel();
+        game.menu_callback_choice_music_off();
+        assert_eq!(game.cmd_args_memory & 0x10, 0x10);
+        assert_eq!(
+            game.get_active_screen_element(),
+            ScreenElement::RoomCommandMenu
+        );
+        assert_eq!(game.midi.current_song(), None);
+        assert!(!game.midi.is_playing(), "the song was not silenced");
+
+        // MUSIC ON (CD-STYLE) opens the order submenu; with the shuffle bit
+        // clear the STANDARD ORDER slot is pre-highlighted (cl = 0).
+        game.open_mixer_panel();
+        game.menu_callback_choice_music_on_cd_style();
+        assert_eq!(
+            game.get_active_screen_element(),
+            ScreenElement::MusicCdOrderMenu
+        );
+        assert_eq!(game.command_menu_records.len(), 3);
+        assert_ne!(game.command_menu_records[0].text_id & CMD_HIGHLIGHT, 0);
+
+        // STANDARD ORDER: CD mode, the pristine order, both menus closed, the
+        // off bit cleared, and the first song (9) playing with the cursor past it.
+        game.menu_callback_choice_music_cd_order_standard();
+        assert_eq!(game.music_playlist_flags, 1);
+        assert_eq!(game.cmd_args_memory & 0x10, 0);
+        assert_eq!(
+            game.get_active_screen_element(),
+            ScreenElement::RoomCommandMenu
+        );
+        assert_eq!(game.music_cd_playlist, MUSIC_CD_STANDARD_ORDER);
+        assert_eq!(game.music_cd_playlist_cursor, 1);
+        assert_eq!(game.midi.current_song(), Some(9));
+
+        // The CD service (music_cd_playlist_service) advances the playlist
+        // only 0xc8 ticks after it first sees the driver idle.
+        game.midi.midi_reset(); // the song "ends": status idle, no current song
+        game.music_cd_playlist_service(); // stamps the first idle sighting
+        assert_eq!(
+            game.midi.current_song(),
+            None,
+            "advanced before the 0xc8-tick debounce"
+        );
+        game.music_song_end_tick_stamp = (game.game_ticks() as u16).wrapping_sub(0xc8);
+        game.music_cd_playlist_service();
+        assert_eq!(
+            game.midi.current_song(),
+            Some(6),
+            "did not advance to song 6"
+        );
+        assert_eq!(game.music_cd_playlist_cursor, 2);
+
+        // SHUFFLE: flags 3, the playlist a permutation of the nine songs with
+        // the terminator intact, playing the (new) head of the list.
+        game.open_mixer_panel();
+        game.menu_callback_choice_music_on_cd_style();
+        game.menu_callback_choice_music_cd_order_shuffle();
+        assert_eq!(game.music_playlist_flags, 3);
+        let mut sorted = game.music_cd_playlist[..9].to_vec();
+        sorted.sort();
+        assert_eq!(sorted, vec![1, 2, 3, 4, 5, 6, 7, 8, 9]);
+        assert_eq!(game.music_cd_playlist[9], 0xff);
+        assert_eq!(game.music_cd_playlist_cursor, 1);
+        assert_eq!(game.midi.current_song(), Some(game.music_cd_playlist[0]));
+        assert_eq!(
+            game.get_active_screen_element(),
+            ScreenElement::RoomCommandMenu
+        );
+
+        // Re-opening the submenu now pre-highlights SHUFFLE (cl = 1); Cancel
+        // closes both menus and changes nothing.
+        game.open_mixer_panel();
+        game.menu_callback_choice_music_on_cd_style();
+        assert_ne!(game.command_menu_records[1].text_id & CMD_HIGHLIGHT, 0);
+        let flags = game.music_playlist_flags;
+        let song = game.midi.current_song();
+        game.menu_callback_choice_music_cd_order_cancel();
+        assert_eq!(game.music_playlist_flags, flags);
+        assert_eq!(game.midi.current_song(), song);
+        assert_eq!(
+            game.get_active_screen_element(),
+            ScreenElement::RoomCommandMenu
+        );
     }
 }

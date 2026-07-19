@@ -217,19 +217,25 @@ impl GameState {
     }
 
     // = seg000:ce01 hnm_reset_frame_counter (falls through into ce07
-    // hnm_reset_counters). Zeroes the frame counter; the secondary timing
-    // counters (counter_2/3/4) belong to the prefetch/PIT machinery the
-    // single-buffer port does not model.
+    // hnm_reset_counters). Zeroes the frame counters and disarms the loop-point
+    // frame count; hnm_counter_3 (the saved loop length, seg000:cb76) has no
+    // ported reader.
     fn hnm_reset_frame_counters(&mut self) {
         self.hnm_frame_counter = 0;
+        // = ce07 hnm_counter_2 = 0; ce13 hnm_counter_4 = -1.
+        self.hnm_counter_2 = 0;
+        self.hnm_counter_4 = 0xffff;
     }
 
     // = seg000:ce1a hnm_reset_buffers. DOS repoints its scratch read/decode
     // buffers and clears the cursors; the port only needs the read cursor reset
-    // and the decode target reset to the saved framebuffer.
+    // and the decode target reset to the saved framebuffer. Any spliced .LOP
+    // bridge records live in the DOS stream scratch this repoints, so pending
+    // bridge chunks are dropped with it.
     fn hnm_reset_buffers(&mut self) {
         self.hnm_read_offset = 0;
         self.hnm_framebuffer = crate::FbId::Saved;
+        self.hnm_lop_remaining = 0;
     }
 
     // = seg000:ca1b hnm_load_first_frame — open the resource, seek to the first
@@ -274,15 +280,89 @@ impl GameState {
         // it on a looping clip (resource flag bit 0) rewinds to the body start;
         // a non-looping clip that somehow steps onto it is finished. Normal play
         // sets hnm_finished after the last real frame below, so this is a guard.
-        if self.hnm_next_record_is_loop_marker() {
+        // = seg000:cb00 reaching hnm_counter_4 frames since the last loop point
+        // counts as the loop point too — hnm_switch_active_video arms it so the
+        // orni arrival redirects into the approach clip at an exact mid-loop
+        // frame (travel_arrival_landing_sequence, seg000:488a).
+        if self.hnm_next_record_is_loop_marker() || self.hnm_counter_2 == self.hnm_counter_4 {
             if self.hnm_resource_data & 1 != 0 {
-                self.hnm_read_offset = self.hnm_body_offset;
+                // = seg000:cb70..cb76 counter_3 = counter_2, then
+                // hnm_reset_counters — restart the per-loop record count and
+                // disarm the loop-point frame count. counter_3 (the latched
+                // pass length) drives the display-side advance at
+                // seg000:cc6e..cc84, which wraps hnm_frame_counter back to 1
+                // once it exceeds counter_3 — so the frame counter counts
+                // 1..N within each loop pass. The single-buffer port reads at
+                // display time, making the wrap point the loop point itself:
+                // reset the frame counter here (the bridge/body decodes below
+                // re-count from 1).
+                self.hnm_frame_counter = 0;
+                self.hnm_counter_2 = 0;
+                self.hnm_counter_4 = 0xffff;
+                // = seg000:cb7c..cb9f at the loop point a differing
+                // hnm_active_video_id (travel_select_flight_video re-picks it
+                // per terrain) redirects the stream to that clip when its
+                // resource carries flag bit 3 and a cached body offset. DOS
+                // jumps straight into the cached body (the cache pass at
+                // seg000:ce9f computes it with the same header-slot logic);
+                // the single-buffer port re-opens the resource, re-applying
+                // its header palette — the flight clips carry empty header
+                // palettes, so the switch stays seamless.
+                if self.hnm_active_video_id != self.hnm_video_id
+                    && HNM_RESOURCES[self.hnm_active_video_id as usize].data & 8 != 0
+                {
+                    println!(
+                        "hnm_step_frame: switching from video id {} to video id {}",
+                        self.hnm_video_id, self.hnm_active_video_id
+                    );
+                    let id = self.hnm_active_video_id;
+                    self.hnm_open(id);
+                    self.hnm_open_at_body_start();
+                } else {
+                    self.hnm_read_offset = self.hnm_body_offset;
+                }
+                // = seg000:cbb8..cc04 the companion splice: when the (possibly
+                // just redirected-to) clip carries resource flag bit 2, DOS
+                // builds four stream records pointing into its companion
+                // resource (video_id + 0x61 = MNT1.LOP .. PALACE.LOP) — the
+                // bridge frames played across the loop seam before the body
+                // resumes. The port queues them; the decode below plays one
+                // per step.
+                //
+                // TODO: the remaining loop-point jitter suspect is the PIT
+                // pacing carry across the rewind, which the port's
+                // hnm_last_frame_tick tick pacing does not reproduce.
+                if self.hnm_resource_data & 4 != 0 {
+                    self.hnm_lop_queue_bridge();
+                }
             } else {
                 // = loc_0cb4c: mark finished and release the resource.
                 self.hnm_finished = true;
                 self.hnm_close();
                 return false;
             }
+        }
+
+        // = seg000:cd37..cd4b the spliced records are consumed before the body
+        // resumes: each makes the decoder follow the record's far pointer into
+        // the resident .LOP chunk and fall into the video-chunk decode
+        // (loc_0cd4e), counted like a stream frame (loc_0cc0c/loc_0cc4e). The
+        // port decodes one queued bridge chunk per step.
+        if self.hnm_lop_remaining > 0 {
+            let bytes = self
+                .hnm_lop_bytes
+                .take()
+                .expect("bridge chunks queued without a .LOP resource");
+            let size = read_le_u16(&bytes, self.hnm_lop_cursor) as usize;
+            let _ = self.hnm_decode_record(&bytes, self.hnm_lop_cursor);
+            self.hnm_lop_bytes = Some(bytes);
+            // = seg000:cbfa add bp, ax — the chunks lie head-to-tail, each
+            // starting with its self-inclusive size word.
+            self.hnm_lop_cursor += size;
+            self.hnm_lop_remaining -= 1;
+            self.hnm_frame_counter = self.hnm_frame_counter.wrapping_add(1);
+            self.hnm_counter_2 = self.hnm_counter_2.wrapping_add(1);
+            return true;
         }
 
         // = ca80..ca89: apply any pending palette chunk and blit the frame (both
@@ -302,14 +382,58 @@ impl GameState {
         true
     }
 
+    // = seg000:ce4b hnm_switch_active_video — set hnm_active_video_id (DOS bx;
+    // the loop point then redirects into that clip, seg000:cb7c) and arm
+    // hnm_counter_4 (DOS ax) so the loop point fires at exactly that frame
+    // count (seg000:cb00).
+    pub(crate) fn hnm_switch_active_video(&mut self, video_id: u16, at_frame: u16) {
+        self.hnm_active_video_id = video_id;
+        self.hnm_counter_4 = at_frame;
+    }
+
+    // = seg000:cbb8..cc04 — queue the four companion bridge chunks for the
+    // current clip. The .LOP resource is a small header (a self-inclusive size
+    // word + an empty palette block) followed by four size-prefixed video
+    // chunks laid head-to-tail; DOS seats the resource pointer past the header
+    // (open_resource_by_index reads the first word as the data offset,
+    // seg000:c18a) and builds one stream record per chunk (cx = 4, cbcc).
+    fn hnm_lop_queue_bridge(&mut self) {
+        // = seg000:cbbf..cbc5 companion resource id = video_id + 0x61 — the
+        // resource list covers only the flight ids 2..7 (0x63..0x68,
+        // MNT1.LOP..PALACE.LOP); no other bit-2 clip reaches a loop point.
+        if !(2..=7).contains(&self.hnm_video_id) {
+            return;
+        }
+        // The resident cache: reload only when the clip changed (DOS keeps all
+        // six companion resources open across the flight).
+        if self.hnm_lop_video_id != self.hnm_video_id || self.hnm_lop_bytes.is_none() {
+            let name = HNM_RESOURCES[self.hnm_video_id as usize]
+                .name
+                .replace(".HNM", ".LOP");
+            let bytes = self
+                .dat_file
+                .read_raw(&name)
+                .unwrap_or_else(|e| panic!("Failed to open LOP resource {name}: {e}"));
+            self.hnm_lop_bytes = Some(bytes);
+            self.hnm_lop_video_id = self.hnm_video_id;
+        }
+        // The first chunk sits right past the header (its size word).
+        self.hnm_lop_cursor = read_le_u16(self.hnm_lop_bytes.as_deref().unwrap(), 0) as usize;
+        // = seg000:cbcc mov cx, 4.
+        self.hnm_lop_remaining = 4;
+    }
+
     // = seg000:loc_0cc4e — step past the current frame. DOS advances its consume
     // cursor by the frame's size word and decrements the buffered-byte count; the
     // single-buffer port only advances the body cursor and bumps the frame
-    // counter (the counter_3 loop point is part of the streaming machinery).
+    // counters.
     fn hnm_advance_to_next_frame(&mut self) {
         let frame_size = read_le_u16(self.hnm_bytes.as_deref().unwrap(), self.hnm_read_offset);
         self.hnm_read_offset += frame_size as usize;
         self.hnm_frame_counter = self.hnm_frame_counter.wrapping_add(1);
+        // = seg000:cc26 (and ca44 for frame 0) — one more frame record
+        // consumed since the last loop point.
+        self.hnm_counter_2 = self.hnm_counter_2.wrapping_add(1);
     }
 
     // True when the record at the read cursor is the 'mm' end-of-stream marker:
@@ -342,6 +466,20 @@ impl GameState {
     // spreads it. The full-screen-copy resource modes (flag bits 0x10/0x20,
     // seg000:ccae) are not modelled yet.
     fn hnm_decode_frame(&mut self) -> std::io::Result<(u16, u16)> {
+        let bytes = self
+            .hnm_bytes
+            .take()
+            .expect("hnm_decode_frame without an open resource");
+        let result = self.hnm_decode_record(&bytes, self.hnm_read_offset);
+        self.hnm_bytes = Some(bytes);
+        result
+    }
+
+    // The body of hnm_decode_frame, parameterised over the source buffer so the
+    // spliced .LOP bridge chunks (hnm_step_frame's loop point) decode through
+    // the same path: a record is a size word followed by sd/pl/video blocks,
+    // and a .LOP chunk is exactly a size word followed by one video block.
+    fn hnm_decode_record(&mut self, bytes: &[u8], frame_pos: usize) -> std::io::Result<(u16, u16)> {
         // Tags are stored as the ASCII byte pairs 's''d' / 'p''l'; DOS reads them
         // with a little-endian lodsw (0x6473 / 0x6c70), which is the same bytes
         // read big-endian here.
@@ -349,10 +487,6 @@ impl GameState {
         const BLOCK_TYPE_PL: u16 = 0x706c;
         const BLOCK_TYPE_MM: u16 = 0x6d6d;
 
-        let bytes = self
-            .hnm_bytes
-            .take()
-            .expect("hnm_decode_frame without an open resource");
         let target = self.active_fb;
         // The per-clip blit offset (hnm_load_first_frame's `y_offset`), mirroring
         // how DOS shifts the HNM blit destination by fb_base_ofs: full-screen
@@ -360,8 +494,7 @@ impl GameState {
         let y_offset = self.hnm_y_offset;
 
         // = ca2e es:lodsw — the frame opens with its total size word.
-        let frame_pos = self.hnm_read_offset;
-        let frame_size = read_le_u16(&bytes, frame_pos) as usize;
+        let frame_size = read_le_u16(bytes, frame_pos) as usize;
         let frame_end = frame_pos + frame_size;
         let mut r = Cursor::new(&bytes[frame_pos + 2..frame_end]);
 
@@ -486,12 +619,19 @@ impl GameState {
                             }
                         }
                     } else {
+                        // = seg000:ccae the full-screen-copy clips (resource
+                        // flag bits 0x30: the MNT* flights and VER) skip the
+                        // chunk blit and raw-copy the whole decoded frame
+                        // (loc_04afd/loc_04aeb), so their index-0 pixels land
+                        // in the buffer instead of reading as transparent.
+                        let opaque = self.hnm_resource_data & 0x30 != 0;
                         let fb = self.fb_mut(target);
                         blit::Blitter::new(data, fb)
                             .at(x, y + y_offset)
                             .size(w, h)
                             .rle(frame_header.is_rle())
                             .pal_offset(frame_header.mode())
+                            .opaque(opaque)
                             .draw()?;
                     }
                     break;
@@ -499,7 +639,6 @@ impl GameState {
             }
         }
 
-        self.hnm_bytes = Some(bytes);
         Ok((w, h))
     }
 
@@ -527,4 +666,57 @@ fn read_le_u16(bytes: &[u8], pos: usize) -> u16 {
 
 fn read_le_u32(bytes: &[u8], pos: usize) -> u32 {
     u32::from_le_bytes(bytes[pos..pos + 4].try_into().unwrap())
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::mpsc;
+
+    use crate::{GameState, dat_file::DatFile};
+
+    // The flight-clip loop seam: at the 'mm' loop point the four companion
+    // .LOP bridge chunks (seg000:cbb8..cc04) play before the body resumes,
+    // counted like stream records (loc_0cc0c/loc_0cc4e). Asset-gated; run
+    // with: cargo test -p dune --bin dune -- --ignored hnm_loop_bridge
+    #[test]
+    #[ignore = "needs assets/DUNE.DAT"]
+    fn hnm_loop_bridge_frames_play_at_the_loop_point() {
+        let dat_path = concat!(env!("CARGO_MANIFEST_DIR"), "/../../assets/DUNE.DAT");
+        let Ok(dat_file) = DatFile::open(dat_path) else {
+            eprintln!("skipping: {dat_path} not found");
+            return;
+        };
+        let (tx, _rx) = mpsc::sync_channel(64);
+        let mut game = GameState::new(dat_file, tx);
+        game.set_headless();
+        game.start(true);
+        game.hnm_load_first_frame_by_id(2, 0);
+
+        // Step to the loop point (MNT1's body is ~180 frames).
+        let mut steps = 1;
+        while !game.hnm_next_record_is_loop_marker() && steps < 1000 {
+            game.hnm_step_frame();
+            steps += 1;
+        }
+        assert!(steps < 1000, "no loop point found");
+
+        // The loop-point step rewinds, queues the .LOP bridge and decodes its
+        // first chunk; three more bridge chunks follow before the body.
+        game.hnm_step_frame();
+        assert_eq!(
+            game.hnm_lop_remaining, 3,
+            "bridge not queued at the loop point"
+        );
+        assert_eq!(game.hnm_counter_2, 1);
+        for expected in [2, 1, 0] {
+            game.hnm_step_frame();
+            assert_eq!(game.hnm_lop_remaining, expected);
+        }
+        assert_eq!(
+            game.hnm_counter_2, 4,
+            "bridge frames not counted as stream records"
+        );
+        // The body cursor sits untouched at its start for the next step.
+        assert_eq!(game.hnm_read_offset, game.hnm_body_offset);
+    }
 }

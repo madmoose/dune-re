@@ -14,6 +14,10 @@
 //! already-ported [`crate::GameState::setup_talking_head`]), records the speaker
 //! and installs the dialogue verb panel (setup_npc_dialogue_menu, loc_090bd),
 //! then presents the first line (menu_callback_choice_talk_to_me, seg000:9472).
+//! The COME WITH ME / STAY HERE verb pair (seg000:95e2 / 9533) presents the
+//! speaker's topic-5/6 line and toggles their travelling state
+//! (persons_travelling_with, room-person flags bit 0x40, the travel
+//! timestamps) unless the line's spoken event drops the interrupt gate.
 //! Both the talk verb and the room-leave auto-dialogue scan share the DOS
 //! present routine present_first_matching_dialogue_line (seg000:9f9e): the
 //! entry walk + per-entry condition, the talking-head setup, the spoken-line
@@ -219,7 +223,7 @@ impl GameState {
     // (_word_20920_game_area_rect = (0,0,320,152)) from fb2 to fb1 via
     // copy_rect_fb2_to_fb1 (seg000:c446). The port's vga_copy_rect takes absolute
     // framebuffer coordinates, so apply the fb_base_ofs (y_offset) here.
-    fn copy_game_area_fb2_to_fb1(&mut self) {
+    pub(crate) fn copy_game_area_fb2_to_fb1(&mut self) {
         let yoff = self.y_offset as i16;
         let rect = Rect {
             x0: 0,
@@ -270,8 +274,9 @@ impl GameState {
     // = seg000:d280 play_pending_panel_fold — when a verb-panel transition is pending (screen_overlay_request_transition
     // armed in_transition to a small positive), reveal the fb1-staged panel with
     // the 17-frame accordion fold (panel_anim) and clear the flag. The dialogue
-    // paths jmp here (talk_to_me 94da, come_with_me/stay_here 9652). in_transition
-    // < 0 (0x80, a full-screen transition already underway) or 0 takes no action.
+    // paths jmp here (talk_to_me 94da, the come-with-me troop tail 9652).
+    // in_transition < 0 (0x80, a full-screen transition already underway) or 0
+    // takes no action.
     //
     // Each fold frame is paced to 6 PIT ticks, and lip_sync_frame_task runs during
     // that wait so the speaker's mouth keeps moving through the reveal.
@@ -386,7 +391,10 @@ impl GameState {
     pub(crate) fn menu_callback_choice_talk_to_me(&mut self) {
         // = seg000:9472 call loc_09f40.
         self.prepare_dialogue_presentation();
-        // = seg000:9475 data_0226d = 0x0a and 947a data_0001b = 0 — not modelled.
+        // = seg000:9475 data_0226d = 0x0a — not modelled.
+        // = seg000:947a data_0001b = 0 — reset the COME WITH ME / STAY HERE
+        //   use counter (related_to_stay_here_come_with_me_ds_1b).
+        self.data_0001b = 0;
         // = seg000:947f cmp dialogue_text_continuation_ptr,0; jnz loc_094dd — a
         //   pending multi-part subtitle continuation is re-presented (loc_088d2,
         //   current_subtitle_id += 0x1000) and its events re-fired instead of
@@ -464,6 +472,269 @@ impl GameState {
             // = seg000:94d8 jmp loc_09492 — the record-table lookup.
             ofs = container::entry_offset(&self.dialogue, ofs);
         }
+    }
+
+    // = seg000:9533 menu_callback_choice_stay_here — the STAY HERE dialogue verb
+    // (offered in place of COME WITH ME once the NPC travels with Paul): present
+    // the speaker's topic-6 (stay-here) line, then — unless a spoken-line event
+    // dropped the interrupt gate — clear their travelling state.
+    pub(crate) fn menu_callback_choice_stay_here(&mut self) {
+        // = seg000:9533 call arm_dialogue_interrupt_gate — gate = 0xff.
+        self.dialogue_interrupt_gate = 0xff;
+        // = seg000:9536 ax = 6; call get_dialogue_topic_record.
+        let ofs = self.get_dialogue_topic_record(6);
+        // = seg000:953c call present_dialogue_line_with_auto_mask. An empty
+        //   topic slot (0xffff) would send DOS walking from a garbage offset;
+        //   travelling NPCs always carry a topic-6 record, so guard instead.
+        if ofs != 0xffff {
+            self.present_dialogue_line_with_auto_mask(ofs as usize);
+        }
+        // = seg000:953f inc byte [data_0001b] — the COME WITH ME / STAY HERE
+        //   use counter (related_to_stay_here_come_with_me_ds_1b).
+        self.data_0001b = self.data_0001b.wrapping_add(1);
+        // = seg000:9543 call test_dialogue_interrupt_gate; jnz ret — a spoken-
+        //   line event changed the gate: leave the travelling state alone.
+        if self.dialogue_interrupt_gate != 0xff {
+            return;
+        }
+        // = seg000:9548 si = [data_047a2] — the active speaker's room_persons
+        //   entry (set_dialogue_speaker points it at index person_index).
+        let speaker = self.current_lip_sync_resource_id as usize;
+        // = seg000:954c call NPC_is_Chani_during_game_phase_5d_find_ill_troops_
+        //   at_her_location; 9551 Chani_troop_illness_cure_progress += 0x10 —
+        //   the game-phase-0x5d Chani illness-cure special. TODO: port with the
+        //   troop system.
+        // = seg000:9556 falls through into npc_clear_travelling.
+        self.npc_clear_travelling(speaker);
+    }
+
+    // = seg000:9556 npc_clear_travelling — clear a room-person's travelling
+    // state: drop the STAY-HERE verb flag (0x40), refresh time_dismissed, and
+    // clear their persons_travelling_with bit. Fallen into by the STAY HERE
+    // verb; also called from the travel-departure detach scan (seg000:40f2,
+    // npc_travel_detach_companion) and the companion-slot eviction in
+    // npc_assign_companion_slot (seg000:96a1).
+    pub(crate) fn npc_clear_travelling(&mut self, index: usize) {
+        // = seg000:9556 and byte [si+0fh], 0bfh.
+        self.room_persons[index].flags &= !0x40;
+        // = seg000:955a bx = 2; call npc_refresh_travel_timestamp.
+        self.npc_refresh_travel_timestamp(index, 2);
+        // = seg000:9560..9568 cl = [si+0eh]; persons_travelling_with &=
+        //   rol(0xfffe, cl) — clear the person's bit.
+        let pi = self.room_persons[index].person_index;
+        self.persons_travelling_with &= !(1u16 << pi);
+    }
+
+    // = seg000:956d npc_refresh_travel_timestamp — refresh one of the room-
+    // person travel timestamps: time_joined (+8, `which` = 0) or time_dismissed
+    // (+0xa, `which` = 2). The guard reads the OTHER word ([bp+si+8] with
+    // bp = bx^2) and the store writes THIS one ([bx+si+8]): only when game_time
+    // has advanced >= 2 ticks past the other timestamp is this one set to
+    // game_time (a debounce against immediate re-toggling).
+    fn npc_refresh_travel_timestamp(&mut self, index: usize, which: u16) {
+        let game_time = self.game_time;
+        let npc = &mut self.room_persons[index];
+        let (this, other) = if which == 0 {
+            (&mut npc.time_joined, npc.time_dismissed)
+        } else {
+            (&mut npc.time_dismissed, npc.time_joined)
+        };
+        // = seg000:9572 ax = game_time - other; cmp ax,2; jb ret.
+        if game_time.wrapping_sub(other) >= 2 {
+            // = seg000:957d..9580 this = game_time.
+            *this = game_time;
+        }
+    }
+
+    // = seg000:95e2 menu_callback_choice_come_with_me — the COME WITH ME
+    // dialogue verb: present the speaker's topic-5 (come-with-me) line, then —
+    // unless a spoken-line event dropped the interrupt gate (a refusal line
+    // carries the stay-here event 2) — mark the speaker as travelling with
+    // Paul: room-person flags bit 0x40 (which flips their verb to STAY HERE)
+    // and their persons_travelling_with bit (which moves them out of the room
+    // renders and along on travel).
+    pub(crate) fn menu_callback_choice_come_with_me(&mut self) {
+        // = seg000:95e2 call arm_dialogue_interrupt_gate — gate = 0xff; the
+        //   presented line's event callback may change it (event 2 -> 0,
+        //   event 7 -> 0x80).
+        self.dialogue_interrupt_gate = 0xff;
+        // = seg000:95e5 ax = 5; call get_dialogue_topic_record.
+        let ofs = self.get_dialogue_topic_record(5);
+        // = seg000:95eb call present_dialogue_line_with_auto_mask (empty-slot
+        //   guard as in the STAY HERE verb above).
+        if ofs != 0xffff {
+            self.present_dialogue_line_with_auto_mask(ofs as usize);
+        }
+        // = seg000:95ee inc byte [related_to_stay_here_come_with_me_ds_1b].
+        self.data_0001b = self.data_0001b.wrapping_add(1);
+        // = seg000:95f2 mov byte [pending_room_action], 0 — clear the pending
+        //   room-action after the come-with-me line has been presented.
+        self.data_00023 = 0;
+        // = seg000:95f7 call test_dialogue_interrupt_gate; jnz ret — a spoken-
+        //   line event changed the gate (the speaker refused): do not join.
+        if self.dialogue_interrupt_gate != 0xff {
+            return;
+        }
+        // = seg000:95fc si = [data_047a2]; 9600 cl = [si+0eh] (person_index).
+        let speaker = self.current_lip_sync_resource_id as usize;
+        let pi = self.room_persons[speaker].person_index;
+        // = seg000:9603 cmp cl,0eh; jz loc_0961b — a troop-leader speaker
+        //   rallies the troop instead (troop_rally_troop_066ce, the verb-record
+        //   rebuild, the troops[2] motivation bonus, then setup_npc_dialogue_
+        //   menu on Fremen 2 and the panel fold). TODO: port with the troop
+        //   system; its dialogue entry (trampolines 9373/937e) is also unported,
+        //   so this branch cannot be reached yet.
+        if pi == 0x0e {
+            println!("menu_callback_choice_come_with_me: troop path (loc_0961b) unported");
+            return;
+        }
+        // = seg000:9608 or byte [si+0fh], 40h — the travelling flag
+        //   setup_npc_dialogue_menu tests to offer STAY HERE.
+        self.room_persons[speaker].flags |= 0x40;
+        // = seg000:960c xor bx,bx; call npc_refresh_travel_timestamp.
+        self.npc_refresh_travel_timestamp(speaker, 0);
+        // = seg000:9611..9616 persons_travelling_with |= 1 << cl.
+        self.persons_travelling_with |= 1u16 << pi;
+        // = seg000:9616 falls through into loc_0961a: ret.
+    }
+
+    // = seg000:9655 npc_remove_companion_slot — remove a room-person from the
+    // companion HUD slots: a person in slot 2 just vacates it; a person in
+    // slot 1 has slot 2 shifted down over them (the DOS xchg leaves slot 2
+    // empty); anyone else is a no-op. Clears the vacated slot's blink counter
+    // and redraws the two HUD portraits.
+    pub(crate) fn npc_remove_companion_slot(&mut self, index: usize) {
+        // = seg000:9655 cl = npc->person_index.
+        let p = self.room_persons[index].person_index as i16;
+        if self.companion_2 == p {
+            // = seg000:965d..965f the person sits in slot 2 -> [di] = 0xff.
+            self.companion_2 = -1;
+            self.ui_hud_companion_blink[1] = 0;
+        } else if self.companion_1 == p {
+            // = seg000:9662/9666 in slot 1 -> the xchg pulls slot 2 down into
+            //   slot 1 and leaves slot 2 empty.
+            self.companion_1 = self.companion_2;
+            self.companion_2 = -1;
+            self.ui_hud_companion_blink[0] = 0;
+        } else {
+            // = seg000:9664 jnz loc_0961a — not a companion.
+            return;
+        }
+        // = seg000:9670 jmp ui_hud_draw_companions.
+        self.ui_hud_draw_companions();
+    }
+
+    // = seg000:9673 npc_assign_companion_slot — assign a room-person to a
+    // companion HUD slot: already in one -> no-op; else the first empty slot.
+    // With both slots full, slot 1's occupant is evicted: their person code is
+    // encoded into pending_room_action (0x64 + person_index — DOS's loc_09898
+    // leave-scan variant then lets them speak; that variant is unported, see
+    // menu_npc_actions_cleanup), their travelling state is cleared, and slot 2
+    // shifts down to make room. The filled slot's blink counter is armed
+    // (0x10 -> 8 blinks; the game-loop blink task is unported) and the two HUD
+    // portraits are redrawn.
+    pub(crate) fn npc_assign_companion_slot(&mut self, index: usize) {
+        // = seg000:9673 cl = npc->person_index.
+        let p = self.room_persons[index].person_index as i16;
+        // = seg000:9679..968a the slot scan.
+        let slot = if self.companion_1 == p {
+            return;
+        } else if self.companion_1 == -1 {
+            0
+        } else if self.companion_2 == p {
+            return;
+        } else if self.companion_2 == -1 {
+            1
+        } else {
+            // = seg000:968c..96a8 both full: evict slot 1. si = room_persons +
+            //   0x10 * [ui_hud_companion_1]; pending_room_action = 0x64 +
+            //   person_index; npc_clear_travelling; shift slot 2 down.
+            let evicted = self.companion_1 as usize;
+            self.data_00023 = 0x64 + self.room_persons[evicted].person_index;
+            self.npc_clear_travelling(evicted);
+            self.companion_1 = self.companion_2;
+            1
+        };
+        // = seg000:96ab loc_096ab — store the person and arm the blink.
+        if slot == 0 {
+            self.companion_1 = p;
+        } else {
+            self.companion_2 = p;
+        }
+        self.ui_hud_companion_blink[slot] = 0x10;
+        // = seg000:96b2 jmp ui_hud_draw_companions.
+        self.ui_hud_draw_companions();
+    }
+
+    // = seg000:96b5 present_game_phase_trigger_line — walk the game-phase
+    // trigger record — DIALOGUE slot 135 (pseudo-person 0x10, topic 7) — and
+    // present its first condition-matching entry, with the speaker id forced
+    // to 0x10 (both < 0x10 gates skip the talking head) and the sentence mask
+    // 0x80; the caller's id and mask are preserved around the call. The
+    // record's entries are story-progression triggers: the matched entry's
+    // event fires through the normal spoken-line dispatch
+    // (fire_dialogue_line_event).
+    fn present_game_phase_trigger_line(&mut self) {
+        // = seg000:96b5..96c3 push id + mask; id = 0x10; mask = 0x80.
+        let saved_id = self.current_lip_sync_resource_id;
+        let saved_mask = self.data_047c2;
+        self.current_lip_sync_resource_id = 0x10;
+        self.data_047c2 = 0x80;
+        // = seg000:96c8 si = [DIALOGUE + 135*2]; 96cc call present_first_
+        //   matching_dialogue_line. (An absent slot would send DOS walking
+        //   from a garbage offset; guard instead.)
+        let ofs = container::entry_offset(&self.dialogue, 135);
+        if ofs != 0xffff {
+            self.present_first_matching_dialogue_line(ofs as usize);
+        }
+        // = seg000:96cf/96d3 pop the mask and id back.
+        self.data_047c2 = saved_mask;
+        self.current_lip_sync_resource_id = saved_id;
+    }
+
+    // = seg000:b17a run_game_phase_triggers — run the game-phase trigger
+    // record with subtitle presentation suppressed: set data_000c6 bit 0x80
+    // (the loc_0a034 gate then skips show_voice_subtitle) around
+    // present_game_phase_trigger_line, restoring the caller's flag after.
+    // DOS calls it on every phase change: startup (seg000:00b9/00bc, twice),
+    // set_game_phase_and_trigger_callbacks (seg000:122d, unported), the
+    // event-0x0b callback, and seg000:2bc1.
+    pub(crate) fn run_game_phase_triggers(&mut self) {
+        // = seg000:b17a..b180 push data_000c6; or al,80h.
+        let saved = self.data_000c6;
+        self.data_000c6 = saved | 0x80;
+        // = seg000:b183 call present_game_phase_trigger_line.
+        self.present_game_phase_trigger_line();
+        // = seg000:b186/b187 pop data_000c6.
+        self.data_000c6 = saved;
+    }
+
+    // = seg000:9f31 get_dialogue_topic_record — resolve the current speaker's
+    // topic-`topic` dialogue record (si = DIALOGUE[(data_047be & 0xfff8) +
+    // topic]; topic 5 = COME WITH ME, 6 = STAY HERE), then fall into loc_09f40,
+    // the shared per-presentation setup. Returns the record's absolute offset
+    // (0xffff for an empty slot).
+    fn get_dialogue_topic_record(&mut self, topic: u16) -> u16 {
+        let ofs =
+            container::entry_offset(&self.dialogue, (self.dialogue_topic_index & 0xfff8) + topic);
+        // = seg000:9f3c falls through into loc_09f40.
+        self.prepare_dialogue_presentation();
+        ofs
+    }
+
+    // = seg000:9f8b present_dialogue_line_with_auto_mask — present a dialogue
+    // line with the verb-eligibility mask data_047c2 forced to 0x20 (the
+    // auto/COME-WITH-ME mask), preserving the caller's mask around the call.
+    // Returns whether a line was presented (DOS's carry-clear exit).
+    fn present_dialogue_line_with_auto_mask(&mut self, start: usize) -> bool {
+        // = seg000:9f8b push word [data_047c2]; 9f8f data_047c2 = 0x20.
+        let saved_mask = self.data_047c2;
+        self.data_047c2 = 0x20;
+        // = seg000:9f94 call present_first_matching_dialogue_line.
+        let (_, presented) = self.present_first_matching_dialogue_line(start);
+        // = seg000:9f97 pop word [data_047c2].
+        self.data_047c2 = saved_mask;
+        presented
     }
 
     // = seg000:88af show_voice_subtitle (reached at loc_0a034) — record the
@@ -554,14 +825,8 @@ impl GameState {
         }
         // = seg000:9713 call loc_09f40.
         self.prepare_dialogue_presentation();
-        // = seg000:9716 jmp present_dialogue_line_with_auto_mask (seg000:9f8b) —
-        //   present with the verb mask data_047c2 forced to 0x20, preserving the
-        //   caller's mask around the call.
-        let saved_mask = self.data_047c2;
-        self.data_047c2 = 0x20;
-        let (_, presented) = self.present_first_matching_dialogue_line(ofs as usize);
-        self.data_047c2 = saved_mask;
-        presented
+        // = seg000:9716 jmp present_dialogue_line_with_auto_mask (seg000:9f8b).
+        self.present_dialogue_line_with_auto_mask(ofs as usize)
     }
 
     // = seg000:9f9e present_first_matching_dialogue_line — walk the dialogue
@@ -773,7 +1038,7 @@ impl GameState {
     // fired_by_speaking_dialogue_line (seg000:a107) — dispatch one spoken-line
     // event. `word0_lo` is the entry's flag byte BEFORE the spoken mark, so the
     // first-time-only callbacks (0x0b/0x0c/0x0e test `[si], 0x80`) can check it.
-    fn dispatch_dialogue_line_event(&mut self, event: u8, word0_lo: u8) {
+    pub(crate) fn dispatch_dialogue_line_event(&mut self, event: u8, word0_lo: u8) {
         match event {
             // = seg000:a1d0 callback_event_dialogue_line_01_follow_me.
             1 => self.dialogue_interrupt_gate = 0xff,
@@ -785,28 +1050,29 @@ impl GameState {
             // = seg000:a1dc callback_event_dialogue_line_07_show_equipment_in_map.
             7 => self.dialogue_interrupt_gate = 0x80,
             // = seg000:a219 callback_event_dialogue_line_0b_increase_game_phase_
-            //   by_1_and_do_more — first time only (the spoken bit gates repeats).
+            //   by_1_and_do_more — first time only (the spoken bit gates
+            //   repeats): advance the story one phase.
             0x0b if word0_lo & 0x80 == 0 => {
+                // = seg000:a21e inc byte [game_phase].
                 self.game_phase = self.game_phase.wrapping_add(1);
-                // = seg000:a222 data_000ff = 0; a227 call loc_0b17a; a22a
-                //   game_phase == 1 -> make Duncan Idaho visible (seg000:100b) —
-                //   none of that state is modelled yet.
-                println!(
-                    "dialogue event 0x0b: game_phase -> 0x{:02x} (loc_0b17a tail unported)",
-                    self.game_phase
-                );
+                // = seg000:a222 number_of_days_since_last_game_phase_change_
+                //   ds_ff = 0.
+                self.days_since_last_game_phase_change = 0;
+                // = seg000:a227 call run_game_phase_triggers.
+                self.run_game_phase_triggers();
+                // = seg000:a22a..a231 a bump to phase 1 additionally reveals
+                //   Duncan Idaho.
+                if self.game_phase == 1 {
+                    self.make_duncan_idaho_visible();
+                }
             }
             // = seg000:a235 callback_event_dialogue_line_0c_increase_game_phase_
             //   by_4_if_dialogue_bit_set — first time only.
             0x0c if word0_lo & 0x80 == 0 => {
-                // = seg000:a23a..a241 set_game_phase_and_trigger_callbacks(
-                //   (game_phase & 0xfc) + 4); the phase-change trigger chain
-                //   (seg000:121f) is unported.
-                self.game_phase = (self.game_phase & 0xfc).wrapping_add(4);
-                println!(
-                    "dialogue event 0x0c: game_phase -> 0x{:02x} (set_game_phase triggers unported)",
-                    self.game_phase
-                );
+                // = seg000:a23a..a241 al = (game_phase & 0xfc) + 4; jmp
+                //   set_game_phase_and_trigger_callbacks.
+                let phase = (self.game_phase & 0xfc).wrapping_add(4);
+                self.set_game_phase_and_trigger_callbacks(phase);
             }
             // = the already-spoken no-ops of 0x0b/0x0c (test [si],80h; jnz ret).
             0x0b | 0x0c => {}
@@ -817,6 +1083,16 @@ impl GameState {
             //   a28e (0x0d) the command-menu/PALPLAN redraw — all unported.
             _ => println!("dispatch_dialogue_line_event: unported event 0x{event:02x}"),
         }
+    }
+
+    // = seg000:100b callback_event_dialogue_line_0b_game_phase_01_make_Duncan_
+    // Idaho_visible — mov byte [ds:100b], 1: write 1 into the high byte of
+    // room_persons[3].location_slot, flipping Duncan Idaho's 0xff80
+    // (never-matching, hidden) to 0x0180 so his entry matches the palace room
+    // (location_and_room 0x2004) from now on.
+    fn make_duncan_idaho_visible(&mut self) {
+        let entry = &mut self.room_persons[3];
+        entry.location_appearance = (entry.location_appearance & 0x00ff) | 0x0100;
     }
 
     // = seg000:98b2 tear_down_prior_talking_head_overlay — before a new dialogue

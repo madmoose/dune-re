@@ -169,6 +169,39 @@ impl GameState {
         (hi << 8) | lo
     }
 
+    // = seg000:e3df rand_iterated — a uniform random draw in 0..=max: build the
+    // smallest all-ones mask covering `max`, then iterate the 0xcbd1 LCG on its
+    // own seed (= _unk_2CCD8_bios_timer_count_3, distinct from rand's and
+    // rand_masked's) until the masked draw lands within range. Drives the CD-
+    // playlist shuffle (music_cd_playlist_shuffle) among others.
+    pub(crate) fn rand_iterated(&mut self, max: u16) -> u16 {
+        // = e3e1..e3e5 max == 0 returns 0 immediately (ax is already 0).
+        if max == 0 {
+            return 0;
+        }
+        // = e3e7..e3f0 the mask: 0xffff shifted left once per bit of max, inverted.
+        let mut mask = 0xffffu16;
+        let mut ax = max;
+        while ax != 0 {
+            mask <<= 1;
+            ax >>= 1;
+        }
+        mask = !mask;
+        // = loc_0e3f2 the retry loop: redraw while the masked value exceeds max.
+        loop {
+            let product = (self.rand_iterated_seed as u32).wrapping_mul(0xcbd1);
+            let seed_new = ((product & 0xffff) as u16).wrapping_add(1);
+            self.rand_iterated_seed = seed_new;
+            let lo = seed_new >> 8;
+            let hi = ((product >> 16) & 0xff) as u16;
+            let val = ((hi << 8) | lo) & mask;
+            // = e404 cmp ax,bx; ja loc_0e3f2.
+            if val <= max {
+                return val;
+            }
+        }
+    }
+
     // = seg000:994f idle animation selector. With facing == 0 (the named heads)
     // it returns a random idle animation: rand_masked(6) ∈ {0,2,4,6} indexes the
     // 2-byte animation TOC, i.e. animation (rand&6)>>1 ∈ {0,1,2,3}. With a

@@ -241,6 +241,7 @@ impl GameState {
             FbId::Screen => &mut self.screen,
             FbId::Fb1 => &mut self.framebuffer,
             FbId::Saved => &mut self.framebuffer_saved,
+            FbId::Back => &mut self.framebuffer_back,
         };
         let w = self.font.draw_glyph(fb, st.x, st.y, c, st.size, st.color);
         self.font_state.x += w;
@@ -299,6 +300,32 @@ impl GameState {
         });
         // = seg000:e2c2 units digit (always drawn).
         self.font_draw_glyph(b'0' + units);
+    }
+
+    // = seg000:d194 font_draw_phrase_or_command_string_with_color_at_pos — set
+    // the colour word and the pen, then draw the indexed COMMAND/PHRASE string
+    // (falls through into font_draw_phrase_or_command_string).
+    pub fn font_draw_phrase_or_command_string_with_color_at_pos(
+        &mut self,
+        index: u16,
+        color: u16,
+        x: u16,
+        y: u16,
+    ) {
+        // = seg000:d194 mov [font_draw_fg_color], cx (the fg+bg word).
+        self.font_state.color = color;
+        // = seg000:d198 call font_set_draw_position.
+        self.font_set_draw_position(x, y);
+        self.font_draw_phrase_or_command_string(index);
+    }
+
+    // = seg000:d19b font_draw_phrase_or_command_string — draw the indexed
+    // COMMAND/PHRASE string at the current pen with the current colour.
+    pub fn font_draw_phrase_or_command_string(&mut self, index: u16) {
+        // = seg000:d19e call get_phrase_or_command_string_si; d1a1 call
+        //   font_draw_string.
+        let s = self.get_phrase_or_command_string(index).to_vec();
+        self.font_draw_string(&s);
     }
 }
 

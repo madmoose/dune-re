@@ -77,8 +77,8 @@ const ROOM1_BACKDROP_THRESHOLD: [u8; 5] = [5, 4, 5, 4, 4];
 // ui_click_move_room (seg000:3f27) and rebuild_and_draw_room_nav_panel
 // (seg000:2ffb).
 #[derive(Clone, Copy)]
-struct SceneRecord {
-    background: u8,
+pub(crate) struct SceneRecord {
+    pub(crate) background: u8,
     // One byte per compass direction; index i maps to the bottom-right HUD
     // compass arrow at i = 0..3 (UP / RIGHT / DOWN / LEFT, i.e. N/E/S/W). The
     // byte at index i is the exit reachable in that direction:
@@ -90,7 +90,11 @@ struct SceneRecord {
     //                index -exit. The 0xFB..0xFF subrange is what
     //                rebuild_and_draw_room_nav_panel renders as a visible
     //                HUD arrow; the rest are in-scene/scripted exits.
-    exits: [u8; 4],
+    // Runtime-mutable: the game-phase callbacks (seg000:1027/102f/10a4/1188)
+    // clear an exit's bit 7 to unlock scripted palace doors, and phase 4
+    // decrements palace_rooms[1].background — GameState owns the live copy
+    // (scene_records); this const table is the seg001 static initializer.
+    pub(crate) exits: [u8; 4],
 }
 
 impl SceneRecord {
@@ -116,7 +120,7 @@ const SCENE_DISPATCH: [u8; 0x30] = [
 // = seg001:1225..13c4 scene records (palace_rooms at index 0, sietch_rooms at
 // index 12, and the rest), 5 bytes each in the original layout.
 #[rustfmt::skip]
-const SCENE_RECORDS: [SceneRecord; 83] = [
+pub(crate) const SCENE_RECORDS: [SceneRecord; 83] = [
     SceneRecord::new(0x4c, [0x02, 0x00, 0xfd, 0x00]),
     SceneRecord::new(0x3a, [0x07, 0x00, 0x01, 0x8c]),
     SceneRecord::new(0xcf, [0x00, 0x00, 0x00, 0x0b]),
@@ -255,8 +259,9 @@ fn desert_apply_step_delta(step: u16, x: u16, latfine: u16) -> (u16, u16) {
 }
 
 // = seg000:5e4f calc_SAL_index. Maps a location's `apparence` byte to a SAL
-// index via ascending thresholds (0=SIET 1=PALACE 2=VILG 3/4=HARK).
-fn calc_sal_index(apparence: u8) -> usize {
+// index via ascending thresholds (0=SIET 1=PALACE 2=VILG 3/4=HARK). Also the
+// map-marker sprite tier (calc_location_marker_sprite falls into it).
+pub(crate) fn calc_sal_index(apparence: u8) -> usize {
     let mut index = 0;
     if apparence >= 0x20 {
         index += 1;
@@ -316,10 +321,10 @@ impl GameState {
         }
         let base = SCENE_DISPATCH[dh] as usize;
         let idx = base + (dl - 1);
-        if idx >= SCENE_RECORDS.len() {
+        if idx >= self.scene_records.len() {
             return None;
         }
-        Some(SCENE_RECORDS[idx].exits)
+        Some(self.scene_records[idx].exits)
     }
 
     // = seg000:3f15
@@ -527,6 +532,17 @@ impl GameState {
             return;
         }
         // = seg000:4002 loc_04002 — on a latitude row: check for a location.
+        self.desert_check_arrival(x, latfine);
+    }
+
+    // = seg000:4002 loc_04002 — the desert arrival check: a location is here
+    // when the map byte has bit 0x40, find_location_by_map_offset finds its
+    // record and the walked longitude equals the location's snapped map_x;
+    // then arrive_at_location enters its room 1. Otherwise commit the position
+    // as a plain desert view. Reached from the desert-walk step above and from
+    // the travel arrival (travel_pump, seg000:4ff8, with the destination's
+    // (map_x, map_y)).
+    pub(crate) fn desert_check_arrival(&mut self, x: u16, latfine: u16) {
         // = seg000:4002..4005 bx = the sign-extended latitude row.
         let lat = (latfine as u8) as i8 as i16;
         // = seg000:4007 call read_map_byte_at_dx_bl (then 400a xor bh,bh —
@@ -593,7 +609,7 @@ impl GameState {
     // undiscovered location (status bit 0x80 set): clear the bit, zero
     // discoverable_at_phase, count sietches in discovered_sietch_count, and
     // advance the game phase when the location is Tuono-Harg.
-    fn location_mark_discovered(&mut self, loc_index: usize) {
+    pub(crate) fn location_mark_discovered(&mut self, loc_index: usize) {
         let location = &mut self.locations[loc_index];
         // = seg000:425b test [di+0ah],80h; jz ret.
         if location.status & 0x80 == 0 {
@@ -606,14 +622,14 @@ impl GameState {
         if location.appearance >= 0x20 {
             return;
         }
+        let (first_name, last_name) = (location.first_name, location.last_name);
         // = seg000:426f inc [discovered_sietch_count].
         self.discovered_sietch_count += 1;
         // = seg000:4273 cmp word [di],603h — first_name 3 / last_name 6 is
         //   Tuono-Harg; discovering it advances the story to phase 0x10.
-        if location.first_name == 3 && location.last_name == 6 {
-            // = seg000:427e call set_game_phase_and_trigger_callbacks(0x10) —
-            //   the phase-change trigger chain (seg000:121f) is unported.
-            self.game_phase = 0x10;
+        if first_name == 3 && last_name == 6 {
+            // = seg000:427e call set_game_phase_and_trigger_callbacks(0x10).
+            self.set_game_phase_and_trigger_callbacks(0x10);
         }
     }
 
@@ -708,7 +724,7 @@ impl GameState {
     // entries against the *memory* (location_and_room, location_appearance) —
     // the room being left — while the callback receives the caller's dx/bx (the
     // destination, restored around the call at seg000:3707..370a).
-    fn move_all_npcs_whose_bit_6_of_flags_is_set(
+    pub(crate) fn move_all_npcs_whose_bit_6_of_flags_is_set(
         &mut self,
         location_and_room: u16,
         location_appearance: u16,
@@ -773,13 +789,14 @@ impl GameState {
 
         // = loc_03efe: pick scene record (dl-1) in the table starting at
         //   SCENE_DISPATCH[dh]. The record's `background` byte drives draw_SAL.
-        let record = &SCENE_RECORDS[SCENE_DISPATCH[dh] as usize + (dl - 1)];
+        let record = &self.scene_records[SCENE_DISPATCH[dh] as usize + (dl - 1)];
         let background = record.background;
 
         // = draw_SAL (seg000:3b59): split the background byte into a SAL room
         //   sub-chunk and a sprite-sheet resource.
         let room = ((background - 1) & 0x0f) as usize;
-        let sheet_name = ROOM_SHEET_NAMES[((background - 1) >> 4) as usize];
+        let sheet_index = ((background - 1) >> 4) as usize;
+        let sheet_name = ROOM_SHEET_NAMES[sheet_index];
 
         // = seg000:37c1 clear_game_area — draw_room_scene clears the game-area
         // rect of the active framebuffer before drawing. Without it a scene that
@@ -807,7 +824,7 @@ impl GameState {
             self.draw_outdoor_backdrop();
         }
 
-        self.draw_sal_room(sal_name, room, sheet_name);
+        self.draw_sal_room(sal_name, room, sheet_name, sheet_index != 0);
 
         // = seg000:3a24..3a7b draw_room_scene's post-SAL orni pass.
         self.draw_room_ornis();
@@ -848,20 +865,16 @@ impl GameState {
             // = seg000:3a51 open ORNY.HSQ (applies its bank palette).
             self.open_sprite_bank(sprite_bank::ORNY);
             // = seg000:3a57 get_orni_position.
-            let (mut x, mut y) = self.get_orni_position();
+            let (x, y) = self.get_orni_position();
             // = seg000:3a5a..3a67 record the first orni's hover hotspot
             // (position + (0xc, 8)) for person_hit_test's orni tail
             // (seg000:92ab) — hovering/clicking the parked orni resolves to
             // the 0x2f pseudo-person (the TAKE AN ORNITHOPTER verb).
-            self.orni_hotspot_x = (x + 0xc) as u16;
+            self.orni_hotspot_x = (x + 12) as u16;
             self.orni_hotspot_y = (y + 8) as u16;
-            // = seg000:3a6a..3a79 draw_ornis_loop: one orni per available
-            // ornithopter, each stepped down-right by (0x46, 0x0a).
-            for _ in 0..count {
-                self.draw_orni(x, y);
-                x += 70;
-                y += 10;
-            }
+            // = seg000:3a6a draw_ornis_loop — one orni per available
+            // ornithopter.
+            self.draw_ornis_loop(count, x, y);
         }
         // = seg000:3a41 push 388dh — the pass exits through set_sky_palette so
         // the sky-gradient palette entries ORNY's bank palette overwrote are
@@ -869,11 +882,29 @@ impl GameState {
         self.set_sky_palette();
     }
 
+    // = seg000:3a6a draw_ornis_loop — draw `count` parked ornis from the
+    // active bank starting at (x, y), each stepped down-right by (0x46, 0x0a).
+    pub(crate) fn draw_ornis_loop(&mut self, count: u8, mut x: i16, mut y: i16) {
+        for _ in 0..count {
+            self.draw_orni(x, y);
+            x += 70;
+            y += 10;
+        }
+    }
+
+    // = seg000:3a73 draw_ornis — the loop's step-first entry: advance one pad
+    // slot and loop-decrement BEFORE drawing, so `count - 1` ornis draw at
+    // slots 2..count. The takeoff frames enter here to leave the departing
+    // orni's first slot empty.
+    pub(crate) fn draw_ornis(&mut self, count: u8, x: i16, y: i16) {
+        self.draw_ornis_loop(count.saturating_sub(1), x + 70, y + 10);
+    }
+
     // = seg000:3a95 get_orni_position — the landing-pad screen position for the
     // current location: (149, 57) for location codes (location_and_room high
     // byte) below 0x20 (the sietches), (202, 73) for the rest (the palace /
     // city views).
-    fn get_orni_position(&self) -> (i16, i16) {
+    pub(crate) fn get_orni_position(&self) -> (i16, i16) {
         if (self.location_and_room >> 8) as u8 >= 0x20 {
             (202, 73)
         } else {
@@ -885,7 +916,7 @@ impl GameState {
     // (x, y), each part clipped to the game area: two fixed parts (sprites 0
     // and 1) and two parts selected by orni_anim_frame — sprites 8..0x16 animate
     // over frames 0..0x0e, sprites 2..7 over frames 0x0f and up.
-    fn draw_orni(&mut self, x: i16, y: i16) {
+    pub(crate) fn draw_orni(&mut self, x: i16, y: i16) {
         let frame = self.orni_anim_frame;
         // = seg000:3ac0..3ad2 clamp(frame - 0xf, 0, 5) + 2.
         let part_2_7 = (frame.saturating_sub(0x0f).min(5) + 2) as u16;
@@ -1009,7 +1040,13 @@ impl GameState {
     // framebuffer at the current fb_base_ofs (state.y_offset), landing in the
     // game-area rect (rows 24..175). The recursive sprite/polygon/line decode
     // lives in RoomSheet/RoomRenderer.
-    fn draw_sal_room(&mut self, sal_name: &str, room: usize, sprite_sheet_name: &str) {
+    fn draw_sal_room(
+        &mut self,
+        sal_name: &str,
+        room: usize,
+        sprite_sheet_name: &str,
+        apply_sheet_palette: bool,
+    ) {
         let sal = self.dat_file.read(sal_name).expect("failed to read SAL");
         let room_sheet = RoomSheet::new(&sal).expect("failed to parse SAL");
         let Some(room) = room_sheet.get_room(room) else {
@@ -1023,10 +1060,17 @@ impl GameState {
         let sprite_sheet = SpriteSheet::from_slice(&sheet_data).expect("failed to parse sheet");
         // = apply_sprite_sheet_palette: the sprite sheet carries the room's
         // palette; it overlays the previous stage's palette with exactly the
-        // entries the room draws with.
-        sprite_sheet
-            .apply_palette_update(&mut self.palette)
-            .expect("failed to apply palette");
+        // entries the room draws with. NOT for sheet index 0 (GENERIC.HSQ):
+        // draw_SAL skips the open_resource_by_index for it entirely
+        // (seg000:3b62..3b68 `shr ax,4; jz loc_03b70`) — GENERIC stays
+        // resident through the font path (font_draw_glyph_func, seg000:d176)
+        // and its [240..254] palette chunk (the sand UI tint) must not stamp
+        // over the sky palette's time-of-day UI span here.
+        if apply_sheet_palette {
+            sprite_sheet
+                .apply_palette_update(&mut self.palette)
+                .expect("failed to apply palette");
+        }
 
         // = sal_read_position_markers (seg000:3d83): resolve which person, if
         // any, stands in each of the room's standing slots from the current
@@ -1040,9 +1084,11 @@ impl GameState {
 
         // = sal_draw_character (seg000:3d2f) opens PERS.HSQ (RES_PERS_HSQ) only
         // when a person is actually present. open_spritesheet applies the
-        // sheet's palette update; DOS restores the room sheet's palette after
-        // each character, so re-apply the room palette last to keep its entries
-        // winning on any overlap.
+        // sheet's palette update; DOS restores the previously active bank after
+        // each character (seg000:3d7f/3d80 pop ax; jmp open_resource_by_index),
+        // so re-apply the room palette last to keep its entries winning on any
+        // overlap — except for the never-opened GENERIC sheet (see above),
+        // whose id is not the pushed active bank in DOS.
         let character_sheet = if markers.iter().any(|&m| m != -1) {
             let pers = self
                 .dat_file
@@ -1052,9 +1098,11 @@ impl GameState {
             sheet
                 .apply_palette_update(&mut self.palette)
                 .expect("failed to apply PERS palette");
-            sprite_sheet
-                .apply_palette_update(&mut self.palette)
-                .expect("failed to re-apply room palette");
+            if apply_sheet_palette {
+                sprite_sheet
+                    .apply_palette_update(&mut self.palette)
+                    .expect("failed to re-apply room palette");
+            }
             Some(sheet)
         } else {
             None

@@ -53,6 +53,18 @@ impl Tablat {
         2 * self.entry(y).len
     }
 
+    // = lng_units_per_cell_table (seg001:4880) — the longitude units spanned
+    // by one map cell of the row: round(0x10000 / the row's byte length), ties
+    // rounded down (DOS compares the division remainder against the row
+    // half-length). DOS precomputes the 99-word table at startup, right after
+    // the TABLAT byte-swap (seg000:00e7); the port computes it per lookup.
+    pub fn lng_units_per_cell(&self, y: u16) -> u16 {
+        let len = self.len(y) as u32;
+        let q = 0x10000 / len;
+        let r = 0x10000 % len;
+        (q + u32::from(r > len / 2)) as u16
+    }
+
     pub fn rotated_offset(&self, y: u16) -> FixedU16F16 {
         self.entry(y).fp
     }

@@ -9,6 +9,7 @@ use crate::{
     hnm::hnm_id_by_name,
     input::SharedInput,
     locations::LOCATIONS,
+    map_screen::MapLocationMarker,
     midi::{self, Midi},
     mouse::SharedCursor,
     pcm_player::{self, PcmPlayer},
@@ -31,7 +32,15 @@ pub enum FbId {
     /// = `_word_2D08E_framebuffer_saved_seg` (fb2) — a saved clean copy of the
     /// scene, used to restore regions dirtied by sprites/cursor/the talking head.
     Saved,
+    /// = `_word_2D0E2_framebuffer_back` — the globe/map scratch buffer. During a
+    /// travel it holds the persistent flight minimap + trail, re-stamped over
+    /// each decoded flight frame (hnm_present_flight_frame, seg000:4afd).
+    Back,
 }
+
+/// = (loc_0e85c - travel_trail_ring) / 4 — the travel-trail ring capacity in
+/// (longitude, latitude) pairs.
+pub(crate) const TRAVEL_TRAIL_LEN: usize = (0xe85c - 0xe40c) / 4;
 
 pub const PCM_OUTPUT_RATE: u32 = 49716;
 pub const MIDI_SAMPLE_RATE: u32 = 49716;
@@ -64,6 +73,9 @@ pub(crate) enum TaskId {
     // = seg000:046b5 map_caption_frame_task — the map screen's "SELECT
     // DESTINATION ON MAP" typewriter: one glyph per firing (interval 0x18).
     MapCaption,
+    // = seg000:044ab map_player_marker_blink_task — the blinking "you are
+    // here" marker on the map view (interval 0x12c).
+    MapPlayerMarker,
 }
 
 pub(crate) struct FrameTask {
@@ -103,6 +115,9 @@ pub struct GameState {
     // scene; regions are restored from here under moving overlays. (The buffer
     // itself, not the seg001 selector word at seg001:dbde that points to it.)
     pub framebuffer_saved: FrameBuffer,
+    /// = `_word_2D0E2_framebuffer_back` (FbId::Back) — the globe/map scratch
+    /// buffer (the flight minimap + trail persist here during a travel).
+    pub framebuffer_back: FrameBuffer,
     pub palette: Palette,
     pub palette_fade_target: Palette,
     pub global_frame_count: usize,
@@ -277,6 +292,11 @@ pub struct GameState {
     // currently in dialogue with.
     pub(crate) persons_talking_to: u16,
 
+    // = seg001:001b related_to_stay_here_come_with_me_ds_1b — counts the
+    // COME WITH ME / STAY HERE verb uses since the last TALK TO ME (which
+    // clears it, seg000:947a).
+    pub(crate) data_0001b: u8,
+
     // = seg001:0023 data_00023 — the room-transition / dialogue-scan state.
     // ui_click_move_room sets it to 1 to request the room-leave auto-dialogue scan
     // (run_room_leave_dialogue_scan gates on it and clears it), CONDIT condition 0x1c tests it == 1,
@@ -287,6 +307,46 @@ pub struct GameState {
     // locations with a code below 0x20 (the sietches)
     pub(crate) number_of_sietches_visited: u8,
 
+    // = seg001:0028 number_of_rallied_troops — how many Fremen troops have
+    // been rallied to the Atreides cause. The troop system that maintains it
+    // (troop_rally_troop_066ce) is not yet ported, so it only changes if set
+    // externally; CONDIT conditions (e.g. Leto's early-game mission lines)
+    // read it.
+    pub(crate) number_of_rallied_troops: u8,
+
+    // = seg001:1178 number_of_rallied_troops_for_Leto_being_killed — the
+    // rallied-troop threshold armed by the phase-0x48 (met Chani) callback
+    // (rallied + 2); 0xff (the static value) = not armed. Its reader (the
+    // Leto-killed event pump) is not yet ported.
+    pub(crate) number_of_rallied_troops_for_leto_killed: u8,
+
+    // = seg001:1154 data_01154 — game_time snapshot taken by the phase-0x2c
+    // (met Stilgar) callback; the time-of-day event pump reads it
+    // (seg000:1f6e, unported).
+    pub(crate) data_01154: u16,
+
+    // = seg001:1156 data_01156 — an in-game-day deadline (day + 3) armed by
+    // the phase-0x5c callback; its reader is unported.
+    pub(crate) data_01156: u16,
+
+    // = seg001:1190 vision_message_count + seg001:1191 vision_message_queue —
+    // the queued vision messages, (message id, location ptr or 0), max 10;
+    // queue_vision_message appends (deduplicated, oldest dropped on
+    // overflow). The vision presentation that consumes them is unported.
+    pub(crate) vision_messages: Vec<(u16, u16)>,
+
+    // = seg001:00c8 comm_sighting_count + seg001:1179 comm_sighting_list —
+    // the COMM-room person-sighting words ((location index << 8) | person
+    // id), max 10, appended by comm_add_person_sighting. The COMM screen
+    // that displays them is unported.
+    pub(crate) comm_sightings: Vec<u16>,
+
+    // = seg001:1225.. the scene records (palace_rooms et al) — the live,
+    // runtime-mutable copy of room_scene::SCENE_RECORDS: the game-phase
+    // callbacks unlock scripted palace exits (exit byte &= 0x7f) and patch
+    // palace_rooms[1].background in here.
+    pub(crate) scene_records: [crate::room_scene::SceneRecord; 83],
+
     // = seg001:0027 discovered_sietch_count — counts sietches whose location
     // record lost its undiscovered bit (location_mark_discovered).
     pub(crate) discovered_sietch_count: u8,
@@ -295,8 +355,18 @@ pub struct GameState {
     // move inside a freshly visited location is being committed
     pub(crate) entering_new_sietch: u8,
 
+    // = seg001:0029 charisma — Paul's charisma stat (capped at 0xc8 by
+    // increase_charisma_and_increase_troop_motivation_accordingly).
+    pub(crate) charisma: u8,
+
     // = seg001:002a _byte_1F4DA_game_phase — the global story-progress counter.
     pub(crate) game_phase: u8,
+
+    // = seg001:00ff number_of_days_since_last_game_phase_change_ds_ff — zeroed
+    // on every phase change (the event-0x0b callback and
+    // set_game_phase_and_trigger_callbacks); the day-change hook that
+    // increments it (seg000:1c46) is not yet ported.
+    pub(crate) days_since_last_game_phase_change: u8,
 
     // = seg001:002b night_attack_stage.
     pub(crate) night_attack_stage: u8,
@@ -355,14 +425,45 @@ pub struct GameState {
     // location.
     pub(crate) last_location_index: usize,
 
-    // = seg001:1152 companion_1 / seg001:1153 companion_2 — the icon state of the
-    // two bottom-left HUD companions portraits.
+    // = seg001:1152 ui_hud_companion_1 / seg001:1153 ui_hud_companion_2 — the
+    // person index shown in each of the two bottom-left HUD companion
+    // portraits (-1 = empty). Filled/cleared by npc_assign_companion_slot /
+    // npc_remove_companion_slot when a dialogue closes.
     pub(crate) companion_1: i16,
     pub(crate) companion_2: i16,
+
+    // = seg001:2222 ui_hud_companion_blink — per-companion-slot blink countdown
+    // bytes: npc_assign_companion_slot arms 0x10 on the filled slot (8 blinks),
+    // npc_remove_companion_slot clears the vacated one, and the game-loop
+    // blink task (ui_hud_companion_blink_task) drains them.
+    pub(crate) ui_hud_companion_blink: [u8; 2],
+
+    // = seg001:dcf1 companion_blink_step_latch — the blink task's pacing
+    // latch: the last-seen (game_ticks >> 6) & 0xff step number, so the task
+    // fires once per 64 PIT ticks.
+    pub(crate) companion_blink_step_latch: u8,
 
     // = seg001:11bc data_011bc — scene flag set (|= 1) by the night-attack
     // branch of draw_room_game_screen.
     pub(crate) data_011bc: u8,
+
+    // = seg001:11c5 travel_destination_ptr — the pending/active travel
+    // destination location (locations::location_ptr encoding; 0 = none). Set
+    // by arm_pending_travel; map_screen_cleanup keeps game_screen_mode_flags
+    // while it is set; the per-step re-aim (loc_051cb) and the arrival
+    // (seg000:4fd8) read it — both travel-pump territory, not ported.
+    pub(crate) travel_destination_ptr: u16,
+
+    // = seg001:11c7 travel_heading — the travel compass heading (0 north,
+    // clockwise, 0x20 per compass point). Seeded by arm_pending_travel;
+    // re-aimed at the destination each step when travel_heading_mode == 0
+    // (loc_051cb); reversed by BACK TO STARTING POINT (seg000:526a).
+    pub(crate) travel_heading: u8,
+
+    // = seg001:11c8 travel_heading_mode — 1 = fixed compass heading (a
+    // desert-cell click); 0 = home toward travel_destination_ptr, re-aiming
+    // each step (loc_051cb).
+    pub(crate) travel_heading_mode: u8,
 
     // = seg001:11c9 game_screen_mode_flags — bitfield selecting the active
     // non-room screen/mode (book/map/dialogue/...); 0 = the plain room view.
@@ -371,13 +472,26 @@ pub struct GameState {
 
     // = seg001:11ca data_011ca — set during a pending room-screen swap (between
     // pending_room_screen_request being raised and loc_00d8e finishing the
-    // transition); loc_04f0c bails when set so it does not race the swap.
+    // transition); travel_pump (seg000:4f0c) bails when set so it does not race the swap.
     pub(crate) data_011ca: u8,
 
     // = seg001:11cb data_011cb — gates the second map-mode command verb
     // (build_room_command_records, the game_screen_mode_flags & 3 branch).
-    // Static-inits to 0.
+    // Static-inits to 0; arm_pending_travel clears it for a location
+    // destination and sets it to 0xff for a fixed-heading (desert) one.
     pub(crate) data_011cb: u8,
+
+    // = seg001:11cc travel_step_accum — the travel step's 8.8 sub-cell
+    // accumulator, re-seeded to 0x80 (half a cell) by adjust_travel_heading;
+    // consumed by the step math (loc_05206, travel-pump territory).
+    pub(crate) travel_step_accum: u16,
+
+    // = seg001:1176 location_visibility_distance — the sietch visibility
+    // radius in map cells (static init 1): sietch map markers farther than
+    // this from the player draw the +5 distant sprite variant, and the
+    // walk/troop range checks compare against it. Raised by the dialogue-line
+    // event callback at seg000:a1ad (not ported).
+    pub(crate) location_visibility_distance: u16,
 
     // = seg001:197c _word_20E2C_zoomed_globe_longitude / seg001:197e
     // _word_20E2E_zoomed_globe_latitude — the map/globe view centre.
@@ -404,6 +518,14 @@ pub struct GameState {
     // command_menu_records.
     pub(crate) menu_npc_actions_talk_text_id: u16,
 
+    // = seg001:21fd data_021fd — the SKIP TO DESTINATION command template's
+    // flags byte (the seg001:21fc record's text-id high byte; 0x40 = greyed).
+    // DOS patches the static template in place
+    // (set_skip_to_destination_verb_flags); the flattened port keeps the
+    // template const and applies this byte when build_room_command_records
+    // copies it.
+    pub(crate) cmd_skip_to_destination_flags: u8,
+
     // = seg001:21da screen_element_stack — the z-ordered active screen-element
     // stack.
     pub(crate) screen_element_stack: Vec<ScreenElement>,
@@ -429,6 +551,14 @@ pub struct GameState {
     // always composites the cursor (DOS instead draws it during the mouse-init
     // path the port does not run).
     pub(crate) cursor_image: Option<CursorShapeId>,
+
+    // = seg001:dc58 mouse_nav_rect_ptr — the active navigation
+    // mouse hot-zone: get_mouse_cursor_image switches the cursor to the hand
+    // inside it and to the four travel arrows within the scroll bands outside
+    // its edges. DOS stores a pointer to a Rect (the map screen installs
+    // map_view_rect_template, seg000:4331); the port copies the rect. None =
+    // cleared (clear_mouse_nav_rect).
+    pub(crate) mouse_nav_rect: Option<Rect>,
 
     // = seg001:2784 _word_21C34_active_bank_id (+ the 0d844 cache table). The
     // active sprite/resource bank and its per-index loaded-sheet cache; see
@@ -471,10 +601,46 @@ pub struct GameState {
     // = seg001:35a6
     pub(crate) hnm_bytes: Option<Box<[u8]>>,
 
+    // = the resident companion loop-bridge resource (video_id + 0x61:
+    // MNT1.LOP .. PALACE.LOP, resources 0x63..0x68) DOS keeps open across the
+    // flight. At every flight-clip loop point it splices four stream records
+    // pointing into this resource's video chunks (seg000:cbb8..cc04) — the
+    // bridge frames played across the loop seam before the body resumes. The
+    // port caches the resource here and hnm_step_frame decodes one chunk per
+    // pass while hnm_lop_remaining > 0.
+    pub(crate) hnm_lop_bytes: Option<Box<[u8]>>,
+    // Which video id hnm_lop_bytes belongs to (the cache key).
+    pub(crate) hnm_lop_video_id: u16,
+    // The offset of the next bridge chunk within hnm_lop_bytes.
+    pub(crate) hnm_lop_cursor: usize,
+    // Bridge chunks still to decode (= the DOS cx = 4 splice, seg000:cbcc).
+    pub(crate) hnm_lop_remaining: u8,
+
     // = seg001:3810 music_playlist_flags — the jukebox mode. 0 = game-relative
     // (the song follows the on-screen situation, the default set at game init);
     // bit 0 = CD-style playlist, bit 1 = shuffle.
     pub(crate) music_playlist_flags: u8,
+
+    // = seg001:37fa music_cd_playlist — the working CD-playlist order: 9 song
+    // numbers + the 0xff terminator. STANDARD ORDER recopies music_cd_standard_
+    // order over it; SHUFFLE permutes it in place (music_cd_playlist_shuffle).
+    pub(crate) music_cd_playlist: [u8; 10],
+
+    // = seg001:380e music_cd_playlist_cursor — the index of the NEXT playlist
+    // entry to play (DOS keeps a pointer into the table; init = the base).
+    pub(crate) music_cd_playlist_cursor: usize,
+
+    // = seg001:dbd2 music_song_end_tick_stamp — the PIT-counter stamp of the
+    // first idle-driver sighting after a CD-playlist song ends; the CD service
+    // advances the playlist 0xc8 ticks later. 0 = unset; cleared when a song
+    // starts (seg000:adba).
+    pub(crate) music_song_end_tick_stamp: u16,
+
+    // = _unk_2CCD8_bios_timer_count_3 — rand_iterated's LCG seed, separate
+    // from rand's (0d826) and rand_masked's (0d824). DOS seeds it from the
+    // BIOS tick count during startup; the shuffle also perturbs it with the
+    // live PIT counter between draws.
+    pub(crate) rand_iterated_seed: u16,
 
     // = seg001:dbc8 settings_flags (data_0dbc8) — the mixer/settings flags word.
     // bit 0x1 = PCM enabled (check_pcm_enabled), bit 0x100 = music/MIDI enabled
@@ -487,10 +653,6 @@ pub struct GameState {
     // = seg001:dbcc data_0dbcc — the "desired song" the music scheduler plays
     // when the driver goes idle (set by update_room_music; 0 = none).
     pub(crate) music_desired_song: u8,
-    // Port-only: a forced switch is pending (the situation's song-table entry
-    // had bit 0x80 set and differs from the playing song). Mirrors the DOS
-    // immediate-switch path (loc_0adbe) without the gradual fade.
-    pub(crate) music_force_restart: bool,
 
     // Music-situation classifier inputs (= loc_0aa96).
     // = seg001:dd03 data_0dd03.
@@ -545,24 +707,70 @@ pub struct GameState {
     // cleared back to 0 by map_screen_cleanup for the plain room view.
     pub(crate) data_046eb: u8,
 
-    // = seg001:46fc data_046fc — the map screen's hover tracker state (the
-    // location-marker / travel-arrow direction cache loc_04586 maintains).
-    // Cleared on map open; the live hover tracking is not ported.
+    // = seg001:46ed _word_23B9D_current_main_view_drawing_function — the
+    // installed main-view redraw the map/globe dispatch sites call
+    // (map_refresh_main_view seg000:8853, travel_refresh_view seg000:49e6;
+    // the unported sites seg000:5d7e, 86c6). Each map-mode entry installs its
+    // own: map_screen_open (seg000:4346) -> map_view_redraw, the travel
+    // flight (travel_minimap_setup, seg000:499a) -> travel_minimap_redraw;
+    // SEE DUNE MAP (seg000:5a8f) -> ui_main_view_map_interface waits on that
+    // flow. DOS never clears it (the dispatch sites are gated on data_046eb);
+    // None = the initial 0 word.
+    pub(crate) current_main_view_drawing_function: Option<fn(&mut GameState)>,
+
+    // = seg001:46fc data_046fc — the map screen's hover state, maintained by
+    // map_mouse_hover_tracker (seg000:4586) and consumed by the LMB
+    // destination click: 0 = pointer outside the map window; a location ptr
+    // (see locations::location_ptr) = hovering that location's marker;
+    // 0xfff0+n = aligned on desert compass ray n (0 N .. 7 NW) from the
+    // player marker; 0xffff = inside the window, nothing hovered. Cleared on
+    // map open.
     pub(crate) data_046fc: u16,
 
     // = seg001:46ff
     pub(crate) available_equipment: Equipment,
 
-    // = seg001:4727 data_04727 — nonzero while an in-game travel sequence
-    // (HNM-driven map flight) is active; loc_04f0c (the game_loop's per-pass
-    // travel pump) returns immediately when this is 0. Cleared on travel
-    // arrival (seg000:4fcb).
-    pub(crate) data_04727: u8,
+    // = seg001:4726 data_04726 — the map verbs' manual heading-adjust
+    // accumulator, stepped in 0x20 (one compass point) units by TOWARDS
+    // NEAREST PLACE (seg000:5031) and drained by the verb region at
+    // seg000:41a7..41b8 (not ported); cleared by
+    // ungrey_skip_to_destination_verb.
+    pub(crate) data_04726: u8,
 
-    // = seg001:4728 data_04728 — positive once a travel destination is armed on
-    // the map screen; map_screen_cleanup then enters the travel departure
-    // (loc_049d4, not ported). Reset by loc_049ea when the map screen opens.
-    pub(crate) data_04728: i8,
+    // = seg001:4727 travel_active — nonzero while an in-game travel sequence
+    // (HNM-driven map flight) is active; travel_pump (the game_loop's per-pass
+    // hook, seg000:4f0c) returns immediately when this is 0. Set to 0xff by
+    // map_confirm_travel_and_close (frame_task_callback_04ab8); cleared on
+    // travel arrival (seg000:4fcb).
+    pub(crate) travel_active: u8,
+
+    // = seg001:4728 travel_minimap_state — the flight minimap state: 0 normal,
+    // 1 = recenter + redraw pending (set by the pump when the position leaves
+    // the minimap bounds, seg000:4f8e, and by CHANGE DESTINATION at
+    // seg000:4980), bit 0x80 = minimap hidden (toggled by loc_04aad).
+    // map_screen_cleanup re-enters the minimap view when > 0. Reset by
+    // travel_reset_trail when the map screen opens.
+    pub(crate) travel_minimap_state: i8,
+
+    // = seg000:e40c travel_trail_ring — the cs-resident travel-trail ring:
+    // (longitude, latitude) pairs up to loc_0e85c ((0xe85c - 0xe40c) / 4
+    // entries); empty entries hold the 0x800 sentinel in both words
+    // (travel_reset_trail). travel_trail_append writes at the cursor.
+    pub(crate) travel_trail_ring: [(u16, u16); TRAVEL_TRAIL_LEN],
+
+    // = seg001:149a travel_trail_cursor — the ring's write cursor (the NEXT
+    // slot travel_trail_append fills; DOS keeps a byte pointer).
+    pub(crate) travel_trail_cursor: usize,
+
+    // = seg001:4729 travel_step_tick_stamp — PIT stamp of the travel pump's
+    // last step (travel_pump steps every 0x300 ticks); zeroed by
+    // map_confirm_travel_and_close.
+    pub(crate) travel_step_tick_stamp: u16,
+
+    // = seg001:472b travel_step_counter — counts travel_advance_step calls;
+    // every 16th runs one time period of events. Zeroed by
+    // map_confirm_travel_and_close.
+    pub(crate) travel_step_counter: u16,
 
     // = seg001:473e map_ornithopter_mode — nonzero while the map screen is in
     // ornithopter (cockpit) mode: set to 1 by TAKE AN ORNITHOPTER
@@ -585,6 +793,25 @@ pub struct GameState {
     // = seg001:4747 data_04747 — the caption colour word
     // ((bg << 8) | fg, the font_draw_fg_color/font_draw_bg_color pair).
     pub(crate) map_caption_color: u16,
+
+    // = seg001:4749 map_player_marker_rect — the blinking "you are here"
+    // marker's screen bounding rect (x0 == 0 = no marker, the player is off
+    // the map window), set by map_arm_player_marker_task; the blink task
+    // restores and redraws it, and the map hover tracker
+    // (map_mouse_hover_tracker) aims its desert compass rays at its tip.
+    pub(crate) map_player_marker_rect: Rect,
+
+    // = seg001:4751 map_player_marker_phase — the "you are here" marker blink
+    // phase, bumped each map_player_marker_blink_task firing; odd = drawn.
+    pub(crate) map_player_marker_phase: u8,
+
+    // = seg001:a5c0 visible_location_markers — one entry per location visible
+    // on the map view, rebuilt by map_build_and_draw_location_markers and
+    // scanned by the marker hover hit-test (find_nearest_location_marker).
+    // DOS packs 6-byte entries [location ptr, screen x, screen y:u8,
+    // data_046eb copy:u8] with a 0-word terminator; the port stores them
+    // unpacked.
+    pub(crate) visible_location_markers: Vec<MapLocationMarker>,
 
     // = seg001:487e travel_vehicle_mode — the vehicle for the pending map
     // travel: 1 = worm (CALL A WORM, seg000:42aa), 2 = ornithopter (TAKE AN
@@ -814,6 +1041,18 @@ pub struct GameState {
     pub(crate) hnm_finished: bool,
     // = seg001:dbe7
     pub(crate) hnm_frame_counter: u16,
+    // = seg001:dbea hnm_counter_2 — frame records consumed since the clip was
+    // opened or last hit its loop point. DOS counts them as the streaming
+    // prefetcher reads them ahead (seg000:cc26/ca44); the single-buffer port
+    // counts them as they are decoded, which is the same stream position.
+    // Reset by hnm_reset_counters (seg000:ce07) and at the loop rewind
+    // (seg000:cb70, which saves it into the unported hnm_counter_3).
+    pub(crate) hnm_counter_2: u16,
+    // = seg001:dbee hnm_counter_4 — the armed loop-point frame count: when
+    // hnm_counter_2 reaches it the stream treats the position as the loop
+    // point (seg000:cb00), so hnm_switch_active_video can redirect into
+    // another clip at an exact frame. 0xffff (= the DOS -1) = disarmed.
+    pub(crate) hnm_counter_4: u16,
     // = seg001:dbfe
     pub(crate) hnm_resource_data: u16,
     // = seg001:dc00
@@ -976,6 +1215,7 @@ impl GameState {
             y_offset: 24,
             framebuffer: FrameBuffer::new(320, 200),
             framebuffer_saved: FrameBuffer::new(320, 200),
+            framebuffer_back: FrameBuffer::new(320, 200),
             palette: Palette::new(),
             palette_fade_target: Palette::new(),
             global_frame_count: 0,
@@ -1033,11 +1273,21 @@ impl GameState {
             persons_travelling_with: 0,
             persons_in_room: 0,
             persons_talking_to: 0,
+            data_0001b: 0,
             data_00023: 0,
             number_of_sietches_visited: 0,
+            number_of_rallied_troops: 0,
+            number_of_rallied_troops_for_leto_killed: 0xff,
+            data_01154: 0,
+            data_01156: 0,
+            vision_messages: Vec::new(),
+            comm_sightings: Vec::new(),
+            scene_records: crate::room_scene::SCENE_RECORDS,
+            charisma: 0,
             discovered_sietch_count: 0,
             entering_new_sietch: 0,
             game_phase: 0,
+            days_since_last_game_phase_change: 0,
             night_attack_stage: 0,
             person_marker_base: 0,
             data_000c6: 0,
@@ -1053,20 +1303,29 @@ impl GameState {
             last_location_index: 0,
             companion_1: -1,
             companion_2: -1,
+            ui_hud_companion_blink: [0, 0],
+            companion_blink_step_latch: 0,
             data_011bc: 0,
+            travel_destination_ptr: 0,
+            travel_heading: 0,
+            travel_heading_mode: 0,
             game_screen_mode_flags: 0,
             data_011ca: 0,
             data_011cb: 0,
+            travel_step_accum: 0,
+            location_visibility_distance: 1,
             zoomed_globe_longitude: 0,
             zoomed_globe_latitude: 0,
             ui_elements: UI_ELEMENTS_INIT,
             command_menu_records: Vec::new(),
             menu_npc_actions_talk_text_id: 0x90,
+            cmd_skip_to_destination_flags: 0,
             screen_element_stack: vec![ScreenElement::RoomCommandMenu],
             data_0227d: 1,
             sky_skydn_selector: 0,
             active_mouse_handlers: &ROOM_MOUSE_HANDLERS,
             cursor_image: None,
+            mouse_nav_rect: None,
             banks: Banks::new(),
             game_suspend_count: 1,
             settings_drag_target: 0,
@@ -1075,10 +1334,17 @@ impl GameState {
             settings_records: SETTINGS_RECORDS_INIT,
             cmd_args_memory: 0,
             hnm_bytes: None,
+            hnm_lop_bytes: None,
+            hnm_lop_video_id: 0,
+            hnm_lop_cursor: 0,
+            hnm_lop_remaining: 0,
             music_playlist_flags: 0,
+            music_cd_playlist: crate::music::MUSIC_CD_STANDARD_ORDER,
+            music_cd_playlist_cursor: 0,
+            music_song_end_tick_stamp: 0,
+            rand_iterated_seed: 0,
             settings_flags: 0x1 | 0x4 | 0x8 | 0x100 | 0x400 | 0x800,
             music_desired_song: 0,
-            music_force_restart: false,
             data_0dd03: 0,
             current_sky_palette: 0,
             sky_fade_countdown: 0,
@@ -1089,10 +1355,16 @@ impl GameState {
             data_046e0: 0,
             map_view_rect: Rect::default(),
             data_046eb: 0,
+            current_main_view_drawing_function: None,
             data_046fc: 0,
             available_equipment: Equipment::default(),
-            data_04727: 0,
-            data_04728: 0,
+            data_04726: 0,
+            travel_active: 0,
+            travel_minimap_state: 0,
+            travel_trail_ring: [(0x800, 0x800); TRAVEL_TRAIL_LEN],
+            travel_trail_cursor: 0,
+            travel_step_tick_stamp: 0,
+            travel_step_counter: 0,
             orni_hotspot_x: 0,
             orni_hotspot_y: 0,
             map_ornithopter_mode: 0,
@@ -1101,6 +1373,9 @@ impl GameState {
             map_caption_x: 0,
             map_caption_y: 0,
             map_caption_color: 0,
+            map_player_marker_rect: Rect::default(),
+            map_player_marker_phase: 0,
+            visible_location_markers: Vec::new(),
             travel_vehicle_mode: 0,
             orni_anim_frame: 0,
             data_04732: 0,
@@ -1143,6 +1418,8 @@ impl GameState {
             active_fb: FbId::Fb1,
             hnm_finished: false,
             hnm_frame_counter: 0,
+            hnm_counter_2: 0,
+            hnm_counter_4: 0xffff,
             hnm_resource_data: 0,
             hnm_video_id: 0,
             hnm_active_video_id: 0,
@@ -1176,6 +1453,11 @@ impl GameState {
 
     pub fn set_headless(&mut self) {
         self.headless = true;
+        // Port-only: headless runs (tests, renders) default to music off — the
+        // same cmd_args_memory bit 4 the MUSIC OFF verb sets (seg000:aeaf), so
+        // check_music_enabled gates every music path; a MUSIC ON verb can still
+        // clear it.
+        self.cmd_args_memory |= 0x10;
     }
 
     // = seg000:0000 start (the startup sequence after parse_command_line /
@@ -1315,11 +1597,12 @@ impl GameState {
             //   as if the player had already encountered them.
 
             // = seg000:d831 pending_room_screen_request == 0 -> run the
-            // pre-swap hooks. loc_0d7b7 (seg000:d7b7) hot-reloads the icones
-            // sprite bank on the 4-PIT-tick edge; loc_01b0d (seg000:1b0d)
+            // pre-swap hooks: ui_hud_companion_blink_task (seg000:d7b7, the
+            // new-companion portrait blink) and loc_01b0d (seg000:1b0d), which
             // advances post-voice game state.
             if self.pending_room_screen_request == 0 {
-                // TODO: port loc_0d7b7 (icones bank reload).
+                // = seg000:d838 call ui_hud_companion_blink_task.
+                self.ui_hud_companion_blink_task();
 
                 // = seg000:1b0d loc_01b0d -> run_events_for_current_time_period
                 // (seg000:1b23). DOS gates the call on is_voc_pcm_playing /
@@ -1341,11 +1624,12 @@ impl GameState {
                 }
             }
 
-            // = seg000:d83e
+            // = seg000:d83e — process_frame_tasks also steps the per-frame
+            // music pump (music_cd_playlist_service, seg000:d9d2). DOS's game
+            // loop does NOT call service_midi_music: its mid-ramp switch
+            // (status bit 0x40) would restart the playing song whenever a
+            // narration duck or its end-of-line volume restore is ramping.
             self.process_frame_tasks();
-
-            // = seg000:ae04 service_midi_music.
-            self.service_midi_music();
 
             // Advance the in-game clock.
             let now = self.game_ticks();
@@ -1366,11 +1650,10 @@ impl GameState {
             // = seg000:d84b call rand; mov [rand_bits], ax.
             self.rand_bits = self.rand();
 
-            // = seg000:d851 call loc_04f0c — the in-game travel pump. It
-            //   early-returns unless data_04727 != 0 && data_011ca == 0, i.e.
-            //   only while an HNM-driven map flight is active; the port has no
-            //   travel state yet so this is a guarded no-op.
-            self.tick_in_game_travel();
+            // = seg000:d851 call travel_pump — the in-game travel pump: while a
+            //   flight is active (travel_active) it drives the flight HNM and a
+            //   travel step every 0x300 ticks (map_screen.rs).
+            self.travel_pump();
 
             // = seg000:d854 if data_0dc4b != 0 take the idle-anim path
             //   (loc_0d962, seg000:d962); else the normal mouse poll +
@@ -1525,23 +1808,11 @@ impl GameState {
         }
     }
 
-    // = seg000:4f0c loc_04f0c — the in-game travel pump game_loop calls each
-    // pass. Returns immediately unless an HNM map-flight is active
-    // (data_04727 != 0) and no room swap is pending (data_011ca == 0). On the
-    // active branch DOS drives hnm_do_frame, map_func/get_map_position, the
-    // arrival-ornithopter blit and post-arrival cleanup; none of that is
-    // ported yet, so the guarded no-op here matches the steady-state
-    // behaviour (data_04727 stays 0 outside travel).
-    fn tick_in_game_travel(&mut self) {
-        // = seg000:4f0c cmp byte ptr [data_04727], 0; jz ret.
-        // = seg000:4f13 cmp byte ptr [data_011ca], 0; jnz ret.
-        if self.data_04727 != 0 && self.data_011ca == 0 {
-            // TODO: port the active-travel branch (hnm_do_frame, map_func,
-            //   loc_04b3b/4a1a/4a00, the ornithopter sprite blit, the arrival
-            //   handler at seg000:4fc3+). The arrival handler seeds
-            //   person_marker_base from rand (seg000:4fc3 call rand;
-            //   seg000:4fc6 mov [person_marker_base], al).
-        }
+    // = seg000:c085 set_backbuffer_as_frame_buffer — make the back buffer
+    // (_word_2D0E2_framebuffer_back) the active framebuffer; drawing
+    // primitives land there until set_fb1_as_active_framebuffer restores fb1.
+    pub(crate) fn set_backbuffer_as_frame_buffer(&mut self) {
+        self.active_fb = FbId::Back;
     }
 
     // = seg000:ef84..ef9b the game-clock tail of pit_timer_callback. While the
@@ -1665,6 +1936,10 @@ impl GameState {
 
     // = seg000:d9d2 process_frame_tasks.
     pub fn process_frame_tasks(&mut self) {
+        // = seg000:d9d2 call music_cd_playlist_service — step the CD-playlist
+        // music streamer before polling the task array.
+        self.music_cd_playlist_service();
+
         let now = self.game_ticks();
         let elapsed_raw = now.saturating_sub(self.last_task_tick);
         let elapsed = elapsed_raw.min(u16::MAX as u64) as u16;
@@ -1727,6 +2002,9 @@ impl GameState {
                 }
                 TaskId::MapCaption => {
                     self.tick_map_caption();
+                }
+                TaskId::MapPlayerMarker => {
+                    self.tick_map_player_marker();
                 }
             }
         }
@@ -1791,7 +2069,13 @@ impl GameState {
     // first frame into the active framebuffer. Backed by the single-buffer
     // GameState decoder (crate::hnm); `name` resolves to a video id.
     pub fn hnm_load_first_frame(&mut self, name: &str, y_offset: i16) {
-        let video_id = hnm_id_by_name(name);
+        self.hnm_load_first_frame_by_id(hnm_id_by_name(name), y_offset);
+    }
+
+    // = seg000:ca1b hnm_load_first_frame, the id form — DOS receives the video
+    // id in ax (e.g. the travel flight open at seg000:3802 passes
+    // travel_vehicle_mode directly).
+    pub fn hnm_load_first_frame_by_id(&mut self, video_id: u16, y_offset: i16) {
         self.hnm_last_frame_tick = self.game_ticks();
         self.hnm_y_offset = y_offset;
         // Reset audio-driven timing state. decode_sd_block below sets
@@ -1951,12 +2235,44 @@ impl GameState {
         true
     }
 
+    // = seg000:c8fb loc_0c8fb — foreground-play an HNM clip (DOS ax = the
+    // video id) to completion in the game area: open it into fb1, reveal the
+    // first frame through the `bp` present callback, then pump frames,
+    // presenting the game area after each advance and servicing the CD
+    // playlist. Ends with the last frame snapshotted to fb2 and the clip
+    // closed.
+    pub(crate) fn play_hnm_to_completion(&mut self, video_id: u16, bp: fn(&mut GameState)) {
+        // = c8fb call set_fb1_as_active_framebuffer.
+        self.set_fb1_as_active_framebuffer();
+        // = c8ff call hnm_load_first_frame — the in-game fb row offset is 0.
+        self.hnm_load_first_frame_by_id(video_id, 0);
+        // = c902/c905 present the game area and flush the header palette.
+        self.present_game_area();
+        self.update_screen_palette();
+        // = c909 call bp — the caller's first-frame reveal.
+        bp(self);
+        // = c90b loc_0c90b — pump to completion. DOS spins on
+        // hnm_do_frame_and_check_if_frame_advanced; the port paces on ticks.
+        while !self.hnm_is_complete() {
+            if self.hnm_do_frame() {
+                // = c910/c913 present the game area + the CD playlist service.
+                self.present_game_area();
+                self.music_cd_playlist_service();
+            }
+            self.tick_one_frame();
+        }
+        // = c91b snapshot the last frame to fb2; c91e jmp hnm_close_resource.
+        self.copy_active_framebuffer_to_framebuffer_2();
+        self.hnm_close();
+    }
+
     // The buffer `id` resolves to. = dereferencing one of the segment globals.
     pub fn fb_mut(&mut self, id: FbId) -> &mut FrameBuffer {
         match id {
             FbId::Screen => &mut self.screen,
             FbId::Fb1 => &mut self.framebuffer,
             FbId::Saved => &mut self.framebuffer_saved,
+            FbId::Back => &mut self.framebuffer_back,
         }
     }
 
@@ -2026,6 +2342,7 @@ impl GameState {
         match self.active_fb {
             FbId::Screen => self.framebuffer_saved.copy_from(&self.screen),
             FbId::Fb1 => self.framebuffer_saved.copy_from(&self.framebuffer),
+            FbId::Back => self.framebuffer_saved.copy_from(&self.framebuffer_back),
             FbId::Saved => {}
         }
     }

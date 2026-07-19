@@ -4,11 +4,11 @@
 //! intro + credits (seg000:0024 call init_game_ui). `draw_all_ui_elements`
 //! selects the ICONES bank and paints each entry of the UI-element list via
 //! `draw_ui_element`, and `ui_hud_head_draw` overlays the character
-//! portrait via the bank loader (`bank.rs`). Still outstanding: the voice-
-//! language config (check_amr_or_eng_language) and dispatch of the per-element
-//! click handlers (UiElement::func_ptr).
+//! portrait via the bank loader (`bank.rs`). The per-element click handlers
+//! dispatch through `hit_test_ui_elements` + `dispatch_ui_click` from the
+//! game loop's LMB press path (game_loop_dispatch_lmb_press).
 
-use crate::{GameState, gfx};
+use crate::{GameState, Rect, gfx, mouse::CursorShapeId};
 
 const UI_ELEMENT_CLEAR_FLAG: u16 = 0x40;
 const UI_ELEMENT_SKIP_SPRITE_FLAG: u16 = 0x20;
@@ -162,14 +162,17 @@ const NAV_PANEL_ROOM: [UiElement; NAV_PANEL_RECORD_COUNT] = [
 ];
 
 /// = seg001:1cca the alternate (ornithopter/travel) navigation panel template,
-/// used when `data_046eb` is set.
+/// used when `data_046eb` is set: the map-scroll compass. The four arrows
+/// carry flag 0x4000, so a held press auto-repeats the scroll; live records
+/// 13..17 are also the pseudo records the travel-arrow cursor shapes resolve
+/// to in hit_test_ui_elements.
 #[rustfmt::skip]
 pub(crate) const NAV_PANEL_ALT: [UiElement; NAV_PANEL_RECORD_COUNT] = [
-    ui1(266, 171, 285, 184, 0x0080, 41, 0x5b05),
-    ui1(267, 162, 284, 171, 0x4080, 37, 0x8829),
-    ui1(285, 171, 297, 184, 0x4080, 38, 0x8824),
-    ui1(267, 184, 284, 193, 0x4080, 39, 0x882e),
-    ui1(254, 171, 266, 184, 0x4080, 40, 0x881f),
+    ui2(266, 171, 285, 184, 0x0080, 41, 0x5b05, Some(GameState::ui_click_map_center)), // 12 centre
+    ui2(267, 162, 284, 171, 0x4080, 37, 0x8829, Some(GameState::ui_click_map_up)),     // 13 up
+    ui2(285, 171, 297, 184, 0x4080, 38, 0x8824, Some(GameState::ui_click_map_right)),  // 14 right
+    ui2(267, 184, 284, 193, 0x4080, 39, 0x882e, Some(GameState::ui_click_map_down)),   // 15 down
+    ui2(254, 171, 266, 184, 0x4080, 40, 0x881f, Some(GameState::ui_click_map_left)),   // 16 left
     ui2(266, 171, 284, 183, 0x0000, 53, 0x0f66, None),
 ];
 
@@ -401,8 +404,8 @@ impl GameState {
     // non-negative result shows the in-game room view, otherwise the globe/map
     // view (ui_show_globe_map_view).
     fn ui_toggle_room_view(&mut self) {
-        // = seg000:186b call clear_some_mouse_rect.
-        self.clear_some_mouse_rect();
+        // = seg000:186b call clear_mouse_nav_rect.
+        self.clear_mouse_nav_rect();
         // = seg000:186e neg room_view_toggle; jns -> room view, else map view.
         self.room_view_toggle = (self.room_view_toggle as i8).wrapping_neg() as u8;
         if (self.room_view_toggle as i8) < 0 {
@@ -493,11 +496,22 @@ impl GameState {
         self.draw_ui_elements_list(NAV_PANEL_RECORD_OFFSET, NAV_PANEL_RECORD_COUNT);
     }
 
-    // ---- Not-yet-ported callees (no-op stubs, each linked to its DOS address).
+    // = seg000:daa3 clear_mouse_nav_rect — clear the navigation mouse
+    // hot-zone (the cursor drops back to the plain arrow).
+    pub(crate) fn clear_mouse_nav_rect(&mut self) {
+        // = seg000:daa3 mov word ptr [mouse_nav_rect_ptr], 0.
+        self.mouse_nav_rect = None;
+    }
 
-    // = seg000:daa3 clear_some_mouse_rect — clear the active mouse hotspot rect.
-    // TODO: port; no-op stub.
-    pub(crate) fn clear_some_mouse_rect(&mut self) {}
+    // = seg000:daaa set_mouse_nav_rect — install a navigation mouse hot-zone:
+    // get_mouse_cursor_image shows the hand inside it and the travel arrows in
+    // the scroll bands outside its edges. DOS stores the rect's pointer (si);
+    // the port copies the rect.
+    pub(crate) fn set_mouse_nav_rect(&mut self, rect: Rect) {
+        self.mouse_nav_rect = Some(rect);
+    }
+
+    // ---- Not-yet-ported callees (no-op stubs, each linked to its DOS address).
 
     // = seg000:d2bd dismiss_stacked_overlays — before a view switch, tear down the
     // transient menus/overlays stacked over the base room menu, running each one's
@@ -570,6 +584,58 @@ impl GameState {
         self.ui_elements[22].sprite_id = self.companion_2 + 0x41;
         // = seg000:d78c cx=2; draw records 21,22 again over the frames.
         self.draw_ui_elements_list(21, 2);
+    }
+
+    // = seg000:d7b7 ui_hud_companion_blink_task — the game-loop blink step for
+    // a freshly assigned companion portrait (npc_assign_companion_slot arms
+    // ui_hud_companion_blink[slot] = 0x10): once per 64 PIT ticks, decrement
+    // each armed counter and redraw the two portraits with odd-count slots
+    // blanked — the new companion blinks 8 times over ~5 seconds.
+    pub(crate) fn ui_hud_companion_blink_task(&mut self) {
+        // = seg000:d7b7..d7c4 ax = pit counter * 4; fire only when ah — the
+        //   (ticks >> 6) & 0xff step number — differs from the latch.
+        let step = (self.game_ticks() >> 6) as u8;
+        if step == self.companion_blink_step_latch {
+            return;
+        }
+        self.companion_blink_step_latch = step;
+        // = seg000:d7c8 ax = [ui_hud_companion_blink]; or ax,ax; jz ret.
+        if self.ui_hud_companion_blink == [0, 0] {
+            return;
+        }
+        // = seg000:d7cf bx = the ui_hud_companion_1/2 pair; push bx — the real
+        //   pair is restored after the masked redraw.
+        let saved = (self.companion_1, self.companion_2);
+        // = seg000:d7d4..d7e9 per slot: a nonzero counter is decremented, and
+        //   an odd result blanks that slot (0xff) for this redraw.
+        for slot in 0..2 {
+            if self.ui_hud_companion_blink[slot] != 0 {
+                self.ui_hud_companion_blink[slot] -= 1;
+                if self.ui_hud_companion_blink[slot] & 1 != 0 {
+                    if slot == 0 {
+                        self.companion_1 = -1;
+                    } else {
+                        self.companion_2 = -1;
+                    }
+                }
+            }
+        }
+        // = seg000:d7f4 cmp ui_hud_elements[1].sprite_id,0; jnz loc_0d810 —
+        //   redraw only while the left HUD hand is at rest (the panel-side
+        //   doors open); mid-fold the counters tick without drawing.
+        if self.ui_elements[1].sprite_id == 0 {
+            // = seg000:d7fc..d80d bracket: push the active bank +
+            //   load_icones_sprites (draw_ui_elements_list opens the ICONES
+            //   sheet itself in the port), restore the cursor backdrop, redraw
+            //   the portraits, redraw the mouse, pop the bank.
+            self.call_restore_cursor();
+            self.ui_hud_draw_companions();
+            self.draw_mouse();
+            // DOS draws straight to VGA; the port presents the changed frame.
+            self.send_frame_to_display();
+        }
+        // = seg000:d810 pop the real companion pair back.
+        (self.companion_1, self.companion_2) = saved;
     }
 
     // = seg000:d795 ui_set_and_draw_frieze_sides — apply a frieze template to the
@@ -681,7 +747,7 @@ impl GameState {
     }
 
     // = seg000:1ad1 get_ingame_day_in_ax — the in-game day index, (game_time+3)>>4.
-    fn get_ingame_day_in_ax(&self) -> u16 {
+    pub(crate) fn get_ingame_day_in_ax(&self) -> u16 {
         (self.game_time + 3) >> 4
     }
 
@@ -723,12 +789,23 @@ impl GameState {
     // two stacked verb slots belongs to the upper one, matching the hover test
     // in verb_strip_hovered_slot (loc_0d5c7).
     //
-    // The special-cursor branch _dc4b (set_di_to_ui_elements_ptr_based_on_cursor_image,
-    // seg000:d6fd) that picks a specific record for the room-edge travel-arrow
-    // cursors is skipped: only the Arrow cursor is ported (get_mouse_cursor_image
-    // always returns Arrow), which already takes this normal hit-test path.
-    // TODO: port the _dc4b travel-arrow-cursor branch once those cursors select.
     pub(crate) fn hit_test_ui_elements(&self) -> Option<usize> {
+        // = seg000:d6b7 call set_di_to_ui_elements_ptr_based_on_cursor_image;
+        //   d6ba jz loc_0d6fd — when the live cursor image is one of the four
+        //   travel arrows (seg000:d694 compares cursor_image_ptr against the
+        //   four shapes, stepping di one 0eh record per miss, and returns ZF +
+        //   stc on a match) the hit-test unconditionally resolves to the
+        //   matching nav-panel arrow record: 13 up, 14 right, 15 down, 16
+        //   left — the same live records the NAV_PANEL_ALT install fills. A
+        //   click anywhere with an arrow cursor thus scrolls the map, and the
+        //   held-button auto-repeat re-hits the same pseudo record.
+        match self.cursor_image {
+            Some(CursorShapeId::Up) => return Some(13),
+            Some(CursorShapeId::Right) => return Some(14),
+            Some(CursorShapeId::Down) => return Some(15),
+            Some(CursorShapeId::Left) => return Some(16),
+            _ => {}
+        }
         let x = self.mouse_pos_x;
         let y = self.mouse_pos_y;
         // = seg000:d6bc cx = [1ae4h] = the element count (24); di = ui_elements[0].
@@ -806,14 +883,19 @@ impl GameState {
             Some(i) => self.ui_element_press(i),
             None => {
                 // = seg000:d909 push si; d90a call callback_main_ui_element_21_22;
-                //   d90d pop si — the game-area / person click. It self-guards on
-                //   the room command menu being active, so it is a no-op while the
-                //   mixer (or any other overlay) is up.
+                //   d90d pop si — the game-area / person click, with si (the
+                //   active record) saved around it. It self-guards on the room
+                //   command menu being active, so it is a no-op while the mixer
+                //   (or any other overlay) is up.
+                let handlers = self.active_mouse_handlers;
                 self.callback_main_ui_element_21_22();
                 // = seg000:d90e mov al,[mouse_button_state_prev]; d911 call [si+2]
-                //   — the active record's press handler, run only on a miss.
-                let lmb = self.active_mouse_handlers.lmb;
-                lmb(self);
+                //   — the SAVED record's press handler, run only on a miss. The
+                //   push/pop si matters: the orni game-area click swaps in the
+                //   map screen's record inside the callback, and dispatching the
+                //   live record here would re-register the same press as a map
+                //   destination click.
+                (handlers.lmb)(self);
             }
         }
     }
