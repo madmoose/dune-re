@@ -21,6 +21,11 @@ pub struct RoomRenderer {
     sprite_sheet: Option<SpriteSheet>,
     character_sheet: Option<SpriteSheet>,
     position_markers: Vec<i8>,
+    // = character_id_to_sprite (seg000:9123) resolved per person id by the
+    // caller (GameState::character_sprite_map): the PERS.HSQ sprite-pair
+    // index for each drawable id. Empty = identity (ids 0..0xd map to
+    // themselves; the walk/facing persons 0x0e.. need game state).
+    character_sprite_map: Vec<u16>,
     y_offset: i16,
 }
 
@@ -53,6 +58,7 @@ impl RoomRenderer {
             sprite_sheet: None,
             character_sheet: None,
             position_markers: Vec::new(),
+            character_sprite_map: Vec::new(),
             y_offset: 0,
         }
     }
@@ -77,6 +83,12 @@ impl RoomRenderer {
     /// back-to-front as the room is drawn.
     pub fn set_position_markers(&mut self, markers: Vec<i8>) {
         self.position_markers = markers;
+    }
+
+    /// = character_id_to_sprite (seg000:9123) — the per-id PERS sprite-pair
+    /// map (see the field note).
+    pub fn set_character_sprite_map(&mut self, map: Vec<u16>) {
+        self.character_sprite_map = map;
     }
 
     /// Set the destination y-offset added to every drawn part. Mirrors the
@@ -246,7 +258,13 @@ impl RoomRenderer {
             return Ok(());
         };
 
-        let sprite = id as u16;
+        // = seg000:3d58 call character_id_to_sprite — resolved by the caller's
+        // sprite map; identity (id < 0x0d) when none was provided.
+        let sprite = self
+            .character_sprite_map
+            .get(id as usize)
+            .copied()
+            .unwrap_or(id as u16);
 
         for sprite_id in [sprite * 2, sprite * 2 + 1] {
             let Some(sprite) = sheet.get_sprite(sprite_id) else {

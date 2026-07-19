@@ -411,6 +411,42 @@ pub struct GameState {
     // = seg001:08aa troops.
     pub(crate) troops: [Troop; 68],
 
+    // = seg001:4756 fremen1_troop_ptr — the troop behind the room's Fremen-1
+    // person (room_persons[14], the rallied-troop chief), as a troops index.
+    pub(crate) fremen1_troop: Option<usize>,
+
+    // = seg001:4758 fremen2_troop_ptrs — up to 8 troops behind the room's
+    // Fremen-2 person (room_persons[15]), filled round-robin (data_0476a) by
+    // the room-entry classification.
+    pub(crate) fremen2_troops: [Option<usize>; 8],
+
+    // = seg001:4768 harkonnen_captain_troop_ptr — the troop behind the room's
+    // Harkonnen captain (room_persons[12]).
+    pub(crate) harkonnen_captain_troop: Option<usize>,
+
+    // = seg001:476c selected_fremen2_index — which fremen2_troop_ptrs slot
+    // the active Fremen-2 conversation (or room draw) refers to.
+    pub(crate) selected_fremen2: u8,
+
+    // = seg001:00ed/00ee for_condit_related_to_overpowering_Harkonnen_captain
+    // — seeded by the captain classification (0xff when surrendered, else the
+    // troop's motivation; the pair word), consumed by the OVERPOWER THE
+    // PRISONER flow (seg000:9584).
+    pub(crate) data_000ed: u8,
+    pub(crate) data_000ee: u16,
+
+    // = seg001 vegetation_started_on_Dune — the ecology-victory flag the
+    // motivation modifier reads; the event that sets it is not yet ported.
+    pub(crate) vegetation_started_on_dune: u8,
+
+    // = the for_condit troop staging block (seg001:002c..004b), filled by
+    // troop_prepare_troop_data_for_condit.
+    pub(crate) troop_condit: crate::troops::TroopCondit,
+
+    // = the for_condit location staging block (seg001:004d..005b), filled by
+    // prepare_location_data_for_condit.
+    pub(crate) location_condit: crate::troops::LocationCondit,
+
     // = seg001:114e current_location_ptr — the locations[] index of the
     // location the player is currently inside. Recomputed on every scene open
     // (loc_008f0, the port's draw_location_room) and set on walk-in arrival
@@ -1299,6 +1335,15 @@ impl GameState {
             data_000fc: 1,
             locations: LOCATIONS,
             troops: TROOPS,
+            fremen1_troop: None,
+            fremen2_troops: [None; 8],
+            harkonnen_captain_troop: None,
+            selected_fremen2: 0,
+            data_000ed: 0,
+            data_000ee: 0,
+            vegetation_started_on_dune: 0,
+            troop_condit: Default::default(),
+            location_condit: Default::default(),
             current_location_index: 0xffff,
             last_location_index: 0,
             companion_1: -1,
@@ -1554,6 +1599,10 @@ impl GameState {
         // = seg000:018f..01c6 cache each location's map cell (also marks the
         // cell's map byte with the location bit 0x40).
         self.init_location_map_offsets();
+
+        // = seg000:01c8..01df link every troop to its location (offset, map
+        // cell, voice bank).
+        self.init_troop_locations();
 
         self.build_voc_base_table();
     }

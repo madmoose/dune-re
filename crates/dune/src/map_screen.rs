@@ -3099,7 +3099,7 @@ mod tests {
 
         // TOWARDS NEAREST PLACE re-arms a homing travel at the nearest
         // non-hidden location.
-        game.dispatch_command_handler(0x50c4);
+        game.dispatch_command_handler(0x50c4, 0);
         let nearest = location_index_from_ptr(game.travel_destination_ptr);
         assert!(
             game.locations[nearest].status & 0x80 == 0,
@@ -3114,7 +3114,7 @@ mod tests {
 
         // CHANGE DESTINATION reopens the map view over the flight with the
         // Cancel menu; travel_minimap_state 1 re-enters the flight on close.
-        game.dispatch_command_handler(0x497a);
+        game.dispatch_command_handler(0x497a, 0);
         assert_eq!(game.data_046eb, 1, "the map view did not reopen");
         assert_eq!(game.travel_minimap_state, 1);
         assert!(game.mouse_nav_rect.is_some(), "map hot-zone not installed");
@@ -3138,7 +3138,7 @@ mod tests {
 
         // BACK TO STARTING POINT aims home at the departure location.
         let start = game.last_location_index;
-        game.dispatch_command_handler(0x50a5);
+        game.dispatch_command_handler(0x50a5, 0);
         assert_eq!(game.travel_destination_ptr, location_ptr(start as u16));
         assert_eq!(game.travel_heading_mode, 0);
         assert_eq!(game.data_011cb, 0);
@@ -3147,7 +3147,7 @@ mod tests {
         // disarms, the mode flags clear and the start location's room is
         // re-entered with the orni parked back on its pad.
         let pad_ornis_before = game.locations[start].equipment.ornithopters;
-        game.dispatch_command_handler(0x4ffb);
+        game.dispatch_command_handler(0x4ffb, 0);
         assert_eq!(game.travel_active, 0, "the skip did not land the travel");
         assert_eq!(game.travel_destination_ptr, 0);
         assert_eq!(game.game_screen_mode_flags, 0);

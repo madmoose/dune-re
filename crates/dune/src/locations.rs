@@ -16,7 +16,7 @@ pub(crate) fn location_index_from_ptr(ptr: u16) -> usize {
     ((ptr - LOCATION_PTR_BASE) / LOCATION_RECORD_SIZE) as usize
 }
 
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Clone, Copy)]
 pub struct Equipment {
     pub harvesters: u8,
     pub ornithopters: u8,
@@ -27,6 +27,7 @@ pub struct Equipment {
     pub bulbs: u8,
 }
 
+#[derive(Clone, Copy)]
 pub struct Location {
     pub first_name: u8,
     pub last_name: u8,

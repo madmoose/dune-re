@@ -578,14 +578,40 @@ impl GameState {
         // = seg000:95fc si = [data_047a2]; 9600 cl = [si+0eh] (person_index).
         let speaker = self.current_lip_sync_resource_id as usize;
         let pi = self.room_persons[speaker].person_index;
-        // = seg000:9603 cmp cl,0eh; jz loc_0961b — a troop-leader speaker
-        //   rallies the troop instead (troop_rally_troop_066ce, the verb-record
-        //   rebuild, the troops[2] motivation bonus, then setup_npc_dialogue_
-        //   menu on Fremen 2 and the panel fold). TODO: port with the troop
-        //   system; its dialogue entry (trampolines 9373/937e) is also unported,
-        //   so this branch cannot be reached yet.
+        // = seg000:9603 cmp cl,0eh; jz loc_0961b — the Fremen-chief speaker
+        //   rallies the troop instead of joining as a companion.
         if pi == 0x0e {
-            println!("menu_callback_choice_come_with_me: troop path (loc_0961b) unported");
+            // = seg000:961b si = [fremen1_troop_ptr]; push si.
+            let Some(ti) = self.fremen1_troop else {
+                return;
+            };
+            // = seg000:9620 call troop_rally_troop_066ce.
+            self.troop_rally_troop(ti);
+            // = seg000:9623/9626 rebuild the room verbs and person records
+            //   (loc_03093 re-runs the classification: the rallied chief,
+            //   occupation bit 7 now clear, reappears as a Fremen-2 troop).
+            self.build_room_command_records();
+            self.rebuild_persons_in_room_records();
+            // = seg000:962a..9634 the prospector troop (troops[2]) gains a
+            //   +0x18 motivation bonus, mirrored into the staged ds:36.
+            if ti == 2 {
+                self.troops[2].motivation = self.troops[2].motivation.wrapping_add(0x18);
+                self.troop_condit.motivation_modifier =
+                    self.troop_condit.motivation_modifier.wrapping_add(0x18);
+            }
+            // = seg000:9639..9649 selected_fremen2_index = the rallied
+            //   troop's fremen2_troop_ptrs slot (the repnz scasw; 7 when
+            //   absent).
+            self.selected_fremen2 = self
+                .fremen2_troops
+                .iter()
+                .position(|&t| t == Some(ti))
+                .unwrap_or(7) as u8;
+            // = seg000:964c/964f si = room_persons[15]; call setup_npc_
+            //   dialogue_menu — the dialogue verb panel re-targets Fremen 2.
+            self.setup_npc_dialogue_menu(15);
+            // = seg000:9652 jmp play_pending_panel_fold.
+            self.play_pending_panel_fold();
             return;
         }
         // = seg000:9608 or byte [si+0fh], 40h — the travelling flag

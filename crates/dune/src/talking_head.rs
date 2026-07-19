@@ -335,19 +335,12 @@ impl GameState {
             )
         } else if id >= 0x0e {
             // = char_to_sprite_walk_facing (seg000:913b): id 0x0e..0x10 (the
-            // FRM1..FRM3 generic Fremen heads). DOS derives BOTH the returned
-            // sprite index and data_047d0 from the person's walk/facing state
-            // (data_04756 / data_04758 / data_0476c, gated on game_phase 0xc8) —
-            // loc_09155 divides the facing byte by 3 and folds it into the index.
-            //
-            // INCOMPLETE: not ported. That walk-state data model doesn't exist in
-            // the port, so neither the sprite index nor the facing can be computed
-            // faithfully. Marked todo!() so this reverse-engineering gap surfaces
-            // loudly instead of silently returning (id, facing 0).
-            todo!(
-                "character_id_to_sprite id 0x0e..0x10 (FRM1..FRM3): sprite index + \
-                 data_047d0 from walk/facing state — needs the walk-state data model"
-            )
+            // FRM1..FRM3 generic Fremen heads). The sprite index and facing
+            // derive from the classified troop's id — fremen1_troop_ptr for
+            // person 0x0e, fremen2_troop_ptrs[selected_fremen2_index]
+            // otherwise (troops.rs walk_facing_sprite).
+            let (sprite, facing) = self.walk_facing_sprite(id);
+            (sprite as usize, facing)
         } else {
             // = id < 0x0d named characters: head index = id, facing 0 (random idle).
             (id as usize, 0)

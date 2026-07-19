@@ -534,14 +534,16 @@ impl GameState {
         if rec.text_id & CMD_GREY != 0 {
             return;
         }
-        // = seg000:d451 jmp bx — dispatch the verb handler.
-        self.dispatch_command_handler(rec.handler);
+        // = seg000:d451 jmp bx — dispatch the verb handler (DOS leaves the
+        // record's text id in ax; the Fremen-2 trampoline reads it).
+        self.dispatch_command_handler(rec.handler, rec.text_id);
     }
 
     // The `jmp bx` target: resolve the verb handler offset to its ported routine.
     // A match (not an `if`) because this is the verb-dispatch table; the TODO arm
-    // below is where the remaining handlers slot in.
-    pub(crate) fn dispatch_command_handler(&mut self, handler: u16) {
+    // below is where the remaining handlers slot in. `text_id` is DOS's ax at
+    // the jmp — the dispatched record's text id (0 when the caller has none).
+    pub(crate) fn dispatch_command_handler(&mut self, handler: u16, text_id: u16) {
         match handler {
             // = seg000:92f2..9371 the per-character dialogue trampolines, each a
             // `mov al,N; jmp common_code_for_ui_dialogue_related_functions`
@@ -562,17 +564,68 @@ impl GameState {
             0x9324 => self.common_dialogue(0xa), // Feyd-Rautha Harkonnen
             0x9329 => self.common_dialogue(0xb), // Emperor Shaddam IV
             0x936f => self.common_dialogue(0xd), // Smugglers
-            // = seg000:932e/9373/937e — HarkonnenCaptains / Fremen1 / Fremen2
-            // trampolines gate on troop data (troop_prepare_troop_data_for_condit)
-            // before reaching the shared tail. TODO: port once the troop system
-            // lands; fall through to the no-op below for now.
+            // = seg000:932e ui_dialogue_related_to_HarkonnenCaptains — stage
+            // the captain's troop CONDIT block, then the shared tail with
+            // al = 0x0c. The middle (9335..9367: the map-position recompute,
+            // troop field_c seed, subst_id_09) is not yet ported.
+            0x932e => {
+                if let Some(ti) = self.harkonnen_captain_troop {
+                    self.troop_prepare_troop_data_for_condit(ti);
+                }
+                self.common_dialogue(0x0c);
+            }
+            // = seg000:9373 ui_dialogue_related_to_Fremen1 — the Fremen chief:
+            // si = [fremen1_troop_ptr]; stage its CONDIT block; al = 0x0e.
+            0x9373 => {
+                if let Some(ti) = self.fremen1_troop {
+                    self.troop_prepare_troop_data_for_condit(ti);
+                }
+                self.common_dialogue(0x0e);
+            }
+            // = seg000:937e ui_dialogue_related_to_Fremen2 — al = text_id -
+            // 0x87 selects the fremen2_troop_ptrs slot (>= 9 folds to 0; 8 is
+            // the prospector's slot via data_0476b); the phase-0x64 gate and
+            // the CONDIT staging run on the selected troop; al = 0x0f.
+            0x937e => {
+                // = seg000:937e sub ax,87h; 9381..9392 the clamps.
+                let mut idx = text_id.wrapping_sub(0x87) as u8;
+                if idx >= 9 {
+                    idx = 0;
+                }
+                if idx == 8 {
+                    idx = self.data_0476b.wrapping_sub(1);
+                    if (idx as i8) < 0 {
+                        idx = 0;
+                    }
+                }
+                // = seg000:9394 selected_fremen2_index = al; 9397..93a0 si =
+                //   fremen2_troop_ptrs[al].
+                self.selected_fremen2 = idx;
+                if let Some(ti) = self.fremen2_troops[(idx & 7) as usize] {
+                    // = seg000:93a2 call game_phase_set_to_64_if_conditions_met.
+                    self.game_phase_set_to_64_if_conditions_met(ti);
+                    // = seg000:93a5 call troop_prepare_troop_data_for_condit.
+                    self.troop_prepare_troop_data_for_condit(ti);
+                }
+                self.common_dialogue(0x0f);
+            }
             0x9472 => self.menu_callback_choice_talk_to_me(),
             0x95e2 => self.menu_callback_choice_come_with_me(),
             0x9533 => self.menu_callback_choice_stay_here(),
             // = seg000:95c1 menu_callback_choice_come_with_me_troop — the
-            // troop-leader (person 0x0e) variant with the charisma check; the
-            // troop dialogue entry (trampolines 9373/937e) is unported, so its
-            // verb never appears. TODO: port with the troop system.
+            // Fremen chief's COME WITH ME verb: the charisma check records
+            // its outcome in pending_room_action (0 pass / 2 fail) for the
+            // topic-5 record's conditions, then falls into
+            // menu_callback_choice_come_with_me.
+            0x95c1 => {
+                // = seg000:95c1 ax = 0x64; cmp [data_000ac],3e8h; jb pass —
+                //   ds:ac is not modelled (reads 0), so the check passes as
+                //   in the early game. The fail branch ((100 - charisma)/4 >
+                //   the staged ds:36 motivation modifier) sets 2. TODO:
+                //   model data_000ac to enable the failure path.
+                self.data_00023 = 0;
+                self.menu_callback_choice_come_with_me();
+            }
             // 0x9ed5 => self.menu_callback_choice_what(),
 
             // = seg000:0ea6 loc_00ea6 — LOOK AT MIRROR (palace bedroom, slot 1 /
@@ -944,7 +997,7 @@ impl GameState {
             // = seg000:9234 al=0x10; mul cl; si = room_persons + cl*0x10;
             // jmp word ptr [si+4] — dispatch the matched person's handler.
             let handler = self.room_persons[person_id as usize].handler;
-            self.dispatch_command_handler(handler);
+            self.dispatch_command_handler(handler, 0);
         }
     }
 
@@ -1055,7 +1108,7 @@ impl GameState {
     // by the room type (location_appearance low byte 0x80 = special room),
     // location_and_room, game phase, ornithopter count, smuggler flag, and
     // time-of-day. The DOS `xor ax,ax; stosw` terminator is the empty Vec tail.
-    fn build_room_command_records(&mut self) {
+    pub(crate) fn build_room_command_records(&mut self) {
         // = seg000:2efd di=1f0fh; xor al,al; stosb — the empty header skip byte.
         let mut recs: Vec<CommandMenuRecord> = Vec::new();
         // = seg000:2f03 bx = data_00006 (location_appearance); dx = location_and_room.
@@ -1674,9 +1727,17 @@ impl GameState {
     // DOS routine advances di past the existing list before appending; the port
     // keeps command_menu_records as a Vec and appends.
     //
-    fn build_persons_in_room_records(&mut self) {
+    pub(crate) fn build_persons_in_room_records(&mut self) {
         // = seg000:3090 call reset_scene_lip_sync_state.
         self.reset_scene_lip_sync_state();
+        // = seg000:3093 loc_03093 — the entry the come-with-me troop path
+        // re-enters without the lip-sync reset.
+        self.rebuild_persons_in_room_records();
+    }
+
+    // = seg000:3093 loc_03093 — the lip-sync-preserving half of
+    // build_persons_in_room_records.
+    pub(crate) fn rebuild_persons_in_room_records(&mut self) {
         // = seg000:3093 call init_room_persons.
         self.init_room_persons();
         // = seg000:3096..30a0 find the terminator of the existing command list.
@@ -1919,17 +1980,13 @@ impl GameState {
         for i in 12..16 {
             self.room_persons[i].location_appearance = 0x7f80;
         }
-        // = seg000:3140..3147 bx = location_appearance; cmp bl,0x80; jnz loc_0316d —
-        //   the classification chain runs only for "special" rooms whose
-        //   location_appearance low byte is 0x80 (the palace 0x180 and most others).
-        if (self.location_appearance & 0xff) as u8 == 0x80 {
-            // = seg000:3149..316a the classification chain on current_location_ptr.
-            // TODO: port once current_location_ptr, loc_06603/loc_06906 iteration,
-            //   loc_0316e (room-person bucketing), loc_0331e and loc_02318
-            //   land. Until then the dynamic room_persons[12..16] stay at
-            //   0x7f80 and the verb panel reflects only the static-table
-            //   matches.
-        }
+        // = seg000:3140..316a the classification chain, run only for "special"
+        //   rooms whose location_appearance low byte is 0x80 (the palace 0x180
+        //   and the sietch/village/fortress rooms): the location's troops fill
+        //   the dynamic room_persons[12..16] slots (Fremen chief / Fremen
+        //   troops / Harkonnen captain), the smuggler den reveals SMUG, and
+        //   the location's CONDIT block is staged (troops.rs).
+        self.init_room_persons_special();
     }
 
     // = seg000:2ffb rebuild_and_draw_room_nav_panel — flip the four compass
@@ -2972,7 +3029,7 @@ mod tests {
         // condition 32 `(byte[1b] == 0) |. (rand_bits & 4)` holds on the first
         // ask (ds:1b is still 0), and the line carries the stay-here event 2,
         // which drops the interrupt gate — Leto does not join.
-        game.dispatch_command_handler(0x95e2);
+        game.dispatch_command_handler(0x95e2, 0);
         let phrase = game.current_subtitle_id;
         assert!(
             (0x800..=0xbff).contains(&phrase),
@@ -2993,7 +3050,7 @@ mod tests {
         // her and ask.
         game.common_dialogue(0x1);
         game.game_phase = 6;
-        game.dispatch_command_handler(0x95e2);
+        game.dispatch_command_handler(0x95e2, 0);
         assert_eq!(game.dialogue_interrupt_gate, 0xff, "gate must stay armed");
         assert_ne!(game.room_persons[1].flags & 0x40, 0, "flags bit 0x40");
         assert_ne!(game.persons_travelling_with & 2, 0, "travelling bit");
@@ -3042,7 +3099,7 @@ mod tests {
         // Click STAY HERE: the travelling state is cleared again.
         // time_dismissed stays 0: the debounce reads time_joined (= game_time),
         // and game_time has not advanced 2 ticks since.
-        game.dispatch_command_handler(0x9533);
+        game.dispatch_command_handler(0x9533, 0);
         assert_eq!(game.room_persons[1].flags & 0x40, 0, "flag cleared");
         assert_eq!(
             game.persons_travelling_with & 2,
@@ -3250,6 +3307,90 @@ mod tests {
         // location_slot high byte -> 0xff) never ran — DOS behaves the same:
         // only the final phase's callback fires.
         assert_eq!(game.room_persons[0].location_appearance, 0x180);
+    }
+
+    // Entering a sietch runs the room-entry troop classification
+    // (init_room_persons -> callback_troop_location_0316e): the location's
+    // rallied-troop chief (occupation bit 7) fills the dynamic Fremen-1 slot
+    // (room_persons[14]) for room 2, appears in the verb panel, and is
+    // talkable (ui_dialogue_related_to_Fremen1, seg000:9373). His COME WITH
+    // ME verb (seg000:95c1) rallies the troop (troop_rally_troop_066ce).
+    // Asset-gated:
+    //   cargo test -p dune --lib -- --ignored fremen_chief
+    #[test]
+    #[ignore = "needs assets/DUNE.DAT"]
+    fn fremen_chief_present_in_sietch_and_rallies() {
+        let dat_path = concat!(env!("CARGO_MANIFEST_DIR"), "/../../assets/DUNE.DAT");
+        let Ok(dat_file) = DatFile::open(dat_path) else {
+            eprintln!("skipping: {dat_path} not found");
+            return;
+        };
+        let (tx, _rx) = mpsc::sync_channel(64);
+        let mut game = GameState::new(dat_file, tx);
+        game.set_headless();
+        game.start(true);
+
+        // init_troop_locations linked Carthag-Tuek (locations[12], troop
+        // chain head 1 = troops[0], occupation 0x80) at startup.
+        assert_eq!(
+            game.troops[0].offset_of_location,
+            crate::locations::location_ptr(12),
+            "troops[0] linked to Carthag-Tuek"
+        );
+
+        // Arrive in Carthag-Tuek's audience room (room 2; the appearance
+        // in-room form is (12+1)<<8 | 0x80 = 0x0d80 — the same codes Gurney's
+        // static room_persons entry carries).
+        game.location_and_room = 0x0002;
+        game.location_appearance = 0x0d80;
+        game.build_room_command_records();
+        game.build_persons_in_room_records();
+
+        // The classification put the chief's troop behind Fremen 1: his
+        // dynamic entry matches the room, so he stands in it and gets a verb.
+        assert_eq!(game.fremen1_troop, Some(0), "chief troop classified");
+        assert_eq!(game.room_persons[14].location_and_room, 0x0002);
+        assert_eq!(game.room_persons[14].location_appearance, 0x0d80);
+        assert_ne!(game.persons_in_room & (1 << 14), 0, "chief in the room");
+        assert_ne!(game.persons_in_room & (1 << 4), 0, "Gurney in the room");
+        let chief = game
+            .command_menu_records
+            .iter()
+            .find(|r| r.text_id == 0x78 + 14)
+            .expect("the chief's &Person verb");
+        assert_eq!(chief.handler, 0x9373, "ui_dialogue_related_to_Fremen1");
+        // The room draw resolves him through char_to_sprite_walk_facing:
+        // troop_id 1 -> PERS pair 0x0e + 1 % 3 = 0x0f.
+        assert_eq!(game.character_sprite_map()[14], 0x0f);
+
+        // Talk to him: the trampoline stages his troop CONDIT block and runs
+        // the common dialogue entry with the FRM head.
+        game.dispatch_command_handler(0x9373, chief.text_id);
+        assert_eq!(game.current_lip_sync_resource_id, 0x0e);
+        assert_eq!(game.troop_condit.troop_id, 1, "troop block staged");
+        assert_eq!(game.location_condit.spice_density, 0x54, "location staged");
+        assert!(game.talking_head.is_some(), "the chief's talking head");
+        // The dialogue verb panel's dynamic slot is the chief's COME WITH ME
+        // (person 0x0e: text 0x96, handler seg000:95c1).
+        assert_eq!(game.command_menu_records[1].text_id, 0x96);
+        assert_eq!(game.command_menu_records[1].handler, 0x95c1);
+
+        // COME WITH ME: the charisma check passes and the troop is rallied —
+        // occupation becomes "rallied, awaiting orders" (2), the rally count
+        // and charisma rise, and the re-classified chief now stands behind
+        // Fremen 2 (his entry matches the room again).
+        let charisma_before = game.charisma;
+        game.dispatch_command_handler(0x95c1, 0x96);
+        assert_eq!(game.number_of_rallied_troops, 1, "troop rallied");
+        assert_eq!(game.troops[0].occupation, 2, "rallied, awaiting orders");
+        assert_eq!(game.charisma, charisma_before + 1);
+        assert_eq!(game.troops[0].time_period_of_ralliement, game.game_time);
+        assert_eq!(game.room_persons[15].location_and_room, 0x0002);
+        assert_eq!(game.fremen2_troops[0], Some(0), "reclassified as Fremen 2");
+        assert_eq!(
+            game.locations[12].discoverable_at_phase, 2,
+            "the sietch gains a discovery phase"
+        );
     }
 
     // The TALK TO ME verb text tracks the voice (mark_talk_to_me_verb_talking /

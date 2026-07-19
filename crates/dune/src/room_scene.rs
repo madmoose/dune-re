@@ -1113,6 +1113,8 @@ impl GameState {
         renderer.set_room(room.clone());
         renderer.set_sprite_sheet(sprite_sheet);
         renderer.set_position_markers(markers);
+        // = seg000:3d58 call character_id_to_sprite (per drawn person).
+        renderer.set_character_sprite_map(self.character_sprite_map());
         if let Some(character_sheet) = character_sheet {
             renderer.set_character_sheet(character_sheet);
         }
@@ -1143,6 +1145,21 @@ impl GameState {
                 }
             }
         }
+    }
+
+    // = seg000:9123 character_id_to_sprite, as sal_draw_character (seg000:3d58)
+    // consumes it: the PERS.HSQ sprite-pair index per drawable person id.
+    // Named characters (and SMUG) keep their id; the walk/facing persons
+    // 0x0e..0x10 resolve through their classified troop (walk_facing_sprite);
+    // anything higher is the player figure (char_to_sprite_player, 0x2d).
+    pub(crate) fn character_sprite_map(&self) -> Vec<u16> {
+        (0..0x17u8)
+            .map(|id| match id {
+                0x0e..=0x10 => self.walk_facing_sprite(id).0 as u16,
+                0x11.. => 0x2d,
+                _ => id as u16,
+            })
+            .collect()
     }
 
     // = seg000:388d set_sky_palette — pick the sky sub-palette for the current

@@ -15,6 +15,28 @@ fn condit_var_name(addr: u16) -> Option<(&'static str, bool)> {
         0x12 => ("persons_in_room", true),
         0x1b => ("stay_here_come_with_me_count", false),
         // 0x23 => ("data_00023", false),
+        0x2c => ("troop.offset_of_location", true),
+        0x2e => ("troop.troop_id", false),
+        0x2f => ("troop.occupation_low", false),
+        0x30 => ("troop.occupation", false),
+        0x31 => ("troop.dissatisfaction_low", false),
+        0x32 => ("troop.bitfield_10", true),
+        0x34 => ("troop.dissatisfaction", true),
+        0x36 => ("troop.motivation_modifier", false),
+        0x37 => ("troop.skill_in_occupation", false),
+        0x38 => ("troop.spice_skill", false),
+        0x39 => ("troop.army_skill", false),
+        0x3a => ("troop.ecology_skill", false),
+        0x3b => ("troop.equipment", false),
+        0x3c => ("troop.population", false),
+        0x40 => ("troop.days_since_ralliement", false),
+        0x42 => ("troop.time_periods_since_ralliement", true),
+        0x48 => ("troop.harvest_estimate", true),
+        0x4d => ("location.appearance", false),
+        0x4e => ("location.area_and_name", true),
+        0x51 => ("location.status", false),
+        0x52 => ("location.spice_density", false),
+        0x54 => ("location.water", false),
         0x25 => ("number_of_sietches_visited", false),
         0x26 => ("entering_new_sietch", false),
         0x28 => ("number_of_rallied_troops", false),
@@ -49,6 +71,30 @@ impl GameState {
             // maintains.
             0x25 => self.number_of_sietches_visited,
             0x26 => self.entering_new_sietch,
+            // = seg001:002e..0041 the staged troop block (troop_prepare_troop_
+            // data_for_condit, troops.rs).
+            0x2e => self.troop_condit.troop_id,
+            0x2f => self.troop_condit.occupation_low,
+            0x30 => self.troop_condit.occupation,
+            0x31 => self.troop_condit.dissatisfaction_low,
+            0x36 => self.troop_condit.motivation_modifier,
+            0x37 => self.troop_condit.skill_in_occupation,
+            0x38 => self.troop_condit.spice_skill,
+            0x39 => self.troop_condit.army_skill,
+            0x3a => self.troop_condit.ecology_skill,
+            0x3b => self.troop_condit.equipment,
+            0x3c => self.troop_condit.population,
+            0x40 => self.troop_condit.days_since_ralliement,
+            0x41 => self.troop_condit.game_days_since_ralliement,
+            // = seg001:004d..005b the staged location block (prepare_location_
+            // data_for_condit, troops.rs).
+            0x4d => self.location_condit.appearance,
+            0x50 => self.location_condit.worm_event_likelihood,
+            0x51 => self.location_condit.status,
+            0x52 => self.location_condit.spice_density,
+            0x53 => self.location_condit.unused_equipment,
+            0x54 => self.location_condit.water,
+            0x55..=0x5b => self.location_condit.equipment[(addr - 0x55) as usize],
             // = seg001:0028 number_of_rallied_troops — conditions 4/5/7 gate
             // early-game Leto lines on it. The troop-rally system that bumps
             // it is not yet ported.
@@ -79,6 +125,17 @@ impl GameState {
             0x0e => self.persons_met,
             0x10 => self.persons_travelling_with,
             0x12 => self.persons_in_room,
+            // = seg001:002c..004a the staged troop block words.
+            0x2c => self.troop_condit.offset_of_location,
+            0x32 => self.troop_condit.bitfield_10,
+            0x34 => self.troop_condit.dissatisfaction_and_speech,
+            0x42 => self.troop_condit.time_periods_since_ralliement,
+            0x44 => self.troop_condit.field_c,
+            0x46 => self.troop_condit.field_e,
+            0x48 => self.troop_condit.ds_48,
+            0x4a => self.troop_condit.ds_4a,
+            // = seg001:004e the staged location area+name word.
+            0x4e => self.location_condit.area_and_name,
             _ => return None,
         })
     }
