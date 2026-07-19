@@ -2644,48 +2644,75 @@ impl GameState {
     // font directly so it does not disturb the font pen/colour state the game
     // relies on.
     pub(crate) fn draw_debug_overlay(&self, fb: &mut FrameBuffer) {
+        use crate::font::TextSize;
+
         let day = self.get_ingame_day_in_ax();
-        let lines = [
-            format!("PHASE   {:#04x} ({})", self.game_phase, self.game_phase),
-            format!(
-                "LOC     {:#06x} room {}",
-                self.location_and_room, self.current_room
+        // (label, value) rows. The value column is placed at a fixed pixel x
+        // past the widest label, so the values line up even though the glyph
+        // font is proportional (space-padding would not align them).
+        let rows: [(&str, String); 9] = [
+            (
+                "PHASE",
+                format!("{:#04x} ({})", self.game_phase, self.game_phase),
             ),
-            format!("APPEAR  {:#06x}", self.location_appearance),
-            format!("DAY     {}  time {:#06x}", day, self.game_time),
-            format!("CHARISMA {}", self.charisma),
-            format!("RALLIED {}", self.number_of_rallied_troops),
-            format!("MET     {:#06x}", self.persons_met),
-            format!("TRAVEL  {:#06x}", self.persons_travelling_with),
-            format!("IN ROOM {:#06x}", self.persons_in_room),
+            (
+                "LOC",
+                format!("{:#06x} room {}", self.location_and_room, self.current_room),
+            ),
+            ("APPEAR", format!("{:#06x}", self.location_appearance)),
+            ("DAY", format!("{}  time {:#06x}", day, self.game_time)),
+            ("CHARISMA", format!("{}", self.charisma)),
+            ("RALLIED", format!("{}", self.number_of_rallied_troops)),
+            ("MET", format!("{:#06x}", self.persons_met)),
+            ("TRAVEL", format!("{:#06x}", self.persons_travelling_with)),
+            ("IN ROOM", format!("{:#06x}", self.persons_in_room)),
         ];
 
-        // Background panel: a dark box behind the text for legibility.
-        let line_h = 8u16;
         let pad = 2u16;
-        let box_w = 150u16;
-        let box_h = pad * 2 + line_h * lines.len() as u16;
+        let line_h = 8u16;
+        // fg 0x0f (bright), bg 0 (transparent).
+        let color = 0x000f;
+
+        // The small font's pixel width of a string (the sum of glyph advances,
+        // = what draw_glyph steps by).
+        let width = |s: &str| -> u16 {
+            s.bytes()
+                .map(|b| {
+                    let c = if b & 0x80 != 0 { 0x40 } else { b };
+                    self.font.glyph_width(c, TextSize::Small) as u16
+                })
+                .sum()
+        };
+        // Value column: past the widest label + a gap.
+        let value_x = pad + rows.iter().map(|(l, _)| width(l)).max().unwrap_or(0) + 6;
+        let box_w = rows
+            .iter()
+            .map(|(_, v)| value_x + width(v))
+            .max()
+            .unwrap_or(0)
+            + pad;
+        let box_h = pad * 2 + line_h * rows.len() as u16;
+
+        // Background panel: a dithered dark box behind the text for legibility.
         for y in 0..box_h.min(fb.h()) {
             for x in 0..box_w.min(fb.w()) {
-                // Dim the underlying pixel toward black (palette 0) so the box
-                // reads as a translucent panel without needing alpha.
                 if (x + y) & 1 == 0 {
                     fb.set(x, y, 0);
                 }
             }
         }
 
-        // = the small (7-row) glyph font, drawn straight through Font::draw_
-        //   glyph: fg 0x0f (bright), bg 0 (transparent).
-        let color = 0x000f;
-        for (i, line) in lines.iter().enumerate() {
-            let mut x = pad;
+        for (i, (label, value)) in rows.iter().enumerate() {
             let y = pad + i as u16 * line_h;
-            for &b in line.as_bytes() {
+            let mut x = pad;
+            for &b in label.as_bytes() {
                 let c = if b & 0x80 != 0 { 0x40 } else { b };
-                x += self
-                    .font
-                    .draw_glyph(fb, x, y, c, crate::font::TextSize::Small, color);
+                x += self.font.draw_glyph(fb, x, y, c, TextSize::Small, color);
+            }
+            let mut x = value_x;
+            for &b in value.as_bytes() {
+                let c = if b & 0x80 != 0 { 0x40 } else { b };
+                x += self.font.draw_glyph(fb, x, y, c, TextSize::Small, color);
             }
         }
     }
