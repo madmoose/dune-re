@@ -51,6 +51,52 @@ const HEAD_SMUG: usize = 0x0d;
 // `mov al, 2dh`); the portrait resolves to PAUL.HSQ.
 const HEAD_PAUL: usize = 0x2d;
 
+// = seg001:22a8 talking_head_balloon_x_table — per-head speech-balloon x0,
+// indexed by the head sprite index. setup_lip_sync_data_from_sprite_sheet
+// copies the byte into the x0 word of all three balloon descriptors
+// (seg000:91d4) when the talking head changes.
+const TALKING_HEAD_BALLOON_X: [u8; 17] = [
+    0x60, 0x5a, 0x74, 0x60, 0x64, 0x68, 0x7e, 0x68, 0x6a, 0x70, 0x7c, 0x60, 0x50, 0x50, 0x72, 0x74,
+    0x5a,
+];
+
+// = the DOS `mov al, talking_head_balloon_x_table[si]` (seg000:91ce) with
+// HEAD_PAUL's out-of-table index 0x2d: the byte it reads at seg001:22d5 is
+// 0x62, inside unrelated string data past the table.
+fn balloon_x_for_head(head: usize) -> i16 {
+    if head == HEAD_PAUL {
+        0x62
+    } else {
+        TALKING_HEAD_BALLOON_X.get(head).map_or(0x50, |&x| x as i16)
+    }
+}
+
+// = seg001:27fa data_027fa — the per-head mouth-box rect table (x0, y0, x1,
+// y1; 8 bytes per head), indexed by the head sprite index. loc_0a727 stores
+// the head's entry pointer in [data_0dc28] when a voice loads; the speech
+// stamp clips to it (seg000:9df8..9e0f) and the idle diff clamps its redraw
+// box above it while the voice plays (seg000:9c90..9ca4). Each rect tightly
+// bounds the head's speech mouth sprites, in head-element-relative coords.
+const TALKING_HEAD_MOUTH_BOX: [(i16, i16, i16, i16); 17] = [
+    (0x42, 0x37, 0x63, 0x56), // LETO
+    (0x2f, 0x54, 0x69, 0x72), // JESS
+    (0x3f, 0x59, 0x8c, 0x88), // HAWA
+    (0x44, 0x0d, 0x65, 0x45), // IDAH
+    (0x28, 0x50, 0x68, 0x70), // GURN
+    (0x38, 0x47, 0x72, 0x76), // STIL
+    (0x26, 0x52, 0x6d, 0x98), // KYNE
+    (0x48, 0x4b, 0x72, 0x65), // CHAN
+    (0x30, 0x48, 0x65, 0x6a), // HARA
+    (0x44, 0x09, 0x71, 0x24), // BARO
+    (0x52, 0x5b, 0x7e, 0x86), // FEYD
+    (0x42, 0x3d, 0x78, 0x66), // EMPR
+    (0x38, 0x0d, 0x54, 0x2b), // HARK
+    (0x2c, 0x33, 0x56, 0x53), // SMUG
+    (0x44, 0x61, 0x77, 0x8f), // FRM1
+    (0x5b, 0x3b, 0x89, 0x60), // FRM2
+    (0x48, 0x36, 0x64, 0x59), // FRM3
+];
+
 // = lip_sync_frame_task (seg000:a7c2) advance cadence. The per-frame time is
 // `_word_21D32_audio_time_to_play_28224_samples` (the measured time to play the
 // 28224-sample FREQ.HSQ calibration clip) scaled by the fixed-point math
@@ -366,6 +412,11 @@ impl GameState {
     pub fn setup_talking_head(&mut self, lip_sync_resource_id: u8, dx: i16) {
         // = character_id_to_sprite (seg000:9123) + open_talking_head_resource.
         let (head, facing) = self.character_id_to_sprite(lip_sync_resource_id);
+        // = seg000:91ce..91da — patch the x0 of the three balloon descriptors
+        // (seg001:2224/222c/2234) with this head's balloon x. DOS does it only
+        // on a head change; the value is head-determined, so setting it every
+        // setup is equivalent.
+        self.balloon_x = balloon_x_for_head(head);
         let name = Self::head_name(head);
         let file = format!("{name}.HSQ");
 
@@ -478,20 +529,23 @@ impl GameState {
     //
     // The task runs continuously until the next stage calls remove_all_frame_tasks.
     pub(crate) fn tick_talking_head_idle(&mut self) {
-        // Yield while speaking; read the current animation's length (for the
-        // in-window frame advance below). The settled resting animation was
-        // chosen by idle_select_calm_animation (loc_09a7b) — animation `facing-1`
+        // Read the current animation's length (for the in-window frame advance
+        // below). The settled resting animation was chosen by
+        // idle_select_calm_animation (loc_09a7b) — animation `facing-1`
         // for the player, animation 4/5 for the named idle heads — so its length
         // is read from head.anim, not a fixed index.
+        //
+        // The task keeps running while a voice line plays: DOS's callback
+        // (seg000:99da..99e6) gates only on data_047d1 bits 0x80/0x10, never on
+        // is_voc_pcm_playing. idle_settle_for_voice set the settled bit at
+        // voice start, so during speech the calm windows (blinks, the nod
+        // frames whose face sprite dips behind the collar) keep animating,
+        // interleaved with the voc task's mouth stamps.
         let (settled, calm_len) = {
             let Some(head) = self.talking_head.as_ref() else {
                 self.remove_frame_task(crate::TaskId::TalkingHeadIdle);
                 return;
             };
-            if head.speaking {
-                // Speech in progress — the voc task owns the frame; idle yields.
-                return;
-            }
             let calm_len = head
                 .lipsync
                 .animations
@@ -720,8 +774,23 @@ impl GameState {
                 let len = head.voc_lipsync.len() as u64;
                 let idx = (played / SAMPLES_PER_LIP_FRAME).min(len - 1) as usize;
                 let mouth = head.voc_lipsync[idx];
-                // = the last animation is the lip-id table; mouth value v
-                // selects frame v ([047d0]==0 path → si = lip_ids + mouth*2).
+                // = seg000:9e12..9e31 the lip-frame select: si = lip_ids +
+                // frame*2. The last animation is the lip-id table; with
+                // facing 0 (the 9e1c `js`) frame = the mouth value. A
+                // non-zero facing banks the table per styling variant —
+                // frame = mouth + (facing-1)*4 (9e27..9e2b), four mouth
+                // frames per variant each drawn with that variant's
+                // hair/eyebrows/beard (FRM1..FRM3 chiefs, Paul's age
+                // variants). The SMUG head (talking_head_id 0dh,
+                // 9e1e..9e25) adds one more per variant — a stride of 5.
+                let mut frame = mouth as usize;
+                if head.facing != 0 {
+                    let variant = (head.facing - 1) as usize;
+                    if head.talking_head_id == 0x0d {
+                        frame += variant;
+                    }
+                    frame += variant * 4;
+                }
                 let lip_anim = head.lipsync.animations.len().saturating_sub(1);
                 let last_frame = head
                     .lipsync
@@ -729,7 +798,7 @@ impl GameState {
                     .get(lip_anim)
                     .map(|a| a.frames.len().saturating_sub(1))
                     .unwrap_or(0);
-                (lip_anim, (mouth as usize).min(last_frame), mouth, false)
+                (lip_anim, frame.min(last_frame), mouth, false)
             }
         };
 
@@ -743,12 +812,12 @@ impl GameState {
             // which tick_talking_head_idle models.
             if let Some(head) = self.talking_head.as_mut() {
                 head.mouth = 0;
-                // Port mechanism (not a DOS step): speech draws each mouth via a
-                // full head-rect composite (composite_head_layers) without keeping
-                // prev_images, so drop it to force one clean full redraw when the
-                // idle resumes; otherwise its incremental diff vs the stale
-                // pre-speech frame can leave the last speech mouth on screen.
-                head.prev_images.clear();
+                // prev_images is the idle task's diff state (= DOS [239F0])
+                // and the mouth stamps never touch it — the idle keeps
+                // running through the voice and owns the face; nothing to
+                // reset or redraw here. The last stamped mouth stays on
+                // screen until an idle calm-window redraw covers its box,
+                // exactly as in DOS.
             }
             self.lip_sync_stop();
             return;
@@ -764,10 +833,17 @@ impl GameState {
         };
 
         if changed {
-            // Speech lip-id frames carry only the mouth; draw a neutral base
-            // face (idle animation 0, frame 0) underneath so the head stays
-            // whole, then the speech mouth on top.
-            let rect = self.composite_head_layers(&[(0, 0), (lip_anim, frame)]);
+            // = seg000:9e33..9e45 — stamp the lip-id frame's sprite list over
+            // the live fb1 (setup_non_lip_sync_data_structure +
+            // draw_talking_head_at_si), clipped to the head's MOUTH BOX
+            // (9df8..9e0f) — no backdrop restore. Each lip group bundles the
+            // torso/collar sprite under the mouth sprite; the clip confines
+            // that collar redraw to the mouth box, where it erases the
+            // previous stamp's beard overhang without ever repainting the
+            // wings over the ears. The rest of the face stays owned by the
+            // still-running idle task.
+            let clip = self.mouth_clip_rect();
+            let rect = self.draw_talking_head_frame(lip_anim, frame, clip);
             // = the seg000:9e48..9e54 draw tail (loc_0908c -> restore_mouse_if_
             // rect_intersects -> present_screen_rect (c4f0)
             // at_si -> draw_mouse_cursor_if_needed) — the same shared present
@@ -806,9 +882,20 @@ impl GameState {
         self.midi_restore_music_volume();
     }
 
-    // Composite a single (anim, frame) over the backdrop. Returns the head rect.
+    // = the loc_09bb1 first-draw branch (seg000:9bbc): restore the clean
+    // backdrop inside the whole head rect (copy_rect_fb2_to_fb1, seg000:9be6)
+    // and draw one (anim, frame) over it. Returns the head clip rect.
     fn composite_head_frame(&mut self, anim: usize, frame_idx: usize) -> Rect {
-        self.composite_head_layers(&[(anim, frame_idx)])
+        if self.talking_head.is_none() {
+            return Rect::default();
+        }
+        let clip = self.head_clip_rect();
+        // = seg000:c446 copy_rect_fb2_to_fb1 — restore the clean backdrop
+        // ONLY inside the head rect, not the whole framebuffer. Pixels outside
+        // (e.g. intro2's narration subtitle strip at y >= 153) are owned by
+        // other draws and must be left intact.
+        gfx::vga_copy_rect(&mut self.framebuffer, &self.framebuffer_saved, clip);
+        self.draw_talking_head_frame(anim, frame_idx, clip)
     }
 
     // = seg000:9bac loc_09bac (re-render the head, reached from
@@ -836,71 +923,86 @@ impl GameState {
         }
     }
 
-    // = seg000:9d2d draw_talking_head_at_si.
-    // Composite one talking-head pose over the room backdrop, drawing the given
-    // (anim, frame) layers in order. Restores the room from fb2 (the saved clean
-    // scene, = copy_rect_fb2_to_fb1), then draws every image group of each layer
-    // at (image.x + rect.x0, image.y + rect.y0) with the gfx y-offset applied
-    // (mirroring the DOS blit's fb_base_ofs). = the seg000:9d2d
-    // draw_talking_head_at_si image-group blit loop.
-    //
-    // Each image group is clipped to the head rect (x0,y0,x1,y1): DOS draws
-    // every group through j_vga_blit_clipped with the clip rect at [0d834h],
-    // which is seeded from the head rect [1bf0h] (seg000:9bbc). Without the clip
-    // a sprite that overruns its box — e.g. Kynes' hair or Stilgar's hood —
-    // bleeds across the rest of the scene.
-    //
-    // Idle frames bundle the whole face (base + eyes + mouth), so a single
-    // layer suffices. The speech lip-id frames carry *only* the mouth — DOS
-    // keeps the rest of the face on screen via incremental redraw — so speech
-    // passes a neutral base layer first, then the mouth layer on top.
-    // Returns the head clip rect it composited into (in absolute framebuffer
-    // coordinates), so callers can push just that rect to the visible screen.
-    fn composite_head_layers(&mut self, layers: &[(usize, usize)]) -> Rect {
-        if self.talking_head.is_none() {
-            return Rect::default();
-        }
+    // = the [0d834h] / [1bf0h] head clip rect, in absolute framebuffer
+    // coordinates (y shifted by fb_base_ofs to match the draw positions).
+    fn head_clip_rect(&self) -> Rect {
         let head = self.talking_head.as_ref().unwrap();
-
         let yoff = self.y_offset as i16;
         let (x0, y0, x1, y1) = head.rect;
-        // = the [0d834h] / [1bf0h] head clip rect, in absolute framebuffer
-        // coordinates (y shifted by fb_base_ofs to match the draw positions).
-        let clip = Rect {
+        Rect {
             x0,
             y0: y0 + yoff,
             x1,
             y1: y1 + yoff,
+        }
+    }
+
+    // = seg000:9df8..9e0f — the speech stamp's clip: the head's mouth-box
+    // rect ([data_0dc28]) shifted by the head-element origin (DOS adds
+    // ui_hud_elements[19].x0/y0; the port's head.rect stands in for the
+    // element). Falls back to the head rect for an out-of-table head (Paul,
+    // 0x2d — he never voices a line).
+    fn mouth_clip_rect(&self) -> Rect {
+        let head = self.talking_head.as_ref().unwrap();
+        let Some(&(mx0, my0, mx1, my1)) = TALKING_HEAD_MOUTH_BOX.get(head.talking_head_id as usize)
+        else {
+            return self.head_clip_rect();
         };
-        // = seg000:c446 copy_rect_fb2_to_fb1 — restore the clean backdrop
-        // ONLY inside the head rect, not the whole framebuffer. Pixels outside
-        // (e.g. intro2's narration subtitle strip at y >= 153) are owned by
-        // other draws and must be left intact.
-        gfx::vga_copy_rect(&mut self.framebuffer, &self.framebuffer_saved, clip);
+        let yoff = self.y_offset as i16;
+        let (x0, y0, _, _) = head.rect;
+        Rect {
+            x0: mx0 + x0,
+            y0: my0 + y0 + yoff,
+            x1: mx1 + x0,
+            y1: my1 + y0 + yoff,
+        }
+    }
+
+    // = seg000:9d2d draw_talking_head_at_si.
+    // Draw one (anim, frame)'s image groups over the LIVE fb1 — no backdrop
+    // restore; restoring first is the caller's business (loc_09bb1 / the
+    // composite above). Every image blits at (image.x + rect.x0, image.y +
+    // rect.y0) with the gfx y-offset applied (mirroring the DOS blit's
+    // fb_base_ofs), in image-group order — within a group the base/torso
+    // sprite is listed first, so face parts stack over the collar exactly as
+    // authored.
+    //
+    // Every image is clipped to `clip` (= the DOS clip rect at [0d834h] /
+    // _unk_2CCE4 the caller seeded): the head rect for a full composite
+    // (seg000:9bbc), the mouth box for a speech stamp (seg000:9df8). Without
+    // the clip a sprite that overruns its box — e.g. Kynes' hair, Stilgar's
+    // hood, or the collar sprite bundled into every speech lip group —
+    // bleeds outside its region.
+    //
+    // Returns `clip` (in absolute framebuffer coordinates), so callers can
+    // push just that rect to the visible screen.
+    fn draw_talking_head_frame(&mut self, anim: usize, frame_idx: usize, clip: Rect) -> Rect {
+        if self.talking_head.is_none() {
+            return Rect::default();
+        }
+        let head = self.talking_head.as_ref().unwrap();
+        let (x0, y0) = (head.rect.0, head.rect.1);
+        let yoff = self.y_offset as i16;
         let lipsync = &head.lipsync;
         let sheet = &head.sheet;
 
-        for &(anim, frame_idx) in layers {
-            let Some(animation) = lipsync.animations.get(anim) else {
+        let Some(animation) = lipsync.animations.get(anim) else {
+            return clip;
+        };
+        let Some(frame) = animation.frames.get(frame_idx) else {
+            return clip;
+        };
+        for &group_idx in &frame.image_groups {
+            let Some(group) = lipsync.image_groups.get(group_idx as usize) else {
                 continue;
             };
-            let Some(frame) = animation.frames.get(frame_idx) else {
-                continue;
-            };
-            for &group_idx in &frame.image_groups {
-                let Some(group) = lipsync.image_groups.get(group_idx as usize) else {
-                    continue;
-                };
-                for image in group {
-                    // = seg000:9d2d: sprite index is id-1; position is image
-                    // (x,y) + rect origin, + the framebuffer base row; clipped
-                    // to the head rect via j_vga_blit_clipped.
-                    if let Some(sprite) = sheet.get_sprite(image.id as u16 - 1) {
-                        let _ = sprite_blitter(sprite, &mut self.framebuffer)
-                            .at(image.x as i16 + x0, image.y as i16 + y0 + yoff)
-                            .clip_rect(clip)
-                            .draw();
-                    }
+            for image in group {
+                // = seg000:9d2d: sprite index is id-1.
+                if let Some(sprite) = sheet.get_sprite(image.id as u16 - 1) {
+                    let _ = sprite_blitter(sprite, &mut self.framebuffer)
+                        .at(image.x as i16 + x0, image.y as i16 + y0 + yoff)
+                        .clip_rect(clip)
+                        .draw();
                 }
             }
         }
@@ -973,6 +1075,30 @@ impl GameState {
             y0 = y0.min(top);
             x1 = x1.max(left + sprite.width() as i16);
             y1 = y1.max(top + sprite.height() as i16);
+        }
+
+        // = seg000:9c80..9ca4 — while the voice plays (is_voc_pcm_playing),
+        // the diff box may not reach into the mouth box: its bottom clamps to
+        // the mouth box's top, so an idle blink/nod redraw can never wipe the
+        // stamped mouth. A box left entirely inside the mouth region
+        // collapses (y1 <= y0 -> the 9cbf x0 = 13fh sentinel) and the redraw
+        // is skipped. BARO (9) and HARK (0x0c) are exempt (9c88/9c8c) — their
+        // table boxes sit near the top of the head and would collapse every
+        // redraw. (DOS compares the element-relative table y0 directly
+        // against the absolute box, keeping its off-by-origin slack; the
+        // port adds only yoff. The data_047e1 0x80/0x81 vision branches at
+        // 9c79/9ca6 are not modelled.)
+        if head.speaking && !matches!(head.lip_sync_resource_id, 9 | 0x0c) {
+            if let Some(&(_, my0, _, _)) = TALKING_HEAD_MOUTH_BOX.get(head.talking_head_id as usize)
+            {
+                let mouth_top = my0 + yoff;
+                if mouth_top < y1 {
+                    y1 = mouth_top;
+                    if mouth_top <= y0 {
+                        x0 = 0x13f;
+                    }
+                }
+            }
         }
 
         // = seg000:9bcf/9a05 `cmp [2CCE4],13fh; jz` — x0 never moved, so no image

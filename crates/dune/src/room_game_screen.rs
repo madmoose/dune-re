@@ -3014,18 +3014,23 @@ mod tests {
         // Regression: when the voice finishes (lip_sync_stop) the voc task stops
         // and the head reverts to idle — mouth 0, not speaking. DOS does NOT force
         // a settle here; the idle finishes its lively animation and settles via the
-        // countdown (see leto_idle_settles_to_calm_after_first_animation). The port
-        // also drops prev_images so the resumed idle redraws cleanly. Force "done".
+        // countdown (see leto_idle_settles_to_calm_after_first_animation). The
+        // prev-frame diff list survives untouched (= DOS [239F0], which
+        // set_lipsync_data_to_al never updates), so the resumed idle diffs
+        // calm-vs-calm and leaves the last speech frame on screen instead of
+        // re-compositing — a full redraw here would pop the face-part z-order
+        // (collar vs ear/chin) at every line boundary. Force "done".
         let head = game.talking_head.as_mut().unwrap();
-        head.prev_images = vec![(1, 0, 0)]; // a stale previous frame
+        let pre_speech_flatten = vec![(1, 0, 0)];
+        head.prev_images = pre_speech_flatten.clone();
         head.voc_total_samples = 0; // makes the next voc tick report "done"
         game.tick_talking_head_voc();
         let head = game.talking_head.as_ref().unwrap();
         assert!(!head.speaking, "voice should have stopped");
         assert_eq!(head.mouth, 0, "mouth should revert to closed (0)");
-        assert!(
-            head.prev_images.is_empty(),
-            "prev_images must be dropped on voc end so the resumed idle redraws cleanly"
+        assert_eq!(
+            head.prev_images, pre_speech_flatten,
+            "the diff list survives the voice end (= DOS [239F0]) so the idle does not recomposite"
         );
     }
 
@@ -3619,6 +3624,57 @@ mod tests {
             game.locations[12].discoverable_at_phase, 2,
             "the sietch gains a discovery phase"
         );
+    }
+
+    // The Carthag-Timin chief (troops[2], troop_id 3) carries styling
+    // variant 2: walk_facing_sprite (seg000:913b) gives sprite FRM1 and
+    // facing 3/3 % 15 + 1 = 2, so his idle plays animation facing-1 = 1 and
+    // his speech frames come from the variant-banked lip-id animation at
+    // mouth + (facing-1)*4 (set_lipsync_data_to_al, seg000:9e12..9e31) —
+    // four single mouth-region sprites per variant, drawn in that variant's
+    // beard styling. FRM1's bank is 15 variants x 4 = 60 frames. Asset-gated:
+    //   cargo test -p dune -- --ignored timin_chief
+    #[test]
+    #[ignore = "needs assets/DUNE.DAT"]
+    fn timin_chief_speech_uses_variant_banked_lip_frames() {
+        let dat_path = concat!(env!("CARGO_MANIFEST_DIR"), "/../../assets/DUNE.DAT");
+        let Ok(dat_file) = DatFile::open(dat_path) else {
+            eprintln!("skipping: {dat_path} not found");
+            return;
+        };
+        let (tx, _rx) = mpsc::sync_channel(64);
+        let mut game = GameState::new(dat_file, tx);
+        game.set_headless();
+        game.start(true);
+
+        // Arrive in Carthag-Timin's audience room (room 2; locations[11],
+        // in-room appearance form (11+1)<<8 | 0x80 = 0x0c80).
+        game.location_and_room = 0x0002;
+        game.location_appearance = 0x0c80;
+        game.build_room_command_records();
+        game.build_persons_in_room_records();
+        assert_eq!(game.fremen1_troop, Some(2), "chief troop classified");
+
+        // Talk to him: FRM1 with the variant-2 expression.
+        let chief = game
+            .command_menu_records
+            .iter()
+            .find(|r| r.text_id == 0x78 + 14)
+            .expect("the chief's &Person verb");
+        game.dispatch_command_handler(0x9373, chief.text_id);
+        let head = game
+            .talking_head
+            .as_ref()
+            .expect("the chief's talking head");
+        assert_eq!(head.talking_head_id, 0x0e, "FRM1");
+        assert_eq!(head.facing, 2, "styling variant 2");
+
+        // The lip-id animation (the sheet's last) is banked per variant:
+        // FRM1 serves 15 variants (walk_facing_sprite modulus 0x0f), four
+        // mouth frames each; the chief's are frames 4..7.
+        let lip_anim = head.lipsync.animations.len() - 1;
+        let lip_frames = head.lipsync.animations[lip_anim].frames.len();
+        assert_eq!(lip_frames, 60, "FRM1 lip bank = 15 variants x 4 mouths");
     }
 
     // The dialogue text engine (show_voice_subtitle seg000:88af ->
