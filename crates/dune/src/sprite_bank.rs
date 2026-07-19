@@ -1,6 +1,6 @@
 #![allow(unused)]
 
-use crate::{FbId, GameState, SpriteSheet, draw_sprite_from_sheet};
+use crate::{FbId, GameState, SpriteSheet, draw_sprite_from_sheet, sprite_blitter};
 
 pub const ICONES: i16 = 0x00;
 pub const FRESK: i16 = 0x01;
@@ -435,6 +435,37 @@ impl GameState {
             FbId::Back => &mut self.framebuffer_back,
         };
         let _ = draw_sprite_from_sheet(sheet, sprite_id, x, physical_y, fb);
+    }
+
+    // = seg000:c370 blit_repeated_x — tile the active bank sprite across
+    // `rect` (absolute framebuffer coordinates) in fb1, clamping the tiles to
+    // the rect so nothing spills past its edges. DOS blits the sprite once
+    // then copy-rects it right/down with the trailing tile clamped to the
+    // remaining width/height (the seg000:c3c7 loop); the port draws each tile
+    // clipped to the rect, which lands the same pixels.
+    pub(crate) fn blit_repeated_x(&mut self, sprite_id: u16, rect: crate::Rect) {
+        let slot = self.banks.active_bank_id as usize;
+        // Hold &self.banks.cache and &mut self.framebuffer at once (disjoint
+        // fields), like draw_active_bank_sprite.
+        let Some(Some(sheet)) = self.banks.cache.get(slot) else {
+            return;
+        };
+        let Some(sprite) = sheet.get_sprite(sprite_id) else {
+            return;
+        };
+        let (sw, sh) = (sprite.width().max(1) as i16, sprite.height().max(1) as i16);
+        let fb = &mut self.framebuffer;
+        let mut y = rect.y0;
+        while y < rect.y1 {
+            let mut x = rect.x0;
+            while x < rect.x1 {
+                // clip_rect clamps each tile to the balloon rect so the
+                // trailing tiles do not spill past its right/bottom edge.
+                let _ = sprite_blitter(sprite, fb).at(x, y).clip_rect(rect).draw();
+                x += sw;
+            }
+            y += sh;
+        }
     }
 
     // = seg000:c2f2 open_resource_and_draw_sprite0.

@@ -947,6 +947,39 @@ pub struct GameState {
     // entries; other dialogue verbs flip it to 0x20.
     pub(crate) data_047c2: u8,
 
+    // = _dword_23C60_PHRASE_BIN + _byte_23C2E_current_phrase_bin_resource_id —
+    // the resident PHRASE bank (load_PHRASExx_HSQ) and its resource id
+    // (0 = none loaded).
+    pub(crate) phrase_bin: Vec<u8>,
+    pub(crate) current_phrase_bin_id: u8,
+
+    // = seg001:11eb string_subst_id_table — the COMMAND/PHRASE string ids the
+    // inline name placeholders 0x80..0x8f expand to (entries 1..2 alias the
+    // command-menu origin in DOS; the port keeps the menu origin separate).
+    pub(crate) string_subst_id_table: [u16; 16],
+
+    // = seg001:4784/4786/4788/478a subtitle_pad_left/right/top/bottom — the
+    // text insets inside the subtitle/bubble rect, staged per context
+    // (prepare_dialogue_presentation, subtitle_setup_layout).
+    pub(crate) subtitle_pad_left: u16,
+    pub(crate) subtitle_pad_right: u16,
+    pub(crate) subtitle_pad_top: u16,
+    pub(crate) subtitle_pad_bottom: u16,
+
+    // = seg001:4799 subtitle_layout_flags (data_04799) — bit 0 justify, bit 1
+    // centre-line, bits 2..3 the vertical placement.
+    pub(crate) subtitle_layout_flags: u8,
+
+    // = seg001:47c4 current_bubble_layout_ptr + ui_hud_elements[18] + the
+    // RESOURCE_GLOBDATA save-under — the live subtitle/bubble overlay
+    // subtitle_restore_prior takes down.
+    pub(crate) subtitle_bubble: Option<crate::subtitle::SubtitleBubble>,
+
+    // = seg001:47e0 data_047e0 — the voiced-line random variant index
+    // (format_interpolated_string's rand & 3 tail); its reader (the voc
+    // suffix pick) is not yet ported.
+    pub(crate) data_047e0: u8,
+
     // = seg001:477c dialogue_current_record_ptr — byte offset of the sentence
     // entry the present walk started at (seg000:9f9e); load_PHRASExx_HSQ
     // (seg000:d00f) compares it against dialogue_phrase12_first_record_ptr (a
@@ -1439,6 +1472,21 @@ impl GameState {
             dialogue_topic_index: 0,
             data_047c2: 0,
             dialogue_current_record_ptr: 0,
+            phrase_bin: Vec::new(),
+            current_phrase_bin_id: 0,
+            // = the seg001:11eb statics: identity COMMAND ids, except 0x8b
+            // (0x108 "Paul Atreides"; the met-Stilgar callback rewrites it to
+            // 0x109 "Paul Muad'Dib").
+            string_subst_id_table: [
+                1, 1, 2, 3, 4, 5, 6, 7, 8, 9, 0x0a, 0x108, 0x0c, 0x0d, 0x0e, 0x0f,
+            ],
+            subtitle_pad_left: 0,
+            subtitle_pad_right: 0,
+            subtitle_pad_top: 0,
+            subtitle_pad_bottom: 0,
+            subtitle_layout_flags: 9,
+            subtitle_bubble: None,
+            data_047e0: 0,
             dialogue_line_word0: 0,
             dialogue_text_continuation_ptr: 0,
             dialogue_end_request: 0,

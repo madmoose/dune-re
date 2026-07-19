@@ -140,7 +140,7 @@ impl GameState {
         })
     }
 
-    fn condit_ds_read(&self, addr: u16, word: bool) -> u16 {
+    pub(crate) fn condit_ds_read(&self, addr: u16, word: bool) -> u16 {
         let value = if word {
             self.condit_ds_word(addr)
         } else {

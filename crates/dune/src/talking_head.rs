@@ -579,9 +579,10 @@ impl GameState {
     // after the incremental head redraw left a dirty rect in fb1, push it to
     // the visible screen through the shared present chain.
     fn present_head_dirty_rect(&mut self, rect: Rect) {
-        // = seg000:9a0d call loc_0908c — redraw the speech-bubble border sprite
-        //   when the dirty rect reaches into the bubble area
-        //   (current_bubble_layout_ptr == 0x223c); the bubble system is unported.
+        // = seg000:9a0d call loc_0908c — re-stamp the mode-0 subtitle strip
+        //   over the freshly composited head when the dirty rect reaches into
+        //   it (the strip stays resident in the backbuffer).
+        self.restamp_subtitle_strip(rect);
         // = seg000:9a10 si = 0d834h; 9a13 call restore_mouse_if_rect_intersects —
         //   lift the software cursor when the rect overlaps it. The port hides it
         //   unconditionally (call_restore_cursor, the same routine minus the
@@ -808,6 +809,31 @@ impl GameState {
     // Composite a single (anim, frame) over the backdrop. Returns the head rect.
     fn composite_head_frame(&mut self, anim: usize, frame_idx: usize) -> Rect {
         self.composite_head_layers(&[(anim, frame_idx)])
+    }
+
+    // = seg000:9bac loc_09bac (re-render the head, reached from
+    // start_room_lip_sync at 97ba) — re-composite the current idle pose over
+    // the fb2 backdrop into fb1, so a subtitle balloon stamped into fb2 just
+    // before this ends up *under* the head. The port renders the head early
+    // (in setup_talking_head), so it needs this explicit re-render after the
+    // balloon draw to land the head on top; DOS renders it here for the first
+    // time. No-op without a live head.
+    pub(crate) fn recomposite_head_over_backdrop(&mut self) {
+        let Some(head) = self.talking_head.as_ref() else {
+            return;
+        };
+        let (anim, frame) = (head.anim, head.frame);
+        self.composite_head_frame(anim, frame);
+        // The full re-render is the new baseline for the incremental idle
+        // diff, so record it (mirrors setup_talking_head's prev_images seed).
+        let images = self
+            .talking_head
+            .as_ref()
+            .map(|h| flatten_frame(&h.lipsync, anim, frame))
+            .unwrap_or_default();
+        if let Some(head) = self.talking_head.as_mut() {
+            head.prev_images = images;
+        }
     }
 
     // = seg000:9d2d draw_talking_head_at_si.

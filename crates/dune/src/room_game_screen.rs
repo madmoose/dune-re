@@ -812,6 +812,9 @@ impl GameState {
         if self.current_lip_sync_resource_id == 0xffff {
             return;
         }
+        // = seg000:980c call subtitle_restore_prior — take down a lingering
+        //   subtitle/bubble before the room is restored.
+        self.subtitle_restore_prior();
         // = seg000:97d9 si = [data_047a2] (the speaker's room_persons entry);
         //   97dd or [si+0fh],20h; 97e1 and [si+0fh],0fbh — mark the speaker
         //   talked-to (0x20) and drop bit 0x04 on the way out.
@@ -3392,6 +3395,306 @@ mod tests {
         assert_eq!(
             game.locations[12].discoverable_at_phase, 2,
             "the sietch gains a discovery phase"
+        );
+    }
+
+    // The dialogue text engine (show_voice_subtitle seg000:88af ->
+    // draw_subtitle_body seg000:8b11): a spoken line's phrase decodes through
+    // the PHRASE bank + token dictionary and renders per voice_subtitle_mode —
+    // mode 0 as the outlined text strip above the command panel, mode 1 as
+    // the ICONES speech balloon, mode 2 as no text at all. Asset-gated:
+    //   cargo test -p dune --lib -- --ignored dialogue_text
+    #[test]
+    #[ignore = "needs assets/DUNE.DAT"]
+    fn dialogue_text_renders_as_strip_and_balloon() {
+        let dat_path = concat!(env!("CARGO_MANIFEST_DIR"), "/../../assets/DUNE.DAT");
+        let Ok(dat_file) = DatFile::open(dat_path) else {
+            eprintln!("skipping: {dat_path} not found");
+            return;
+        };
+        let (tx, _rx) = mpsc::sync_channel(64);
+        let mut game = GameState::new(dat_file, tx);
+        game.set_headless();
+        game.start(true);
+
+        // Mode 0 (TEXT): Leto's greeting renders as the outlined strip.
+        game.voice_subtitle_mode = 0;
+        game.voice_subtitle_mode_default = 0;
+        game.common_dialogue(0x0);
+
+        // The string pipeline decoded a real sentence: re-run it and check.
+        let s = game
+            .get_phrase_or_command_string(game.current_subtitle_id)
+            .to_vec();
+        let expanded = game.expand_phrase_tokens(&s);
+        let text = game.format_interpolated_string(&expanded);
+        let printable: String = text
+            .iter()
+            .take_while(|&&b| b < 0xf0)
+            .map(|&b| {
+                if (0x20..0x80).contains(&b) {
+                    b as char
+                } else {
+                    '.'
+                }
+            })
+            .collect();
+        eprintln!("Leto greeting: {printable:?}");
+        assert!(printable.len() > 10, "the phrase decoded to text");
+        assert!(
+            printable
+                .chars()
+                .filter(|c| c.is_ascii_alphabetic())
+                .count()
+                > 8,
+            "mostly letters: {printable:?}"
+        );
+
+        // The strip overlay is live and its glyphs + outline reached fb1
+        // just above the command panel (rect (0, 0x92 - h .. 0x92)).
+        let bubble = game.subtitle_bubble.as_ref().expect("strip overlay live");
+        assert!(bubble.strip, "mode 0 draws the strip");
+        let yoff = game.y_offset as i16;
+        let (mut fg, mut outline) = (0, 0);
+        for y in bubble.rect.y0..bubble.rect.y1 {
+            for x in 0..320u16 {
+                match game.framebuffer.get(x, y as u16) {
+                    0x0f => fg += 1,
+                    0xf0 => outline += 1,
+                    _ => {}
+                }
+            }
+        }
+        assert!(fg > 50, "glyph pixels drawn ({fg})");
+        assert!(
+            outline > fg,
+            "the outline pass wrapped the glyphs ({outline})"
+        );
+        assert_eq!(bubble.rect.y1, yoff + 0x92, "strip sits above the panel");
+        game.framebuffer
+            .write_png_scaled(&game.palette, "subtitle_strip.png")
+            .expect("write subtitle_strip.png");
+
+        // Mode 1 (TEXT + VOICE): the next line renders as a speech balloon —
+        // the strip is taken down first (subtitle_restore_prior), the balloon
+        // rect gets an fb2 save-under and the tiled ICONES background in fb1.
+        game.voice_subtitle_mode = 1;
+        game.voice_subtitle_mode_default = 1;
+        game.menu_callback_choice_talk_to_me();
+        let bubble = game.subtitle_bubble.as_ref().expect("balloon overlay");
+        assert!(!bubble.strip, "mode 1 draws the balloon");
+        assert!(!bubble.saved_fb2.is_empty(), "fb2 save-under grabbed");
+        assert_eq!(bubble.rect.x0, 0x50, "one of the seg001:2224 rects");
+        let mut non_bg = 0;
+        for y in bubble.rect.y0..bubble.rect.y1 {
+            for x in bubble.rect.x0..bubble.rect.x1 {
+                if game.framebuffer.get(x as u16, y as u16) != 0 {
+                    non_bg += 1;
+                }
+            }
+        }
+        assert!(non_bg > 500, "balloon background + text drawn ({non_bg})");
+
+        // = seg000:97ba (recomposite_head_over_backdrop) — the presented frame
+        // (present_game_area pushes fb1) must show the head *over* the balloon,
+        // never the balloon over the head. In the head∩balloon overlap, fb1
+        // should therefore be dominated by head pixels, not the balloon's tiled
+        // background. Sample the background colour from a pure-balloon corner
+        // (top-right, clear of the head and the centred text).
+        let bg = game
+            .framebuffer
+            .get((bubble.rect.x1 - 6) as u16, (bubble.rect.y0 + 6) as u16);
+        let head_rect0 = {
+            let head = game.talking_head.as_ref().expect("head live");
+            let (x0, y0, x1, y1) = head.rect;
+            crate::Rect {
+                x0,
+                y0: y0 + game.y_offset as i16,
+                x1,
+                y1: y1 + game.y_offset as i16,
+            }
+        };
+        let ov = crate::Rect {
+            x0: head_rect0.x0.max(bubble.rect.x0),
+            y0: head_rect0.y0.max(bubble.rect.y0),
+            x1: head_rect0.x1.min(bubble.rect.x1),
+            y1: head_rect0.y1.min(bubble.rect.y1),
+        };
+        assert!(
+            ov.x1 > ov.x0 && ov.y1 > ov.y0,
+            "the head and balloon overlap"
+        );
+        let (mut bg_px, mut total) = (0u32, 0u32);
+        for y in ov.y0..ov.y1 {
+            for x in ov.x0..ov.x1 {
+                total += 1;
+                if game.framebuffer.get(x as u16, y as u16) == bg {
+                    bg_px += 1;
+                }
+            }
+        }
+        assert!(
+            bg_px * 2 < total,
+            "the balloon covers the head in the overlap ({bg_px}/{total} bg px) \
+             — head not composited on top"
+        );
+
+        // = seg000:979f..97a9 (start_room_lip_sync) — the balloon was stamped
+        // into fb2 as part of the head's backdrop, so the per-frame head
+        // restores (copy fb2 -> fb1 over the head rect) keep the balloon
+        // beneath the head sprites instead of punching a hole in it.
+        let mut fb2_balloon = 0;
+        for y in bubble.rect.y0..bubble.rect.y1 {
+            for x in bubble.rect.x0..bubble.rect.x1 {
+                if game.framebuffer_saved.get(x as u16, y as u16) != 0 {
+                    fb2_balloon += 1;
+                }
+            }
+        }
+        assert!(
+            fb2_balloon > 500,
+            "balloon stamped into the fb2 backdrop ({fb2_balloon})"
+        );
+        // Simulate the head update's backdrop restore over its clip rect and
+        // check the balloon survives in fb1.
+        let head_rect = {
+            let head = game.talking_head.as_ref().expect("head live");
+            let (x0, y0, x1, y1) = head.rect;
+            crate::Rect {
+                x0,
+                y0: y0 + game.y_offset as i16,
+                x1,
+                y1: y1 + game.y_offset as i16,
+            }
+        };
+        crate::gfx::vga_copy_rect(&mut game.framebuffer, &game.framebuffer_saved, head_rect);
+        let overlap = crate::Rect {
+            x0: head_rect.x0.max(bubble.rect.x0),
+            y0: head_rect.y0.max(bubble.rect.y0),
+            x1: head_rect.x1.min(bubble.rect.x1),
+            y1: head_rect.y1.min(bubble.rect.y1),
+        };
+        let mut survived = 0;
+        for y in overlap.y0..overlap.y1 {
+            for x in overlap.x0..overlap.x1 {
+                if game.framebuffer.get(x as u16, y as u16) != 0 {
+                    survived += 1;
+                }
+            }
+        }
+        assert!(
+            survived > 200,
+            "the balloon survives a head backdrop restore ({survived})"
+        );
+        game.framebuffer
+            .write_png_scaled(&game.palette, "subtitle_balloon.png")
+            .expect("write subtitle_balloon.png");
+
+        // Mode 2 (VOICE ONLY): no text; ending the conversation restores the
+        // room and leaves no overlay either way.
+        game.voice_subtitle_mode = 2;
+        game.voice_subtitle_mode_default = 2;
+        game.menu_callback_choice_talk_to_me();
+        // The prior balloon was restored and (the line being voiced) no new
+        // overlay was drawn.
+        assert!(game.subtitle_bubble.is_none(), "mode 2 draws nothing");
+
+        game.menu_callback_choice_exit_menu();
+        assert!(game.subtitle_bubble.is_none(), "cleanup leaves no overlay");
+    }
+
+    // Regression: a smaller balloon replacing a larger one must not leave the
+    // old balloon's edges behind. The ICONES background is tiled clamped to
+    // the balloon rect (blit_repeated_x); if a tile spilled past the rect,
+    // those pixels were never saved to fb2 nor cleaned on restore, so a
+    // subsequent smaller balloon left a frame of debris. Asset-gated:
+    //   cargo test -p dune --lib -- --ignored balloon_shrink
+    #[test]
+    #[ignore = "needs assets/DUNE.DAT"]
+    fn balloon_shrink_leaves_no_debris() {
+        let dat_path = concat!(env!("CARGO_MANIFEST_DIR"), "/../../assets/DUNE.DAT");
+        let Ok(dat_file) = DatFile::open(dat_path) else {
+            eprintln!("skipping: {dat_path} not found");
+            return;
+        };
+        let (tx, _rx) = mpsc::sync_channel(64);
+        let mut game = GameState::new(dat_file, tx);
+        game.set_headless();
+        game.start(true);
+        game.voice_subtitle_mode = 1;
+        game.voice_subtitle_mode_default = 1;
+        game.common_dialogue(0x0);
+
+        // Present a long line (large balloon) then a short one (small balloon)
+        // through the same per-line steps present_first_matching_dialogue_line
+        // uses: take the prior bubble down, re-save the head backdrop, draw the
+        // new balloon, then stamp it into fb2 (the seg000:979f a0aa step).
+        let mimic = |game: &mut GameState, text: &[u8]| -> crate::Rect {
+            game.set_fb1_as_active_framebuffer();
+            game.subtitle_restore_prior();
+            game.setup_talking_head(0, 0);
+            game.set_fb1_as_active_framebuffer();
+            game.subtitle_pad_left = 0x28;
+            game.subtitle_pad_right = 0x10;
+            game.subtitle_pad_top = 0x10;
+            game.subtitle_pad_bottom = 0x10;
+            game.font_state.color = 0x00f0;
+            game.font_select_tall_font();
+            game.rand_bits_seed = 0;
+            let mut t = text.to_vec();
+            t.push(0xff);
+            game.draw_subtitle_body(&t);
+            let r = game.subtitle_bubble.as_ref().unwrap().rect;
+            crate::gfx::vga_copy_rect(&mut game.framebuffer_saved, &game.framebuffer, r);
+            r
+        };
+
+        let long = b"The spice must flow my son for the Emperor demands his tribute \
+and the Harkonnen vultures circle above us waiting for the smallest mistake \
+we might make in the deep desert of Arrakis where the great worms roam";
+        let r_big = mimic(&mut game, long);
+        let r_small = mimic(&mut game, b"Yes my son.");
+        assert!(
+            r_big.y1 > r_small.y1 && r_big.x1 >= r_small.x1,
+            "the second balloon is smaller ({r_big:?} -> {r_small:?})"
+        );
+
+        // A head backdrop restore (fb2 -> fb1 over the head clip rect, what a
+        // head update does each frame) must not repaint any balloon in the
+        // area the big balloon vacated.
+        let head_rect = {
+            let head = game.talking_head.as_ref().unwrap();
+            let (x0, y0, x1, y1) = head.rect;
+            let yoff = game.y_offset as i16;
+            crate::Rect {
+                x0,
+                y0: y0 + yoff,
+                x1,
+                y1: y1 + yoff,
+            }
+        };
+        crate::gfx::vga_copy_rect(&mut game.framebuffer, &game.framebuffer_saved, head_rect);
+
+        // In the vacated area (inside r_big, outside r_small), fb1 and fb2 must
+        // agree — no stray balloon that only one of them carries.
+        let mut leftovers = 0;
+        for y in r_big.y0..r_big.y1 {
+            for x in r_big.x0..r_big.x1 {
+                let in_small =
+                    x >= r_small.x0 && x < r_small.x1 && y >= r_small.y0 && y < r_small.y1;
+                if in_small {
+                    continue;
+                }
+                if game.framebuffer.get(x as u16, y as u16)
+                    != game.framebuffer_saved.get(x as u16, y as u16)
+                {
+                    leftovers += 1;
+                }
+            }
+        }
+        assert_eq!(
+            leftovers, 0,
+            "the shrunk balloon left {leftovers} px of debris"
         );
     }
 

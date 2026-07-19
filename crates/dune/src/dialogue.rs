@@ -373,12 +373,16 @@ impl GameState {
         if self.data_046eb == 0 {
             // = seg000:9f67 call set_fb1_as_active_framebuffer.
             self.set_fb1_as_active_framebuffer();
-            // = seg000:9f6a..9f7c subtitle_pad_left/right/top/bottom =
-            //   0x28/0x10/0x10/0x10 — layout for draw_subtitle_body (the
-            //   subtitle text engine, unported).
+            // = seg000:9f6a..9f7c the in-room subtitle insets for
+            //   draw_subtitle_body.
+            self.subtitle_pad_left = 0x28;
+            self.subtitle_pad_right = 0x10;
+            self.subtitle_pad_top = 0x10;
+            self.subtitle_pad_bottom = 0x10;
         }
-        // = seg000:9f82 loc_09f82 font_draw_fg_color = 0xf0 + font_select_tall_
-        //   font — subtitle font setup (text engine unported).
+        // = seg000:9f82 loc_09f82 the subtitle font setup.
+        self.font_state.color = 0x00f0;
+        self.font_select_tall_font();
     }
 
     // = seg000:9472 menu_callback_choice_talk_to_me — present one dialogue line:
@@ -782,22 +786,6 @@ impl GameState {
         presented
     }
 
-    // = seg000:88af show_voice_subtitle (reached at loc_0a034) — record the
-    // matched phrase id as the current subtitle. DOS also resolves the phrase
-    // string and draws the subtitle bubble (get_phrase_or_command_string ->
-    // expand_phrase_tokens -> format_interpolated_string -> the loc_08b11 draw);
-    // that text rendering is unported, so this only stores the id. DOS does this
-    // BEFORE firing the spoken-line event (loc_0a03f), so the event sees it set.
-    pub(crate) fn show_voice_subtitle(&mut self, phrase_id: u16) {
-        // = seg000:88af or ax,ax; jz — a zero string id is a no-op. Phrase ids are
-        //   always phrase-marked (>= 0x800), so a zero here means an upstream bug.
-        if phrase_id == 0 {
-            eprintln!("show_voice_subtitle: ignoring unexpected zero phrase id");
-            return;
-        }
-        self.current_subtitle_id = phrase_id;
-    }
-
     // = loc_0a0c9 -> loc_09efd — load and play the current subtitle line's voice
     // `.voc` over the lip-sync engine. Reads current_subtitle_id, which
     // show_voice_subtitle set. DOS runs this AFTER the spoken-line event fires.
@@ -920,6 +908,12 @@ impl GameState {
         // = seg000:9fd8 loc_09fd8 — show the talking head, only for a real room
         //   speaker: data_046eb == 0 (room view) and resource id < 0x10.
         if self.data_046eb == 0 && self.current_lip_sync_resource_id < 0x10 {
+            // Take a prior subtitle down before the head setup. DOS restores
+            // inside draw_subtitle_body (seg000:8b12), after a parse-only
+            // per-line head setup; the port's setup_talking_head re-saves the
+            // fb1 backdrop each line, so the restore must run first or the
+            // old text would be baked into the saved backdrop.
+            self.subtitle_restore_prior();
             // = seg000:9fe9 call adjust_subtitle_mode_for_dialogue_line (a0f1).
             self.adjust_subtitle_mode_for_dialogue_line(line.entry2);
             // = seg000:9fec call ui_hud_head_animate_down — fold the small HUD
@@ -966,10 +960,11 @@ impl GameState {
         if entry2 & 0x10 != 0 {
             // = seg000:a0fe — the voiced-line flag: voice_subtitle_mode = 1.
             self.voice_subtitle_mode = 1;
+            return;
         }
-        // = seg000:a104 jmp subtitle_restore_prior — an unvoiced line restores
-        //   the prior subtitle layout. TODO: subtitle_restore_prior is unported
-        //   (subtitle text engine).
+        // = seg000:a104 jmp subtitle_restore_prior — an unvoiced line takes
+        //   the prior subtitle down before its text-only presentation.
+        self.subtitle_restore_prior();
     }
 
     // = seg000:c85b arm_npc_menu_idle_timer — (re)arm the NPC-actions-menu
@@ -1053,8 +1048,29 @@ impl GameState {
         if self.data_046eb == 0 && self.current_lip_sync_resource_id < 0x10 {
             // = seg000:a0b9 call start_room_lip_sync (978e) — sheet parse, idle
             //   task and first head render (already bundled into the port's
-            //   setup_talking_head); mirror its visible tail: 97c8 call
-            //   update_screen_palette, 97cb jmp present_game_area.
+            //   setup_talking_head); mirror its visible parts:
+            // = seg000:979f..97a9 — with a live subtitle bubble, stamp its
+            //   rect fb1 -> fb2 (gfx_copy_rect_fb1_to_fb2 on the element-18
+            //   rect): the balloon becomes part of the head's clean backdrop,
+            //   so the per-frame head restores keep it beneath the head
+            //   sprites; subtitle_restore_prior's fb2 put-back removes it
+            //   again. The mode-0 strip's element rect is zeroed in DOS
+            //   (loc_08895), so only the balloon stamps. The balloon is on top
+            //   in fb1 (tiled over the head the port drew early), so the stamp
+            //   captures the balloon, not the head, into the backdrop.
+            let has_balloon = self.subtitle_bubble.as_ref().is_some_and(|b| !b.strip);
+            if has_balloon {
+                let rect = self.subtitle_bubble.as_ref().unwrap().rect;
+                gfx::vga_copy_rect(&mut self.framebuffer_saved, &self.framebuffer, rect);
+                // = seg000:97ba call loc_09bac — re-render the head over the
+                //   balloon-carrying backdrop, so the presented frame is the
+                //   head *over* the balloon. DOS renders the head here for the
+                //   first time; the port re-renders because setup_talking_head
+                //   already drew it (under the balloon). Without this the
+                //   present below would flash the balloon over the head.
+                self.recomposite_head_over_backdrop();
+            }
+            // = 97c8 call update_screen_palette, 97cb jmp present_game_area.
             self.update_screen_palette();
             self.present_game_area();
             // = seg000:a0bd cmp data_04774,0; jnz -> a0c5 call loc_02ebf — while

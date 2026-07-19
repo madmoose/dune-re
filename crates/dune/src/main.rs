@@ -46,6 +46,7 @@ mod sprite;
 mod sprite_bank;
 mod sprite_blitter;
 mod sprite_sheet;
+mod subtitle;
 mod tablat;
 mod talking_head;
 mod troops;
