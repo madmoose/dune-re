@@ -1072,6 +1072,17 @@ struct Args {
     #[arg(long)]
     skip_intro: bool,
 
+    // Log the condition expressions evaluated by the script engine to stdout as
+    // "COND ...".
+    #[arg(long)]
+    log_condit: bool,
+
+    /// Log the subtitle/speech-bubble engine (layout choice, bubble rect,
+    /// laid-out text, background tiling, restore) to stdout as "SUB ..."
+    /// lines, mirroring chani_egui --log-subtitle for line-for-line diffs.
+    #[arg(long)]
+    log_subtitle: bool,
+
     /// How the mouse cursor is rendered.
     #[arg(long, value_enum, default_value_t = Cursor::System)]
     cursor: Cursor,
@@ -1128,6 +1139,8 @@ fn main() {
             cursor_mode,
             game_cursor,
         );
+        game.log_condit = args.log_condit;
+        game.log_subtitle = args.log_subtitle;
 
         game.start(skip_intro);
         // = seg000:0037 call game_loop — run the in-game loop after start's setup

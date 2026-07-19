@@ -619,6 +619,12 @@ pub struct GameState {
     // an LMB grab (loc_0a594); also read by get_mouse_cursor_image (the busy hand).
     pub(crate) settings_drag_target: u8,
 
+    pub log_condit: bool,
+
+    // Port-only (--log-subtitle): emit the subtitle/speech-bubble "SUB" trace,
+    // mirroring chani_egui --log-subtitle so the two logs diff line-for-line.
+    pub log_subtitle: bool,
+
     // = seg001:28e7 data_028e7 — active voice/subtitle output mode (0/1/2).
     // ui_toggle_room_view restores it from voice_subtitle_mode_default on room
     // entry; ui_show_globe_map_view forces it to 1.
@@ -976,7 +982,14 @@ pub struct GameState {
     // centre-line, bits 2..3 the vertical placement.
     pub(crate) subtitle_layout_flags: u8,
 
-    // = seg001:47c4 current_bubble_layout_ptr + ui_hud_elements[18] + the
+    // = the x0 words of the three speech-balloon descriptors (seg001:2224/
+    // 222c/2234) — statically 0x50, patched per speaker from
+    // talking_head_balloon_x_table (seg001:22a8) whenever the talking head
+    // changes (seg000:91d4 in setup_lip_sync_data_from_sprite_sheet), so the
+    // balloon clears the portrait.
+    pub(crate) balloon_x: i16,
+
+    // = seg001:479e current_bubble_layout_ptr + ui_hud_elements[18] + the
     // RESOURCE_GLOBDATA save-under — the live subtitle/bubble overlay
     // subtitle_restore_prior takes down.
     pub(crate) subtitle_bubble: Option<crate::subtitle::SubtitleBubble>,
@@ -1415,6 +1428,8 @@ impl GameState {
             banks: Banks::new(),
             game_suspend_count: 1,
             settings_drag_target: 0,
+            log_condit: false,
+            log_subtitle: false,
             voice_subtitle_mode: 0,
             voice_subtitle_mode_default: 0,
             settings_records: SETTINGS_RECORDS_INIT,
@@ -1493,6 +1508,7 @@ impl GameState {
             subtitle_pad_top: 0,
             subtitle_pad_bottom: 0,
             subtitle_layout_flags: 9,
+            balloon_x: 0x50,
             subtitle_bubble: None,
             data_047e0: 0,
             dialogue_line_word0: 0,

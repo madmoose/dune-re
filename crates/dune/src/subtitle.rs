@@ -24,7 +24,7 @@
 use crate::{GameState, Rect, gfx};
 
 /// = the live speech-bubble state: DOS keeps current_bubble_layout_ptr
-/// (seg001:47c4, the layout-descriptor pointer), the ui_hud_elements[18] rect
+/// (seg001:479e, the layout-descriptor pointer), the ui_hud_elements[18] rect
 /// and the save-under pixel buffer at RESOURCE_GLOBDATA; the port bundles
 /// them. `saved_fb2` holds the fb2 pixels under the rect (mode != 0 only).
 pub(crate) struct SubtitleBubble {
@@ -32,9 +32,62 @@ pub(crate) struct SubtitleBubble {
     /// restore path branches on it (seg000:8c98 tests voice_subtitle_mode,
     /// which selected the descriptor).
     pub(crate) strip: bool,
+    /// = seg001:479e current_bubble_layout_ptr — the seg001 address of the
+    /// layout descriptor this bubble was drawn from (0x2224/0x222c/0x2234
+    /// balloon sizes, 0x223c strip, 0x224c narration, 0x2275 dusk).
+    pub(crate) layout: u16,
     /// Absolute framebuffer rect (y already offset by y_offset).
     pub(crate) rect: Rect,
     pub(crate) saved_fb2: Vec<u8>,
+}
+
+/// = the seg001:2224 balloon descriptor table (x, y, w, h), tried
+/// smallest-first by subtitle_setup_layout.
+const BALLOONS: [[i16; 4]; 3] = [
+    [0x50, 0x0e, 0xc0, 0x48],
+    [0x50, 0x10, 0xc8, 0x56],
+    [0x50, 0x08, 0xd0, 0x61],
+];
+
+impl GameState {
+    /// The live (x, y, w, h) words of a seg001 layout descriptor, keyed by
+    /// its DOS address — the balloon x0 words carry the per-head patch
+    /// (`balloon_x`, seg000:91d4). Used by the --log-subtitle trace, which
+    /// reports the DOS (un-y_offset) geometry so it diffs against the
+    /// chani_egui trace.
+    fn layout_desc(&self, layout: u16) -> (i16, i16, i16, i16) {
+        match layout {
+            0x2224 | 0x222c | 0x2234 => {
+                let b = BALLOONS[(layout - 0x2224) as usize / 8];
+                (self.balloon_x, b[1], b[2], b[3])
+            }
+            // = seg001:223c the mode-0 strip layout.
+            0x223c => (0, 0, 0x140, 0x47),
+            // = seg001:224c the free-form narration layout.
+            0x224c => (0x10, 0, 0x120, 0x42),
+            // = seg001:2275 the dusk/night strip.
+            0x2275 => (0, 0x99, 0x140, 0x2f),
+            _ => (0, 0, 0, 0),
+        }
+    }
+}
+
+/// The text part of the trace: the interpolated glyph stream up to the
+/// terminator (first byte >= 0xf0), printable ASCII verbatim, everything
+/// else escaped — matching the chani_egui formatter (which caps at 160).
+fn sub_trace_text(text: &[u8]) -> String {
+    let mut s = String::new();
+    for &b in text.iter().take(160) {
+        if b >= 0xf0 {
+            break;
+        }
+        if (0x20..0x7f).contains(&b) {
+            s.push(b as char);
+        } else {
+            s.push_str(&format!("\\x{b:02x}"));
+        }
+    }
+    s
 }
 
 /// One laid-out subtitle line (an entry of the DOS per-line table at
@@ -255,6 +308,11 @@ impl GameState {
         let Some(bubble) = self.subtitle_bubble.take() else {
             return;
         };
+        // = the chani_egui trace hook at seg000:8c8a (which logs only a live
+        // layout ptr >= 2, i.e. exactly when a bubble is up).
+        if self.log_subtitle {
+            println!("SUB restore prior layout={:04x}", bubble.layout);
+        }
         let rect = if bubble.strip {
             // = seg000:8c95 si = _word_20920_game_area_rect — the strip path
             //   restores the whole game area.
@@ -315,12 +373,51 @@ impl GameState {
         // = seg000:8b12 call subtitle_restore_prior.
         self.subtitle_restore_prior();
         // = seg000:8b16 call subtitle_setup_layout; jb ret.
-        let Some((rect, mut lines)) = self.subtitle_setup_layout(text) else {
+        let Some((layout, rect, mut lines)) = self.subtitle_setup_layout(text) else {
             return;
         };
+        // The --log-subtitle trace, mirroring the chani_egui hook at
+        // seg000:8f7f (inside draw_speech_bubble, once the elem-18 rect,
+        // pens and budgets are computed, before anything paints). It reports
+        // the DOS descriptor geometry — not the port's y_offset rect — so
+        // the two logs diff line-for-line.
+        if self.log_subtitle {
+            let (dx, dy, dw, dh) = self.layout_desc(layout);
+            println!(
+                "SUB draw_speech_bubble id={:#06x} mode={} lipsync={:04x} \
+                 ctx[troop_popup={:02x} book={:02x} dusk={:02x} pending={:02x}]",
+                self.current_subtitle_id,
+                self.voice_subtitle_mode,
+                self.current_lip_sync_resource_id,
+                self.data_046eb,
+                self.data_000c6,
+                self.data_0227d,
+                self.pending_room_screen_request,
+            );
+            println!(
+                "SUB   layout={layout:04x} desc=({dx},{dy},{dw}x{dh}) elem18=({dx},{dy})-({},{}) \
+                 pads l/r/t/b={}/{}/{}/{} flags={:02x} lines={}",
+                (dx + dw).min(320),
+                dy + dh,
+                self.subtitle_pad_left,
+                self.subtitle_pad_right,
+                self.subtitle_pad_top,
+                self.subtitle_pad_bottom,
+                self.subtitle_layout_flags,
+                lines.len(),
+            );
+            println!(
+                "SUB   pen=({},{}) budget={}x{} text=\"{}\"",
+                dx as u16 + self.subtitle_pad_left,
+                dy as u16 + self.subtitle_pad_top,
+                dw as u16 - self.subtitle_pad_left - self.subtitle_pad_right,
+                dh as u16 - self.subtitle_pad_top - self.subtitle_pad_bottom,
+                sub_trace_text(text),
+            );
+        }
         // = seg000:8b1b call draw_speech_bubble — also records the bubble
         //   state and the pen origin.
-        let strip = self.draw_speech_bubble(rect, &lines);
+        let strip = self.draw_speech_bubble(layout, rect, &lines);
         // = seg000:8b1e loc_08df0 — drop full justification when any line's
         //   inter-word advance stretched past 0x1e (over-spread looks bad).
         if self.subtitle_layout_flags & 1 != 0
@@ -410,14 +507,23 @@ impl GameState {
                 }
             }
             self.set_fb1_as_active_framebuffer();
+            // = the chani_egui trace hook at seg000:9025 (the strip present
+            // blit, logged once per placement): the DOS pen_y at present
+            // time equals the strip height (pad_top + lines*10 = the
+            // relocated rect's height), dest_y = 0x92 - pen_y.
+            if self.log_subtitle {
+                let pen_y = (rect.y1 - rect.y0) as u16;
+                println!("SUB strip blit pen_y={} -> dest_y={}", pen_y, 0x92 - pen_y);
+            }
         }
     }
 
     // = seg000:8ccd subtitle_setup_layout — pick the layout rect, colour,
     // paddings and flags for the current presentation context, and word-wrap
-    // the text into it. Returns None for the DOS carry-set bail (a
-    // single-word overflow that fits no rect).
-    fn subtitle_setup_layout(&mut self, text: &[u8]) -> Option<(Rect, Vec<SubLine>)> {
+    // the text into it. Returns the picked descriptor's seg001 address (the
+    // DOS bp) alongside; None for the DOS carry-set bail (a single-word
+    // overflow that fits no rect).
+    fn subtitle_setup_layout(&mut self, text: &[u8]) -> Option<(u16, Rect, Vec<SubLine>)> {
         // = seg000:8ccd flags = 9 (justify + vertical centre), fg = 0xf0.
         self.subtitle_layout_flags = 9;
         self.font_state.color = 0x00f0;
@@ -438,7 +544,7 @@ impl GameState {
                 y1: yoff + 0x42,
             };
             let lines = self.layout_lines(text, rect)?;
-            return Some((rect, lines));
+            return Some((0x224c, rect, lines));
         }
         // = seg000:8d1b data_000c6 != 0: the book/document layout
         //   (seg001:2265). TODO: the BOOK background and its spread-line
@@ -459,7 +565,7 @@ impl GameState {
                 y1: 200,
             };
             let lines = self.layout_lines(text, rect)?;
-            return Some((rect, lines));
+            return Some((0x2275, rect, lines));
         }
         // = seg000:8d62 voice_subtitle_mode == 0: the text-mode strip
         //   (seg001:223c = 0,0,320,71), flags 1 (justify, top-anchored), fg
@@ -489,7 +595,7 @@ impl GameState {
                 x1: 320,
                 y1: yoff + 0x92,
             };
-            return Some((rect, lines));
+            return Some((0x223c, rect, lines));
         }
         // = seg000:8d8a the voice-mode balloon: try the 3 rects at
         //   seg001:2224 smallest-first, keeping the first whose height fits
@@ -497,16 +603,14 @@ impl GameState {
         //   variety (seg000:8dd3 rand_masked(1)). The last rect is the
         //   fallback with the vertical pads dropped (seg000:8dbe..8dcc, the
         //   carry-set bail when even that overflows).
-        const BALLOONS: [[i16; 4]; 3] = [
-            [0x50, 0x0e, 0xc0, 0x48],
-            [0x50, 0x10, 0xc8, 0x56],
-            [0x50, 0x08, 0xd0, 0x61],
-        ];
         for (i, b) in BALLOONS.iter().enumerate() {
+            let layout = 0x2224 + 8 * i as u16;
+            // = the descriptors' x0 words carry the per-head patch
+            //   (seg000:91d4), not the static 0x50.
             let rect = Rect {
-                x0: b[0],
+                x0: self.balloon_x,
                 y0: b[1] + yoff,
-                x1: b[0] + b[2],
+                x1: self.balloon_x + b[2],
                 y1: b[1] + b[3] + yoff,
             };
             let lines = self.layout_lines(text, rect)?;
@@ -517,7 +621,7 @@ impl GameState {
                 if i + 1 < BALLOONS.len() && self.rand() & 1 != 0 {
                     continue;
                 }
-                return Some((rect, lines));
+                return Some((layout, rect, lines));
             }
             if i + 1 == BALLOONS.len() {
                 // = seg000:8dbe..8dcc the overflow fallback: drop the
@@ -529,7 +633,7 @@ impl GameState {
                     return None;
                 }
                 let lines = self.layout_lines(text, rect)?;
-                return Some((rect, lines));
+                return Some((layout, rect, lines));
             }
         }
         None
@@ -624,9 +728,19 @@ impl GameState {
     }
 
     // = seg000:8f28 draw_speech_bubble — record the bubble state and paint
-    // its background. Returns whether this is the mode-0 strip (whose
-    // finishing outline pass the caller runs).
-    fn draw_speech_bubble(&mut self, rect: Rect, _lines: &[SubLine]) -> bool {
+    // its background. `layout` is the picked descriptor's seg001 address
+    // (= the DOS bp, stored in current_bubble_layout_ptr). Returns whether
+    // this is the mode-0 strip (whose finishing outline pass the caller
+    // runs).
+    fn draw_speech_bubble(&mut self, layout: u16, rect: Rect, _lines: &[SubLine]) -> bool {
+        // = seg000:8f73..8f7b the ui_hud_elements[18] rect clamps x1 to 0x140:
+        //   the widest per-head balloons (balloon_x 0x7e + w 0xd0) reach past
+        //   the screen edge. Only the painted/saved rect clamps — the pen and
+        //   budgets upstream keep the descriptor width.
+        let rect = Rect {
+            x1: rect.x1.min(320),
+            ..rect
+        };
         // = seg000:8f8d/8f94 the dusk strip and pending room transitions
         //   paint no background at all (loc_08fd0).
         if self.data_0227d != 0 {
@@ -639,8 +753,13 @@ impl GameState {
         //   the port draws the glyphs straight over the fb1 game area at the
         //   loc_09025 placement instead.
         if self.voice_subtitle_mode == 0 && self.current_lip_sync_resource_id != 0xffff {
+            // = the chani_egui trace hook at seg000:900b (loc_0900b).
+            if self.log_subtitle {
+                println!("SUB mode-0 strip path (no bubble bg)");
+            }
             self.subtitle_bubble = Some(SubtitleBubble {
                 strip: true,
+                layout,
                 rect,
                 saved_fb2: Vec::new(),
             });
@@ -665,9 +784,21 @@ impl GameState {
         let saved_fb2 = self.grab_rect_pixels(rect);
         self.subtitle_bubble = Some(SubtitleBubble {
             strip: false,
+            layout,
             rect,
             saved_fb2,
         });
+        // = the chani_egui trace hook at seg000:c370 (blit_repeated_x
+        // entry); the rect logged in DOS is the elem-18 one, so report the
+        // un-y_offset descriptor geometry here too.
+        if self.log_subtitle {
+            let (dx, dy, dw, dh) = self.layout_desc(layout);
+            println!(
+                "SUB blit_repeated_x sprite=0x1c rect=({dx},{dy})-({},{})",
+                (dx + dw).min(320),
+                dy + dh,
+            );
+        }
         gfx::vga_clear_rect(
             self,
             crate::FbId::Fb1,

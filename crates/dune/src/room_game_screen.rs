@@ -3694,7 +3694,9 @@ mod tests {
         let bubble = game.subtitle_bubble.as_ref().expect("balloon overlay");
         assert!(!bubble.strip, "mode 1 draws the balloon");
         assert!(!bubble.saved_fb2.is_empty(), "fb2 save-under grabbed");
-        assert_eq!(bubble.rect.x0, 0x50, "one of the seg001:2224 rects");
+        // = seg000:91d4 — the balloon x0 carries the per-head patch from
+        // talking_head_balloon_x_table (seg001:22a8); Leto is head 0 = 0x60.
+        assert_eq!(bubble.rect.x0, 0x60, "the seg001:2224 rects, Leto's x");
         let mut non_bg = 0;
         for y in bubble.rect.y0..bubble.rect.y1 {
             for x in bubble.rect.x0..bubble.rect.x1 {

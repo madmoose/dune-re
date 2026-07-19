@@ -147,7 +147,13 @@ impl GameState {
             self.condit_ds_byte(addr).map(u16::from)
         };
         // Unmodelled addresses read as 0. Debug print when hunting gaps:
-        // eprintln!("CONDIT: read of unmodelled ds:[{addr:#04x}] (word: {word})");
+        if self.log_condit && value.is_none() {
+            if let Some((name, _)) = condit_var_name(addr) {
+                eprintln!("CONDIT: read of unmodelled ds:[{addr:#04x}:{name}] (word: {word})");
+            } else {
+                eprintln!("CONDIT: read of unmodelled ds:[{addr:#04x}] (word: {word})");
+            }
+        }
         value.unwrap_or(0)
     }
 
@@ -227,12 +233,14 @@ impl GameState {
     /// prior always-first-entry dialogue stub.
     pub(crate) fn condition_holds(&self, index: u16) -> bool {
         let holds = self.evaluate_condition(index) != 0;
-        // println!(
-        //     "CONDITION {:3} {}: {}",
-        //     index,
-        //     if holds { "HOLDS" } else { "FAILS" },
-        //     self.format_condition(index)
-        // );
+        if self.log_condit {
+            println!(
+                "COND {:3} {}: {}",
+                index,
+                if holds { "HOLDS" } else { "FAILS" },
+                self.format_condition(index)
+            );
+        }
         holds
     }
 
