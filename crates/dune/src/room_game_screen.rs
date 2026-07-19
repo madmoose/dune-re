@@ -3226,6 +3226,64 @@ mod tests {
         );
     }
 
+    // Port-only debug overlay: the backquote (`) key toggles a panel of live
+    // game state (game phase, location, charisma, …) drawn over the presented
+    // frame. It composites onto a copy of the screen, so the game's own
+    // framebuffers stay clean. Asset-gated:
+    //   cargo test -p dune --lib -- --ignored debug_overlay
+    #[test]
+    #[ignore = "needs assets/DUNE.DAT"]
+    fn debug_overlay_toggles_and_draws_state() {
+        let dat_path = concat!(env!("CARGO_MANIFEST_DIR"), "/../../assets/DUNE.DAT");
+        let Ok(dat_file) = DatFile::open(dat_path) else {
+            eprintln!("skipping: {dat_path} not found");
+            return;
+        };
+        let (tx, _rx) = mpsc::sync_channel(64);
+        let mut game = GameState::new(dat_file, tx);
+        game.set_headless();
+        game.start(true);
+
+        // The backquote key edge toggles the overlay on, then off.
+        assert!(!game.debug_overlay);
+        game.input.lock().unwrap().kb_keys[0x29] = 0xff;
+        game.poll_debug_overlay_toggle();
+        assert!(game.debug_overlay, "` turns the overlay on");
+        // Held (no new edge) does not re-toggle.
+        game.poll_debug_overlay_toggle();
+        assert!(game.debug_overlay, "holding ` does not flip it back");
+        // Release, then press again toggles off.
+        game.input.lock().unwrap().kb_keys[0x29] = 0;
+        game.poll_debug_overlay_toggle();
+        game.input.lock().unwrap().kb_keys[0x29] = 0xff;
+        game.poll_debug_overlay_toggle();
+        assert!(!game.debug_overlay, "a second press turns it off");
+
+        // The overlay draws over a copy of the screen (top-left region), while
+        // the far side of the frame is left untouched — the game framebuffer is
+        // never modified.
+        let mut fb = game.screen.clone();
+        game.draw_debug_overlay(&mut fb);
+        let mut changed = 0;
+        for y in 0..80u16 {
+            for x in 0..150u16 {
+                if fb.get(x, y) != game.screen.get(x, y) {
+                    changed += 1;
+                }
+            }
+        }
+        assert!(changed > 200, "the overlay drew text ({changed} px)");
+        assert_eq!(
+            fb.get(300, 120),
+            game.screen.get(300, 120),
+            "the overlay leaves the rest of the frame untouched"
+        );
+        if std::env::var_os("WRITE_PNG").is_some() {
+            fb.write_png_scaled(&game.palette, "debug_overlay.png")
+                .expect("write debug_overlay.png");
+        }
+    }
+
     // = seg000:d8f4 the per-click cursor hide — the game loop brackets every
     // button-edge dispatch with call_restore_cursor, so the cursor blinks off
     // while a HUD-arrow / command / game-area click is processed and comes back

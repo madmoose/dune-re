@@ -101,6 +101,12 @@ fn build_pcm_voc(tc: u8, samples: &[u8]) -> Vec<u8> {
 pub struct GameState {
     headless: bool,
 
+    // Port-only debug overlay: a text panel of live game state (game phase,
+    // location, charisma, …) drawn over the presented frame. Toggled by the
+    // backquote key (`). `debug_overlay_key_down` edge-detects the toggle.
+    pub(crate) debug_overlay: bool,
+    debug_overlay_key_down: bool,
+
     // ---- Host/runtime state and buffers (not seg001 data-segment globals) ----
     pub dat_file: DatFile,
 
@@ -1275,6 +1281,8 @@ impl GameState {
         let midi = midi::Midi::new();
         Self {
             headless: false,
+            debug_overlay: false,
+            debug_overlay_key_down: false,
             // ---- Host/runtime state and buffers ----
             dat_file,
 
@@ -1677,6 +1685,11 @@ impl GameState {
         self.idle_anim_trigger = 0;
         loop {
             // = seg000:d820 loc_0d820 — the loop top.
+
+            // Port-only: toggle the debug overlay on a backquote (`) key edge.
+            // Read the raw key state so this does not consume the buffered
+            // scancode the game's own key handling uses.
+            self.poll_debug_overlay_toggle();
 
             // = seg000:d820..d82e — the Ctrl+V (scancode 0x2f + kb_keys[0x1d]
             // held; chani labels [0x1d] "_w" but 0x1d is Left Ctrl, not W)
@@ -2601,8 +2614,80 @@ impl GameState {
             return;
         }
 
-        self.frame_sink
-            .publish(self.screen.clone(), self.screen_pal.clone());
+        // Port-only: composite the debug overlay onto a copy of the screen so
+        // the game's own framebuffers stay clean (the overlay must never be
+        // baked into fb1/fb2, which the render restores from).
+        if self.debug_overlay {
+            let mut fb = self.screen.clone();
+            self.draw_debug_overlay(&mut fb);
+            self.frame_sink.publish(fb, self.screen_pal.clone());
+        } else {
+            self.frame_sink
+                .publish(self.screen.clone(), self.screen_pal.clone());
+        }
+    }
+
+    // Port-only: flip `debug_overlay` on a backquote (`, scancode 0x29) key
+    // press edge. Reads the raw kb_keys state (not the one-shot scancode
+    // buffer) so it never steals a keypress from the game.
+    pub(crate) fn poll_debug_overlay_toggle(&mut self) {
+        const SCANCODE_BACKQUOTE: usize = 0x29;
+        let down = self.input.lock().unwrap().kb_keys[SCANCODE_BACKQUOTE] != 0;
+        if down && !self.debug_overlay_key_down {
+            self.debug_overlay = !self.debug_overlay;
+        }
+        self.debug_overlay_key_down = down;
+    }
+
+    // Port-only: draw the debug overlay — a small panel of live game state in
+    // the top-left corner — onto `fb` (a copy of the screen). Uses the glyph
+    // font directly so it does not disturb the font pen/colour state the game
+    // relies on.
+    pub(crate) fn draw_debug_overlay(&self, fb: &mut FrameBuffer) {
+        let day = self.get_ingame_day_in_ax();
+        let lines = [
+            format!("PHASE   {:#04x} ({})", self.game_phase, self.game_phase),
+            format!(
+                "LOC     {:#06x} room {}",
+                self.location_and_room, self.current_room
+            ),
+            format!("APPEAR  {:#06x}", self.location_appearance),
+            format!("DAY     {}  time {:#06x}", day, self.game_time),
+            format!("CHARISMA {}", self.charisma),
+            format!("RALLIED {}", self.number_of_rallied_troops),
+            format!("MET     {:#06x}", self.persons_met),
+            format!("TRAVEL  {:#06x}", self.persons_travelling_with),
+            format!("IN ROOM {:#06x}", self.persons_in_room),
+        ];
+
+        // Background panel: a dark box behind the text for legibility.
+        let line_h = 8u16;
+        let pad = 2u16;
+        let box_w = 150u16;
+        let box_h = pad * 2 + line_h * lines.len() as u16;
+        for y in 0..box_h.min(fb.h()) {
+            for x in 0..box_w.min(fb.w()) {
+                // Dim the underlying pixel toward black (palette 0) so the box
+                // reads as a translucent panel without needing alpha.
+                if (x + y) & 1 == 0 {
+                    fb.set(x, y, 0);
+                }
+            }
+        }
+
+        // = the small (7-row) glyph font, drawn straight through Font::draw_
+        //   glyph: fg 0x0f (bright), bg 0 (transparent).
+        let color = 0x000f;
+        for (i, line) in lines.iter().enumerate() {
+            let mut x = pad;
+            let y = pad + i as u16 * line_h;
+            for &b in line.as_bytes() {
+                let c = if b & 0x80 != 0 { 0x40 } else { b };
+                x += self
+                    .font
+                    .draw_glyph(fb, x, y, c, crate::font::TextSize::Small, color);
+            }
+        }
     }
 
     // = seg000:c4dd present_game_area — present the game-area rect (0,0)-
