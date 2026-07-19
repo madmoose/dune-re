@@ -1324,9 +1324,9 @@ impl GameState {
     // = seg000:40d5 run_travel_departure_npc_scans — the NPC half of a travel
     // departure: the room-leave dialogue scan and the boarding companions.
     fn run_travel_departure_npc_scans(&mut self) {
-        // = seg000:40d5 pending_room_action (data_00023) = 7 — arm the leave
+        // = seg000:40d5 pending_room_action = 7 — arm the leave
         //   scan's action code.
-        self.data_00023 = 7;
+        self.pending_room_action = 7;
         // = seg000:40da call run_room_leave_dialogue_scan.
         self.run_room_leave_dialogue_scan();
         // = seg000:40dd call loc_04ac4 — data_011ca = 0.
@@ -1628,9 +1628,9 @@ impl GameState {
             }
             // = seg000:501f pending_room_action = 0; 5024 the hostile-zone
             //   check; 5027/502d loopz — keep stepping while no action armed.
-            self.data_00023 = 0;
+            self.pending_room_action = 0;
             self.travel_route_hostile_zone_check();
-            if self.data_00023 != 0 {
+            if self.pending_room_action != 0 {
                 // = seg000:5031 data_04726 += 20h — re-add the accumulator
                 //   step the check just consumed.
                 self.data_04726 = self.data_04726.wrapping_add(0x20);
@@ -1765,7 +1765,7 @@ impl GameState {
         // = seg000:41a7..41ae arm the hostile-zone warning (action code 4)
         //   when the accumulator is empty.
         if self.data_04726 == 0 {
-            self.data_00023 = 4;
+            self.pending_room_action = 4;
         }
         // = seg000:41b3/41b5 grey the SKIP TO DESTINATION verb.
         self.set_skip_to_destination_verb_flags(0x40);

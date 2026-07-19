@@ -487,11 +487,11 @@ impl GameState {
         //   so the room-leave dialogue scan's conditions can read it (condition
         //   0x1c gates Leto's "where are you going so fast" on pending_destination_room == 4).
         self.pending_destination_room = (new_room & 0xff) as u8;
-        // = seg000:3fae mov byte [data_00023], 1 — request the room-leave scan.
-        self.data_00023 = 1;
+        // = seg000:3fae mov byte [pending_room_action], 1 — request the room-leave scan.
+        self.pending_room_action = 1;
         // = seg000:3fb3 call arm_dialogue_interrupt_gate — arm the interrupt gate to 0xff.
         self.dialogue_interrupt_gate = 0xff;
-        // = seg000:3fb8 call run_room_leave_dialogue_scan — run the data_00023-gated room-person
+        // = seg000:3fb8 call run_room_leave_dialogue_scan — run the pending_room_action-gated room-person
         //   dialogue scan. A standing person whose auto-dialogue condition matches
         //   speaks a line; if that line carries the stay_here event (0x02) it
         //   clears dialogue_interrupt_gate to interrupt the move.
@@ -506,8 +506,8 @@ impl GameState {
         // = seg000:3fc3 loc_03fc3 — commit the move. DOS first calls loc_0abd5
         //   (drain any playing voc); none plays on the no-interrupt path, so it is
         //   a no-op here.
-        // = seg000:3fca mov byte [data_00023], 5 — mark the committed transition.
-        self.data_00023 = 5;
+        // = seg000:3fca mov byte [pending_room_action], 5 — mark the committed transition.
+        self.pending_room_action = 5;
 
         // = seg000:3fcf jmp loc_04057 — bx (the location appearance) is
         //   unchanged on the in-room path.

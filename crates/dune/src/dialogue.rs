@@ -573,7 +573,7 @@ impl GameState {
         self.data_0001b = self.data_0001b.wrapping_add(1);
         // = seg000:95f2 mov byte [pending_room_action], 0 — clear the pending
         //   room-action after the come-with-me line has been presented.
-        self.data_00023 = 0;
+        self.pending_room_action = 0;
         // = seg000:95f7 call test_dialogue_interrupt_gate; jnz ret — a spoken-
         //   line event changed the gate (the speaker refused): do not join.
         if self.dialogue_interrupt_gate != 0xff {
@@ -680,7 +680,7 @@ impl GameState {
             //   0x10 * [ui_hud_companion_1]; pending_room_action = 0x64 +
             //   person_index; npc_clear_travelling; shift slot 2 down.
             let evicted = self.companion_1 as usize;
-            self.data_00023 = 0x64 + self.room_persons[evicted].person_index;
+            self.pending_room_action = 0x64 + self.room_persons[evicted].person_index;
             self.npc_clear_travelling(evicted);
             self.companion_1 = self.companion_2;
             1

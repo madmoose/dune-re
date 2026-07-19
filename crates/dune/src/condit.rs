@@ -7,6 +7,7 @@ use crate::{GameState, container};
 fn condit_var_name(addr: u16) -> Option<(&'static str, bool)> {
     Some(match addr {
         0x00 => ("rand_bits", true),
+        0x0a => ("bitfield_paul_events", false),
         0x0b => ("current_room", false),
         0x0c => ("pending_destination_room", false),
         0x0d => ("previous_room", false),
@@ -14,7 +15,7 @@ fn condit_var_name(addr: u16) -> Option<(&'static str, bool)> {
         0x10 => ("persons_travelling_with", true),
         0x12 => ("persons_in_room", true),
         0x1b => ("stay_here_come_with_me_count", false),
-        // 0x23 => ("data_00023", false),
+        0x23 => ("pending_room_action", false),
         0x2c => ("troop.offset_of_location", true),
         0x2e => ("troop.troop_id", false),
         0x2f => ("troop.occupation_low", false),
@@ -53,6 +54,10 @@ fn condit_var_name(addr: u16) -> Option<(&'static str, bool)> {
 impl GameState {
     fn condit_ds_byte(&self, addr: u16) -> Option<u8> {
         Some(match addr {
+            // = seg001:000a bitfield_Paul_events — Paul's story-progress bits;
+            // bit 0x10 (met Stilgar) gates the army-recruit dialogue lines
+            // (e.g. the WORK WITH ME refusal/acceptance conditions).
+            0x0a => self.bitfield_paul_events,
             // = seg001:000b current_room.
             0x0b => self.current_room,
             // = seg001:000c pending_destination_room — condition 0x1c (Leto's
@@ -63,9 +68,9 @@ impl GameState {
             // = seg001:001b related_to_stay_here_come_with_me_ds_1b — the
             // COME WITH ME / STAY HERE use counter (cleared by TALK TO ME).
             0x1b => self.data_0001b,
-            // = seg001:0023 data_00023 — the room-leave / dialogue-scan state;
+            // = seg001:0023 pending_room_action — the room-leave / dialogue-scan state;
             // condition 0x1c tests it == 1.
-            0x23 => self.data_00023,
+            0x23 => self.pending_room_action,
             // = seg001:0025 number_of_sietches_visited / 0026
             // entering_new_sietch — the first-visit state ui_click_move_room
             // maintains.

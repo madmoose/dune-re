@@ -303,11 +303,22 @@ pub struct GameState {
     // clears it, seg000:947a).
     pub(crate) data_0001b: u8,
 
-    // = seg001:0023 data_00023 — the room-transition / dialogue-scan state.
+    // = seg001:0023 pending_room_action — the room-transition / dialogue-scan state.
     // ui_click_move_room sets it to 1 to request the room-leave auto-dialogue scan
     // (run_room_leave_dialogue_scan gates on it and clears it), CONDIT condition 0x1c tests it == 1,
-    // and the committed move sets it to 5.
-    pub(crate) data_00023: u8,
+    // and the committed move sets it to 5. The dialogue verbs also stage
+    // outcome codes here for their record's conditions to read (the Fremen
+    // chief's WORK WITH ME charisma check, seg000:95de: 0 pass / 2 refuse).
+    pub(crate) pending_room_action: u8,
+
+    // = seg001:00ac data_000ac — total population of the allegiance-flagged
+    // troops (the loc_0c049 scan sums troop byte +0x1a into ds:ac for troops
+    // with byte +0x10 bit 0x80, else into ds:aa); static init 0x1b58 (7000).
+    // Gates the Fremen WORK WITH ME charisma check (seg000:95c4). Its
+    // updaters — loc_0c02e from the new-day tick (seg000:1ca0) and the
+    // CHOAM/globe stats path (seg000:bee0) — are not yet ported, so the
+    // value keeps the DOS static initial.
+    pub(crate) data_000ac: u16,
 
     // = seg001:0025 number_of_sietches_visited — counts first visits to
     // locations with a code below 0x20 (the sietches)
@@ -1364,7 +1375,8 @@ impl GameState {
             persons_in_room: 0,
             persons_talking_to: 0,
             data_0001b: 0,
-            data_00023: 0,
+            pending_room_action: 0,
+            data_000ac: 0x1b58,
             number_of_sietches_visited: 0,
             number_of_rallied_troops: 0,
             number_of_rallied_troops_for_leto_killed: 0xff,

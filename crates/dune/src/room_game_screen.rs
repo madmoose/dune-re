@@ -618,12 +618,22 @@ impl GameState {
             // topic-5 record's conditions, then falls into
             // menu_callback_choice_come_with_me.
             0x95c1 => {
-                // = seg000:95c1 ax = 0x64; cmp [data_000ac],3e8h; jb pass —
-                //   ds:ac is not modelled (reads 0), so the check passes as
-                //   in the early game. The fail branch ((100 - charisma)/4 >
-                //   the staged ds:36 motivation modifier) sets 2. TODO:
-                //   model data_000ac to enable the failure path.
-                self.data_00023 = 0;
+                // = seg000:95c1..95de — the charisma check: outcome ah = 0
+                //   (the chief agrees) unless the allied population total has
+                //   reached 1000 (seg000:95c4) and (100 - charisma)/4 exceeds
+                //   the staged troop's ds:36 motivation modifier — then 2.
+                //   The topic-5 record's conditions read the outcome from
+                //   pending_room_action to pick the acceptance or refusal
+                //   line; a charisma above 100 always passes (the jb at
+                //   seg000:95d0).
+                let mut outcome = 0;
+                if self.data_000ac >= 0x3e8 {
+                    let (deficit, borrow) = 100u8.overflowing_sub(self.charisma);
+                    if !borrow && deficit >> 2 > self.troop_condit.motivation_modifier {
+                        outcome = 2;
+                    }
+                }
+                self.pending_room_action = outcome;
                 self.menu_callback_choice_come_with_me();
             }
             // = seg000:9ed5 menu_callback_choice_what — the " WHAT ? " verb:
@@ -799,7 +809,7 @@ impl GameState {
     // TODO: 097cf also clears data_047e1 and restores the subtitle backdrop
     // (subtitle_restore_prior) — subtitle state not modelled yet. The
     // game_screen_mode_flags != 0 branch (97f2, the map/globe nav-panel rebuild)
-    // and the data_00023-gated transition-reveal variant (loc_09898, a wiped
+    // and the pending_room_action-gated transition-reveal variant (loc_09898, a wiped
     // re-render + leave scan that lets an evicted companion speak) are not
     // ported; the port always takes the instant re-render path (loc_09879).
     fn menu_npc_actions_cleanup(&mut self) {
@@ -1799,13 +1809,13 @@ impl GameState {
         }
     }
 
-    // = seg000:36d3 run_room_leave_dialogue_scan — the data_00023-gated room-person dialogue scan run
+    // = seg000:36d3 run_room_leave_dialogue_scan — the pending_room_action-gated room-person dialogue scan run
     // when leaving a room (ui_click_move_room) or re-entering one. When the leave
     // flag is set, walk the standing room-persons (bp = room_person_present_auto_dialogue) so one of them
     // can speak an auto-dialogue line, then clear the flag.
     pub(crate) fn run_room_leave_dialogue_scan(&mut self) {
-        // = seg000:36d3 cmp byte [data_00023], 0; jz ret.
-        if self.data_00023 == 0 {
+        // = seg000:36d3 cmp byte [pending_room_action], 0; jz ret.
+        if self.pending_room_action == 0 {
             return;
         }
         // = seg000:36da call tear_down_prior_talking_head_overlay — when a prior
@@ -1816,8 +1826,8 @@ impl GameState {
         self.data_047a7 = 0;
         // = seg000:36e2 bp = room_person_present_auto_dialogue; call scan_matching_room_person_entries.
         self.scan_matching_room_person_entries(Self::npc_auto_dialogue);
-        // = seg000:36e8 mov byte [data_00023], 0.
-        self.data_00023 = 0;
+        // = seg000:36e8 mov byte [pending_room_action], 0.
+        self.pending_room_action = 0;
     }
 
     // = seg000:3520 room_person_present_auto_dialogue — per standing room-person, present their auto-
@@ -1827,9 +1837,9 @@ impl GameState {
     //
     // MINIMAL PORT: the present path (present_room_person_dialogue) and the verb-menu install
     // (loc_03595) are modelled. Deferred: the messages_02aaf queued-message path
-    // taken when no line is selected (seg000:3533), and the data_00023 == 3 / == 4
+    // taken when no line is selected (seg000:3533), and the pending_room_action == 3 / == 4
     // come-with-me / special-menu branches (seg000:3555..3592) — the room-leave
-    // scan runs with data_00023 == 1.
+    // scan runs with pending_room_action == 1.
     fn npc_auto_dialogue(&mut self, _index: u8, entry: &RoomPerson) {
         // = seg000:3520 cmp byte [data_047a7], 0; jnz ret — someone already spoke.
         if self.data_047a7 != 0 {
@@ -1848,8 +1858,8 @@ impl GameState {
         //   standing person speaks during this scan.
         self.data_047a7 = self.data_047a7.wrapping_add(1);
 
-        // = seg000:3595 loc_03595 — the data_00023 == 1 (room-leave) path. The
-        //   data_04774 gate (seg000:3595) and the data_00023 >= 0x64 guard
+        // = seg000:3595 loc_03595 — the pending_room_action == 1 (room-leave) path. The
+        //   data_04774 gate (seg000:3595) and the pending_room_action >= 0x64 guard
         //   (seg000:359c) both pass for value 1.
         // = seg000:35a3 ax = current_lip_sync_resource_id; 35a6 call
         //   set_dialogue_speaker — mark the speaker met and stage their dialogue
@@ -3054,7 +3064,7 @@ mod tests {
             "expected a come-with-me phrase id, got {phrase:#x}"
         );
         assert_eq!(game.data_0001b, 1, "ds:1b use counter");
-        assert_eq!(game.data_00023, 0, "pending room-action cleared");
+        assert_eq!(game.pending_room_action, 0, "pending room-action cleared");
         assert_eq!(
             game.dialogue_interrupt_gate, 0,
             "the refusal drops the gate"
@@ -3152,13 +3162,16 @@ mod tests {
         game.room_persons[3].flags |= 0x40;
         game.persons_travelling_with |= 1 << 3;
         game.npc_assign_companion_slot(1);
-        assert_eq!(game.data_00023, 0x67, "evictee encoded as 0x64 + 3");
+        assert_eq!(
+            game.pending_room_action, 0x67,
+            "evictee encoded as 0x64 + 3"
+        );
         assert_eq!(game.room_persons[3].flags & 0x40, 0, "evictee detached");
         assert_eq!(game.persons_travelling_with & (1 << 3), 0);
         assert_eq!(game.companion_1, 4, "slot 2 shifted down");
         assert_eq!(game.companion_2, 1, "newcomer in slot 2");
         assert_eq!(game.ui_hud_companion_blink[1], 0x10, "newcomer blinks");
-        game.data_00023 = 0;
+        game.pending_room_action = 0;
 
         // TALK TO ME resets the ds:1b counter (seg000:947a).
         game.menu_callback_choice_talk_to_me();
