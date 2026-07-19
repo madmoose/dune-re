@@ -978,20 +978,42 @@ impl GameState {
 
     // = seg000:9215 callback_main_ui_element_21_22 — the game-area / person click
     // dispatch. Over the room command menu in the normal room view, hit-test the
-    // on-screen people (person_hit_test); a hit on person index < 0x0f dispatches
+    // on-screen people (person_hit_test, which routes a HUD-area cursor to the
+    // companion portrait slots); a hit on person index < 0x0f dispatches
     // that person's verb handler (room_persons[id].handler, = `jmp word ptr
-    // [si+4]`). The room LMB handler reaches this when a click lands on no
-    // ui_element (= seg000:d904 hit-test miss -> d90a call), and it is also the
-    // handler armed on ui_elements[21]/[22].
+    // [si+4]`). Over the dialogue verb panel (loc_09248) only the companion
+    // slots are live: the current speaker's own portrait re-enters their
+    // dialogue (callback_main_ui_element_19), the other companion's switches
+    // the conversation to them. The room LMB handler reaches this when a click
+    // lands on no ui_element (= seg000:d904 hit-test miss -> d90a call), and it
+    // is also the handler armed on ui_elements[21]/[22].
     //
-    // Not modelled: the bp==1f7e dialogue branch (loc_09248) and the person
-    // index >= 0x0f branch (loc_09240).
+    // Not modelled: the person index >= 0x0f branch (loc_09240).
     pub(crate) fn callback_main_ui_element_21_22(&mut self) {
         // = seg000:9215 get_active_screen_element; cmp bp,1f0eh; jnz loc_09248.
+        let active = self.get_active_screen_element();
+        if active == ScreenElement::NpcActionsMenu {
+            // = seg000:9248 loc_09248 — dialogue active: 924e call companion_slot_hit_test;
+            //   jnb ret — only a companion-slot hit does anything.
+            let Some(pid) = self.companion_slot_hit_test() else {
+                return;
+            };
+            if pid as u16 == self.current_lip_sync_resource_id {
+                // = seg000:9253/9259 the speaker's own portrait — jmp
+                //   callback_main_ui_element_19.
+                self.callback_main_ui_element_19();
+            } else {
+                // = seg000:925c push cx; call dismiss_stacked_overlays; pop cx;
+                //   9261 jmp loc_09234 — drop the dialogue panel and dispatch
+                //   the other companion's handler: the conversation switches.
+                self.dismiss_stacked_overlays();
+                let handler = self.room_persons[pid as usize].handler;
+                self.dispatch_command_handler(handler, 0);
+            }
+            return;
+        }
         // = seg000:921e cmp game_screen_mode_flags,0; jnz loc_09281.
-        if self.get_active_screen_element() != ScreenElement::RoomCommandMenu
-            || self.game_screen_mode_flags != 0
-        {
+        if active != ScreenElement::RoomCommandMenu || self.game_screen_mode_flags != 0 {
             return;
         }
         // = seg000:9225 call person_hit_test_at_cursor; jnb loc_09263 (no person hit).
@@ -1027,6 +1049,25 @@ impl GameState {
             let handler = self.room_persons[person_id as usize].handler;
             self.dispatch_command_handler(handler, 0);
         }
+    }
+
+    // = seg000:945b callback_main_ui_element_19 — a click on the talking-head
+    // area, also reached from the current speaker's own companion portrait
+    // (seg000:9259): with no live subtitle bubble/strip, re-enter the
+    // speaker's dialogue (common_code_for_ui_dialogue_related_functions with
+    // the current lip-sync id); with one, act as TALK TO ME. The seg000:946b
+    // menu_argue_accept_refuse guard (the accept/refuse/argue submenu keeps
+    // the click inert) is not ported — that menu is not modelled.
+    pub(crate) fn callback_main_ui_element_19(&mut self) {
+        // = seg000:945b cmp [current_bubble_layout_ptr],0; jnz loc_09468.
+        if self.subtitle_bubble.is_none() {
+            // = seg000:9462 ax = [current_lip_sync_resource_id]; jmp 93aa.
+            let id = self.current_lip_sync_resource_id as u8;
+            self.common_dialogue(id);
+            return;
+        }
+        // = seg000:946f jnz menu_callback_choice_talk_to_me.
+        self.menu_callback_choice_talk_to_me();
     }
 
     // = seg000:d41b get_active_screen_element — return the identity of the top
@@ -1321,7 +1362,28 @@ impl GameState {
         element: ScreenElement,
         records: Vec<CommandMenuRecord>,
     ) {
-        self.screen_element_stack.push(element);
+        // = seg000:d343 `cmp al,[di]; jz loc_0d368` — an element whose priority
+        // byte equals the current top's REPLACES the top slot in place instead
+        // of deepening the stack. This is how a mid-dialogue verb-panel rebuild
+        // (setup_npc_dialogue_menu after the chief's troop rally) swaps the
+        // WORK FOR ME panel for the Fremen-2 one without stacking a second
+        // NpcActionsMenu — one STOP TALKING still closes the dialogue. The
+        // 0xff base/locked class (room menu, mirror overlay) is excluded: the
+        // flattened port keeps the room base on the stack and pops the mirror
+        // overlay explicitly (see the 0x0eb9 handler) where DOS really does
+        // replace its room slot. (The d349 branch that pops stacked
+        // lower-z entries before inserting is not modelled; no port flow
+        // reaches it.)
+        let replace = element.priority_byte() != 0xff
+            && self
+                .screen_element_stack
+                .last()
+                .is_some_and(|top| top.priority_byte() == element.priority_byte());
+        if replace {
+            *self.screen_element_stack.last_mut().unwrap() = element;
+        } else {
+            self.screen_element_stack.push(element);
+        }
         self.command_menu_records = records;
         self.redraw_active_command_menu();
     }
@@ -1630,9 +1692,11 @@ impl GameState {
     pub(crate) fn person_hit_test(&self) -> Option<u8> {
         let mouse_x = self.mouse_pos_x;
         let mouse_y = self.mouse_pos_y;
-        // = seg000:9285 cmp bx,98h; jnb loc_092c9 — only below the HUD strip.
+        // = seg000:9285 cmp bx,98h; jnb companion_slot_hit_test — a cursor below the game
+        // area tests the companion HUD portrait slots instead of the person
+        // markers.
         if mouse_y >= 0x98 {
-            return None;
+            return self.companion_slot_hit_test();
         }
         // = seg000:928e cx = 0x17 person slots, indexed by person id.
         for id in 0..0x17u8 {
@@ -1678,6 +1742,39 @@ impl GameState {
         // text is 0x78 + 0x2f = 0xa7, TAKE AN ORNITHOPTER, so the hover
         // highlight (slot_for_person_text_id) needs no special case.
         Some(0x2f)
+    }
+
+    // = seg000:92c9 companion_slot_hit_test — hit-test the cursor against the two companion
+    // HUD portrait slots (ui_elements[21]/[22], the boxes at (35,182)/(58,182)):
+    // an occupied slot (ui_hud_companion_N != 0xff) whose rect strictly
+    // contains the cursor (rect_contains, seg000:d6fe) yields that companion's
+    // person index. An empty slot 1 ends the test without trying slot 2 (the
+    // 92d2 jz short-circuit).
+    pub(crate) fn companion_slot_hit_test(&self) -> Option<u8> {
+        let (x, y) = (self.mouse_pos_x as i16, self.mouse_pos_y as i16);
+        let slot_rect = |e: &crate::game_ui::UiElement| crate::Rect {
+            x0: e.x0 as i16,
+            y0: e.y0 as i16,
+            x1: e.x1 as i16,
+            y1: e.y1 as i16,
+        };
+        // = seg000:92cb cl = [ui_hud_companion_1]; cmp cl,0ffh; jz loc_09281.
+        if self.companion_1 < 0 {
+            return None;
+        }
+        // = seg000:92d4 di = ui_hud_elements[21]; call rect_contains.
+        if slot_rect(&self.ui_elements[21]).contains_interior(x, y) {
+            return Some(self.companion_1 as u8);
+        }
+        // = seg000:92dc cl = [ui_hud_companion_2]; cmp cl,0ffh; jz loc_09281.
+        if self.companion_2 < 0 {
+            return None;
+        }
+        // = seg000:92e5 di = ui_hud_elements[22]; jmp rect_contains.
+        if slot_rect(&self.ui_elements[22]).contains_interior(x, y) {
+            return Some(self.companion_2 as u8);
+        }
+        None
     }
 
     // = seg000:d48a draw_command_menu_item — draw one verb slot (`slot` 0..4,
@@ -3123,6 +3220,45 @@ mod tests {
             "portrait shown at the end"
         );
 
+        // A click on the occupied companion HUD slot (ui_elements[21], the
+        // box at (35,182)-(56,196)) resolves to Jessica through
+        // person_hit_test's HUD branch (seg000:9289 -> companion_slot_hit_test) and
+        // dispatches her person handler (loc_09234) — the dialogue reopens
+        // from the portrait while she travels with Paul.
+        game.mouse_pos_x = 45;
+        game.mouse_pos_y = 190;
+        assert_eq!(game.companion_slot_hit_test(), Some(1));
+        assert_eq!(game.person_hit_test(), Some(1));
+        game.callback_main_ui_element_21_22();
+        assert_eq!(
+            game.get_active_screen_element(),
+            super::ScreenElement::NpcActionsMenu,
+            "the companion-portrait click opens the dialogue"
+        );
+        assert_eq!(game.current_lip_sync_resource_id, 1, "talking to Jessica");
+
+        // With her dialogue open: the empty slot 2 misses (seg000:92e0 jz),
+        // and her own portrait re-enters the dialogue via
+        // callback_main_ui_element_19 (seg000:9259) without stacking a
+        // second panel.
+        game.mouse_pos_x = 68;
+        game.mouse_pos_y = 190;
+        game.callback_main_ui_element_21_22();
+        game.mouse_pos_x = 45;
+        game.mouse_pos_y = 190;
+        game.callback_main_ui_element_21_22();
+        assert_eq!(game.current_lip_sync_resource_id, 1);
+        assert_eq!(
+            game.screen_element_stack
+                .iter()
+                .filter(|e| **e == super::ScreenElement::NpcActionsMenu)
+                .count(),
+            1,
+            "one dialogue panel after the portrait clicks"
+        );
+        // Close the reopened dialogue before the STAY HERE checks below.
+        game.menu_callback_choice_exit_menu();
+
         // The next dialogue menu build offers STAY HERE in slot 1
         // (setup_npc_dialogue_menu, seg000:9108..910e).
         game.setup_npc_dialogue_menu(1);
@@ -3623,6 +3759,26 @@ mod tests {
         assert_eq!(
             game.locations[12].discoverable_at_phase, 2,
             "the sietch gains a discovery phase"
+        );
+
+        // The rally re-ran setup_npc_dialogue_menu (seg000:964f) to re-target
+        // the panel at Fremen 2. Equal priority bytes (0xfc) mean the DOS
+        // insert REPLACED the NpcActionsMenu slot (seg000:d343 jz) — the
+        // stack must not deepen, so a single STOP TALKING closes the
+        // dialogue and reveals the room menu.
+        assert_eq!(
+            game.screen_element_stack
+                .iter()
+                .filter(|e| **e == super::ScreenElement::NpcActionsMenu)
+                .count(),
+            1,
+            "one NpcActionsMenu entry after the panel rebuild"
+        );
+        game.dispatch_command_handler(0xd2e2, 0x94);
+        assert_eq!(
+            game.get_active_screen_element(),
+            super::ScreenElement::RoomCommandMenu,
+            "one STOP TALKING returns to the room menu"
         );
     }
 
