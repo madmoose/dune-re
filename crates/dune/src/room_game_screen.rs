@@ -626,7 +626,9 @@ impl GameState {
                 self.data_00023 = 0;
                 self.menu_callback_choice_come_with_me();
             }
-            // 0x9ed5 => self.menu_callback_choice_what(),
+            // = seg000:9ed5 menu_callback_choice_what — the " WHAT ? " verb:
+            // replay the last-presented line's voice.
+            0x9ed5 => self.menu_callback_choice_what(),
 
             // = seg000:0ea6 loc_00ea6 — LOOK AT MIRROR (palace bedroom, slot 1 /
             // seg000:d43e).
@@ -3436,6 +3438,23 @@ mod tests {
             "the quoted idle variant once the voice ends"
         );
         assert_eq!(game.menu_npc_actions_talk_text_id, 0x9f);
+
+        // = seg000:9ed5 menu_callback_choice_what — the " WHAT ? " verb (slot
+        // 2, text 0x95) replays the drained line: current_subtitle_id is
+        // unchanged, its voice reloads and the head speaks again, and the
+        // TALK TO ME verb flips back to its talking variant.
+        let phrase = game.current_subtitle_id;
+        game.dispatch_command_handler(0x9ed5, 0x95);
+        assert_eq!(game.current_subtitle_id, phrase, "the same line replays");
+        let head = game.talking_head.as_ref().unwrap();
+        assert!(
+            head.speaking && !head.voc_lipsync.is_empty(),
+            "the voice restarted"
+        );
+        assert_eq!(
+            game.command_menu_records[0].text_id, 0x90,
+            "the talking variant while the replay plays"
+        );
     }
 
     // Bug 0001 (cont.): the idle animator settles on its own — after one lively

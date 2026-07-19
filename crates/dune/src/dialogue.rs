@@ -735,6 +735,25 @@ impl GameState {
         self.data_000c6 = saved;
     }
 
+    // = seg000:9ed5 menu_callback_choice_what — the " WHAT ? " dialogue verb:
+    // replay the last-presented line's voice. current_subtitle_id still holds
+    // that line's phrase id (show_voice_subtitle), so re-running the
+    // loc_09efd load-and-play chain speaks it again with fresh lip-sync.
+    pub(crate) fn menu_callback_choice_what(&mut self) {
+        // = seg000:9ed5..9ee6 a room speaker (< 0x10): spin loc_09985 until
+        //   the idle head animation reaches a frame boundary (data_047ce & 7)
+        //   and re-arm the portrait part-2 flag (data_047e1 0x81 -> 1). The
+        //   port's TalkingHead paces its idle frames internally and re-syncs
+        //   when the voice starts, and data_047e1 is not modelled.
+        // = seg000:9eeb call arm_npc_menu_idle_timer.
+        self.arm_npc_menu_idle_timer();
+        // = seg000:9eee..9ef7 restore the last line's voc-bank flag around
+        //   the replay (data_047dc = [last_line_voc_bank_flag]; both read 0
+        //   with the come-with-me troop bank unmodelled), then call
+        //   loc_09efd — reload and play current_subtitle_id's .voc.
+        self.play_dialogue_voc();
+    }
+
     // = seg000:9f31 get_dialogue_topic_record — resolve the current speaker's
     // topic-`topic` dialogue record (si = DIALOGUE[(data_047be & 0xfff8) +
     // topic]; topic 5 = COME WITH ME, 6 = STAY HERE), then fall into loc_09f40,
@@ -783,8 +802,9 @@ impl GameState {
     // `.voc` over the lip-sync engine. Reads current_subtitle_id, which
     // show_voice_subtitle set. DOS runs this AFTER the spoken-line event fires.
     pub(crate) fn play_dialogue_voc(&mut self) {
-        // = seg000:9efd data_047dd = data_047dc (the come-with-me voc-bank flag,
-        //   armed at seg000:95b7/96db — unmodelled, reads 0); ax =
+        // = seg000:9efd [last_line_voc_bank_flag] = data_047dc (the
+        //   come-with-me voc-bank flag, armed at seg000:95b7/96db —
+        //   unmodelled, reads 0; the WHAT verb restores it on replay); ax =
         //   current_subtitle_id; bx = current_lip_sync_resource_id; call
         //   load_voc_and_lipsync_data (a6cc). Its index transform:
         // = seg000:a6e7 bl = min(speaker, 0x0e) — the voc directory id;
