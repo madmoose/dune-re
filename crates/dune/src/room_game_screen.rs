@@ -974,9 +974,8 @@ impl GameState {
     // ui_element (= seg000:d904 hit-test miss -> d90a call), and it is also the
     // handler armed on ui_elements[21]/[22].
     //
-    // Not modelled: the bp==1f7e dialogue branch (loc_09248), the person
-    // index >= 0x0f branch (loc_09240), and the no-person room-edge up-travel
-    // branch (loc_09263 -> ui_click_room_up).
+    // Not modelled: the bp==1f7e dialogue branch (loc_09248) and the person
+    // index >= 0x0f branch (loc_09240).
     pub(crate) fn callback_main_ui_element_21_22(&mut self) {
         // = seg000:9215 get_active_screen_element; cmp bp,1f0eh; jnz loc_09248.
         // = seg000:921e cmp game_screen_mode_flags,0; jnz loc_09281.
@@ -987,6 +986,20 @@ impl GameState {
         }
         // = seg000:9225 call person_hit_test_at_cursor; jnb loc_09263 (no person hit).
         let Some(person_id) = self.person_hit_test() else {
+            // = seg000:9263 loc_09263 — no person under the cursor: clicking the
+            //   game area of a location's outdoor arrival view (current_room ==
+            //   1) walks inside through its UP exit. This is how clicking on the
+            //   sietch / palace / fortress in the entry scene enters it. Gated
+            //   out for a click below the game area (mouse_y >= 0x98), the
+            //   smuggler den (current_scene == 0x21), and the night attack.
+            if self.current_room == 1
+                && self.mouse_pos_y < 0x98
+                && self.data_00008 != 0x21
+                && self.night_attack_stage == 0
+            {
+                // = seg000:927e jmp ui_click_room_up.
+                self.ui_click_move_up();
+            }
             return;
         };
         // = seg000:922a cmp cl,2fh; jz loc_09282 — a click on the parked
@@ -3150,6 +3163,67 @@ mod tests {
         // TALK TO ME resets the ds:1b counter (seg000:947a).
         game.menu_callback_choice_talk_to_me();
         assert_eq!(game.data_0001b, 0, "TALK TO ME clears the use counter");
+    }
+
+    // = seg000:9263 loc_09263 — clicking the game area of a location's outdoor
+    // arrival view (current_room == 1), with no person under the cursor, walks
+    // inside through the scene's UP exit. This is how you enter a sietch by
+    // clicking on it. Asset-gated:
+    //   cargo test -p dune --lib -- --ignored click_sietch
+    #[test]
+    #[ignore = "needs assets/DUNE.DAT"]
+    fn click_sietch_game_area_enters_it() {
+        let dat_path = concat!(env!("CARGO_MANIFEST_DIR"), "/../../assets/DUNE.DAT");
+        let Ok(dat_file) = DatFile::open(dat_path) else {
+            eprintln!("skipping: {dat_path} not found");
+            return;
+        };
+        let (tx, _rx) = mpsc::sync_channel(64);
+        let mut game = GameState::new(dat_file, tx);
+        game.set_headless();
+        game.start(true);
+
+        // Stand outside Haga-Timin (locations[51], appearance 0x0a): its room 1
+        // is the outdoor sietch entrance (scene background 0x01, up-exit 0x03).
+        // = the arrival codes location_entry_room_codes(51) builds: dx =
+        //   (appearance << 8) | 1, bx = ((index + 1) << 8) | 0x80.
+        game.location_and_room = 0x0a01;
+        game.location_appearance = 0x3480;
+        game.current_room = 1;
+        game.current_location_index = 51;
+        game.draw_room_game_screen();
+        assert_eq!(game.data_00008, 0x0a, "current_scene = the sietch code");
+        assert_eq!(
+            game.get_active_screen_element(),
+            ScreenElement::RoomCommandMenu
+        );
+
+        // No Fremen stands in the outdoor entrance, so a game-area click hits
+        // no person. Click inside the game area (mouse_y < 0x98).
+        game.mouse_pos_x = 160;
+        game.mouse_pos_y = 60;
+        assert_eq!(game.person_hit_test(), None, "no person in the entrance");
+        game.callback_main_ui_element_21_22();
+
+        // The click walked us through the UP exit into the sietch interior.
+        assert_eq!(
+            game.location_and_room, 0x0a03,
+            "entered the sietch (room 3)"
+        );
+        assert_eq!(game.current_room, 3);
+
+        // A click that misses the game area (mouse_y >= 0x98, over the command
+        // panel) does not enter — return to the entrance and confirm.
+        game.location_and_room = 0x0a01;
+        game.location_appearance = 0x3480;
+        game.current_room = 1;
+        game.draw_room_game_screen();
+        game.mouse_pos_y = 0xb0;
+        game.callback_main_ui_element_21_22();
+        assert_eq!(
+            game.location_and_room, 0x0a01,
+            "a panel click does not enter"
+        );
     }
 
     // Dialogue event 0x0b (callback_event_dialogue_line_0b_increase_game_phase_
