@@ -426,17 +426,18 @@ impl GameState {
         true
     }
 
-    // = seg000:dbb2 call_restore_cursor — hide the software cursor one nesting
-    // level, erasing it from the screen (vga_restore_cursor) if it was visible,
-    // so a draw that lands under it paints over clean background rather than the
-    // cursor pixels. Balanced by draw_mouse, which re-shows it afterwards.
-    //
-    // Only meaningful for the Baked (software) cursor: in Overlay mode the cursor
-    // is composited at present time and never lives in the framebuffer, and while
-    // a frame composes offscreen (front buffer == fb1) the live cursor must not be
-    // touched — both are no-ops.
+    // = seg000:dbb2 call_restore_cursor — hide the cursor one nesting level so a
+    // draw that lands under it paints clean background, not the cursor. Balanced
+    // by draw_mouse, which re-shows it. Baked erases the cursor from the
+    // framebuffer (vga_restore_cursor); Overlay/System publishes the hidden
+    // state to the present thread so the click's hide is visible immediately
+    // (not only at the next redraw_mouse). Both bracket every screen update that
+    // can land under the cursor — including the game loop's per-click hide
+    // (seg000:d8f4), which is what makes the cursor blink off on a HUD-arrow or
+    // command click. No-op while composing a frame offscreen (front == fb1),
+    // where the live cursor must not be touched.
     pub(crate) fn call_restore_cursor(&mut self) {
-        if self.cursor_mode != CursorMode::Baked || self.front_buffer_is_fb1() {
+        if self.front_buffer_is_fb1() {
             return;
         }
         // = seg000:dbb3 al = cursor_hide_counter; dec, committing the decrement
@@ -446,25 +447,31 @@ impl GameState {
         if old <= 0 {
             self.cursor_hide_counter = old - 1;
         }
-        // = seg000:dbc0 or al,al; js — restore only when it was visible (>= 0).
-        if old >= 0 {
-            gfx::vga_restore_cursor(self);
+        if self.cursor_mode == CursorMode::Baked {
+            // = seg000:dbc0 or al,al; js — restore only when it was visible.
+            if old >= 0 {
+                gfx::vga_restore_cursor(self);
+            }
+        } else {
+            self.publish_overlay_cursor();
         }
     }
 
-    // = seg000:dbec draw_mouse — show the software cursor one nesting level,
-    // compositing it at the current pointer position once the counter returns to
-    // 0 (fully shown). The mirror of call_restore_cursor; the two bracket every
-    // screen update that can land under the cursor. No-op for the GPU/system
-    // cursor and while composing offscreen (see call_restore_cursor).
+    // = seg000:dbec draw_mouse — show the cursor one nesting level, restoring it
+    // once the counter returns to 0. The mirror of call_restore_cursor. Baked
+    // composites the cursor into the framebuffer; Overlay/System re-publishes
+    // the (now shown) state. No-op while composing offscreen.
     pub(crate) fn draw_mouse(&mut self) {
-        if self.cursor_mode != CursorMode::Baked || self.front_buffer_is_fb1() {
+        if self.front_buffer_is_fb1() {
             return;
         }
         // = seg000:dbec inc cursor_hide_counter.
         self.cursor_hide_counter = self.cursor_hide_counter.wrapping_add(1);
         // = seg000:dbf0 js loc_0dc1a — still negative: nested-hidden, draw nothing.
         if self.cursor_hide_counter < 0 {
+            if self.cursor_mode != CursorMode::Baked {
+                self.publish_overlay_cursor();
+            }
             return;
         }
         // = seg000:dbf2 jnz loc_0dc1b — over-shown: undo the inc and return.
@@ -472,8 +479,12 @@ impl GameState {
             self.cursor_hide_counter -= 1;
             return;
         }
-        // = seg000:dbf4 counter == 0: composite the cursor at mouse_pos with the
-        // last-selected shape (cursor_image_ptr).
+        // = seg000:dbf4 counter == 0: the cursor is fully shown again.
+        if self.cursor_mode != CursorMode::Baked {
+            self.publish_overlay_cursor();
+            return;
+        }
+        // Baked: composite the cursor at mouse_pos with the last-selected shape.
         let x = self.mouse_pos_x;
         let y = self.mouse_pos_y;
         self.mouse_draw_pos_x = x;
@@ -483,6 +494,21 @@ impl GameState {
             None => self.get_mouse_cursor_image(),
         };
         gfx::vga_draw_cursor(self, image, x, y);
+    }
+
+    // Publish the overlay cursor's current shape and hidden state to the
+    // present thread. call_restore_cursor / draw_mouse call it so a hide (or
+    // re-show) driven by an interaction reaches the compositor at once, without
+    // waiting for the next redraw_mouse — the present thread samples the live
+    // pointer position itself. Overlay/System only.
+    fn publish_overlay_cursor(&mut self) {
+        let shape = self
+            .cursor_image
+            .unwrap_or_else(|| self.get_mouse_cursor_image());
+        self.shared_cursor.publish(CursorOverlay {
+            shape,
+            hidden: self.cursor_hide_counter < 0,
+        });
     }
 
     // = seg000:db4c mouse_stuff — read the live button state and the previously

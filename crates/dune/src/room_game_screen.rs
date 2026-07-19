@@ -3226,6 +3226,50 @@ mod tests {
         );
     }
 
+    // = seg000:d8f4 the per-click cursor hide — the game loop brackets every
+    // button-edge dispatch with call_restore_cursor, so the cursor blinks off
+    // while a HUD-arrow / command / game-area click is processed and comes back
+    // afterwards. In Overlay (GPU/OS) cursor mode this drives
+    // shared_cursor.hidden, which the present thread samples. Asset-gated:
+    //   cargo test -p dune --lib -- --ignored cursor_hides
+    #[test]
+    #[ignore = "needs assets/DUNE.DAT"]
+    fn cursor_hides_during_a_click_in_overlay_mode() {
+        let dat_path = concat!(env!("CARGO_MANIFEST_DIR"), "/../../assets/DUNE.DAT");
+        let Ok(dat_file) = DatFile::open(dat_path) else {
+            eprintln!("skipping: {dat_path} not found");
+            return;
+        };
+        let (tx, _rx) = mpsc::sync_channel(64);
+        let mut game = GameState::new(dat_file, tx);
+        game.set_headless();
+        game.start(true);
+        game.cursor_mode = crate::mouse::CursorMode::Overlay;
+
+        // call_restore_cursor (the game loop's per-click hide) publishes the
+        // cursor as hidden; the balancing draw_mouse shows it again.
+        game.call_restore_cursor();
+        assert!(
+            game.shared_cursor.snapshot().hidden,
+            "the click hides the cursor"
+        );
+        game.draw_mouse();
+        assert!(
+            !game.shared_cursor.snapshot().hidden,
+            "the cursor comes back after the interaction"
+        );
+
+        // While a frame composes offscreen (front buffer == fb1), the live
+        // cursor must not be touched — the hide is a no-op there.
+        game.set_fb1_as_active_framebuffer();
+        game.screen_buffer = crate::FbId::Fb1;
+        game.call_restore_cursor();
+        assert!(
+            !game.shared_cursor.snapshot().hidden,
+            "no cursor hide while composing offscreen"
+        );
+    }
+
     // Dialogue event 0x0b (callback_event_dialogue_line_0b_increase_game_phase_
     // by_1_and_do_more, seg000:a219): a story line advances the game phase,
     // zeroes the days-since-phase-change counter, runs the phase-trigger
