@@ -3284,6 +3284,40 @@ mod tests {
         }
     }
 
+    // Toggling the overlay pushes a frame immediately, so it appears /
+    // disappears at once even on an otherwise static screen. Asset-gated:
+    //   cargo test -p dune --lib -- --ignored debug_overlay_toggle_frame
+    #[test]
+    #[ignore = "needs assets/DUNE.DAT"]
+    fn debug_overlay_toggle_forces_a_frame() {
+        let dat_path = concat!(env!("CARGO_MANIFEST_DIR"), "/../../assets/DUNE.DAT");
+        let Ok(dat_file) = DatFile::open(dat_path) else {
+            eprintln!("skipping: {dat_path} not found");
+            return;
+        };
+        let (tx, rx) = mpsc::sync_channel(16);
+        // Not headless: send_frame_to_display must actually publish.
+        let mut game = GameState::new(dat_file, tx);
+
+        // A backquote edge toggles on and pushes one frame.
+        game.input.lock().unwrap().kb_keys[0x29] = 0xff;
+        game.poll_debug_overlay_toggle();
+        assert!(game.debug_overlay);
+        assert!(rx.try_recv().is_ok(), "toggling on pushes a frame");
+        assert!(rx.try_recv().is_err(), "and only one");
+
+        // A release (no edge) pushes nothing.
+        game.input.lock().unwrap().kb_keys[0x29] = 0;
+        game.poll_debug_overlay_toggle();
+        assert!(rx.try_recv().is_err(), "a release does not push a frame");
+
+        // The next press toggles off and pushes another frame.
+        game.input.lock().unwrap().kb_keys[0x29] = 0xff;
+        game.poll_debug_overlay_toggle();
+        assert!(!game.debug_overlay);
+        assert!(rx.try_recv().is_ok(), "toggling off pushes a frame");
+    }
+
     // = seg000:d8f4 the per-click cursor hide — the game loop brackets every
     // button-edge dispatch with call_restore_cursor, so the cursor blinks off
     // while a HUD-arrow / command / game-area click is processed and comes back

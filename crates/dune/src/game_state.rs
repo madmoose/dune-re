@@ -2635,6 +2635,10 @@ impl GameState {
         let down = self.input.lock().unwrap().kb_keys[SCANCODE_BACKQUOTE] != 0;
         if down && !self.debug_overlay_key_down {
             self.debug_overlay = !self.debug_overlay;
+            // Push a frame right away so the overlay appears / disappears at
+            // once, even on an otherwise static screen where nothing else
+            // would trigger a present.
+            self.send_frame_to_display();
         }
         self.debug_overlay_key_down = down;
     }
