@@ -1022,14 +1022,16 @@ pub struct GameState {
     // (seg000:89d3/8a3b/8ac6, unported) tests its 0x10 flag.
     pub(crate) dialogue_line_word0: u16,
 
-    // = seg001:47b6 dialogue_text_continuation_ptr (offset half of the far
-    // pointer) — a pending multi-part subtitle-text continuation, armed at
-    // seg000:89c8 by the subtitle text engine and cleared by
-    // set_dialogue_speaker. While nonzero, menu_callback_choice_talk_to_me
-    // re-presents the continuation (loc_094dd) and fire_event_callbacks skips
-    // the event + spoken-mark (seg000:a042). The text engine is unported, so
-    // this stays 0 in the port; the guards that read it are still modelled.
-    pub(crate) dialogue_text_continuation_ptr: u16,
+    // = seg001:47b6 dialogue_text_continuation_ptr — a pending multi-part
+    // subtitle-text continuation, armed at seg000:89c8 when the interpolator
+    // hits a top-level sentence separator (a terminator byte != 0xff) and
+    // cleared by the final 0xff terminator or set_dialogue_speaker. While
+    // set, menu_callback_choice_talk_to_me re-presents the continuation
+    // (loc_094dd) with current_subtitle_id += 0x1000 (the voc variant-letter
+    // step) and fire_dialogue_line_event skips the event + spoken-mark +
+    // advance (seg000:a042). DOS stores a far pointer into the 0xa840
+    // expansion buffer; the port owns the remaining source bytes.
+    pub(crate) dialogue_text_continuation: Option<Vec<u8>>,
 
     // = seg001:47a8 dialogue_end_request — incremented by the spoken-line event
     // 0x06 (callback_event_dialogue_line_06_end_dialogue, seg000:a1e8); consumed
@@ -1524,7 +1526,7 @@ impl GameState {
             subtitle_bubble: None,
             data_047e0: 0,
             dialogue_line_word0: 0,
-            dialogue_text_continuation_ptr: 0,
+            dialogue_text_continuation: None,
             dialogue_end_request: 0,
             dialogue_resume_entry_ptr: 0,
             dialogue_played_log: Vec::new(),
@@ -2682,7 +2684,7 @@ impl GameState {
         // (label, value) rows. The value column is placed at a fixed pixel x
         // past the widest label, so the values line up even though the glyph
         // font is proportional (space-padding would not align them).
-        let rows: [(&str, String); 9] = [
+        let rows: [(&str, String); 10] = [
             (
                 "PHASE",
                 format!("{:#04x} ({})", self.game_phase, self.game_phase),
@@ -2695,6 +2697,10 @@ impl GameState {
             ("DAY", format!("{}  time {:#06x}", day, self.game_time)),
             ("CHARISMA", format!("{}", self.charisma)),
             ("RALLIED", format!("{}", self.number_of_rallied_troops)),
+            (
+                "SIETCHES SEEN",
+                format!("{}", self.number_of_sietches_visited),
+            ),
             ("MET", format!("{:#06x}", self.persons_met)),
             ("TRAVEL", format!("{:#06x}", self.persons_travelling_with)),
             ("IN ROOM", format!("{:#06x}", self.persons_in_room)),

@@ -24,7 +24,8 @@
 //! event callbacks + spoken mark + dialogue-played log, and the voice `.voc`
 //! playback are ported. Still stubbed: the subtitle text (draw_subtitle_body
 //! and the whole phrase/text engine) and the multi-part text continuation
-//! (dialogue_text_continuation_ptr stays 0).
+//! (dialogue_text_continuation, armed by the interpolator's sentence
+//! separators and consumed by the talk verb's loc_094dd branch).
 
 use std::io::Cursor;
 
@@ -351,7 +352,7 @@ impl GameState {
         self.setup_npc_dialogue_menu(person_index);
         // = seg000:940c dialogue_text_continuation_ptr = 0 — drop any pending
         // multi-part subtitle continuation.
-        self.dialogue_text_continuation_ptr = 0;
+        self.dialogue_text_continuation = None;
         // = seg000:9412 data_047c2 = 0x80 — prime the verb-panel sentence mask
         // dialogue_interpret_record applies to each sentence's flag byte.
         self.data_047c2 = 0x80;
@@ -399,11 +400,34 @@ impl GameState {
         // = seg000:947a data_0001b = 0 — reset the COME WITH ME / STAY HERE
         //   use counter (related_to_stay_here_come_with_me_ds_1b).
         self.data_0001b = 0;
-        // = seg000:947f cmp dialogue_text_continuation_ptr,0; jnz loc_094dd — a
-        //   pending multi-part subtitle continuation is re-presented (loc_088d2,
-        //   current_subtitle_id += 0x1000) and its events re-fired instead of
-        //   walking a new line. The text engine that arms the pointer is
-        //   unported, so the branch never runs.
+        // = seg000:947f cmp dialogue_text_continuation_ptr,0; jnz loc_094dd —
+        //   a pending multi-part continuation presents its next sentence
+        //   instead of walking a new line.
+        if let Some(cont) = self.dialogue_text_continuation.take() {
+            // = seg000:94dd lds si,[dialogue_text_continuation_ptr]; call
+            //   loc_088d2 — interpolate + draw the continuation text. The
+            //   interpolator re-arms the pointer when yet another sentence
+            //   follows, or leaves it clear on the final one.
+            self.format_and_draw_subtitle(&cont);
+            // = seg000:94e4 si = [dialogue_resume_entry_ptr] — still the
+            //   multi-part entry itself (the pending continuation made
+            //   fire_dialogue_line_event skip its +4 advance).
+            let entry = self.dialogue_resume_entry_ptr;
+            // = seg000:94e8 current_subtitle_id += 0x1000 — step the voc part
+            //   nibble: create_voc_file_name renders bits 12..15 as the
+            //   trailing variant letter (O -> OB -> OC).
+            self.current_subtitle_id = self.current_subtitle_id.wrapping_add(0x1000);
+            // = seg000:94ee call fire_event_callbacks_from_spoken_dialogue_
+            //   lines_and_more — on the final part (pointer now clear) this
+            //   fires the entry's event, marks it spoken and advances; either
+            //   way its tail re-presents the head and plays this part's voice.
+            let next = self.fire_dialogue_line_event(entry as usize);
+            // = seg000:94f1 jmp loc_094a5 — store the resume pointer and fold
+            //   the panel (the presented path, 94a9 jnb loc_094da).
+            self.dialogue_resume_entry_ptr = next;
+            self.play_pending_panel_fold();
+            return;
+        }
 
         // = seg000:9486 si = dialogue_resume_entry_ptr — resume inside the
         //   current record; 948e zero -> start at the data_047be topic cursor's
@@ -993,9 +1017,12 @@ impl GameState {
 
         let mut si = entry_offset as u16;
         // = seg000:a042 cmp dialogue_text_continuation_ptr,0; jnz loc_0a0aa — a
-        //   pending multi-part continuation already fired its event and spoken
-        //   mark on the line's first part; skip straight to the present tail.
-        if self.dialogue_text_continuation_ptr == 0 {
+        //   pending multi-part continuation defers the event, played-log entry,
+        //   spoken mark and the +4 advance to its LAST part (when the
+        //   interpolator leaves the pointer clear); skip straight to the
+        //   present tail so each part still re-presents the head and plays its
+        //   voice.
+        if self.dialogue_text_continuation.is_none() {
             // let b0: u8;
             // let b2: u8;
             // todo!();

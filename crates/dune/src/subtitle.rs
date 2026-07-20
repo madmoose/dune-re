@@ -18,8 +18,8 @@
 //! (DOS defers to the head-present chain, seg000:9025 — same pixels,
 //! different plumbing; the seg000:908c head-render re-stamp is ported); the
 //! map-troop (data_046eb) and book (data_000c6) special backgrounds are
-//! TODO; the multi-part text continuation (terminator 0xfe) is not yet
-//! resumed by TALK TO ME.
+//! TODO. A top-level sentence separator (terminator != 0xff) arms the
+//! multi-part continuation TALK TO ME resumes (loc_094dd).
 
 use crate::{GameState, Rect, gfx};
 
@@ -142,6 +142,19 @@ impl GameState {
             return;
         }
         self.draw_subtitle_body(text);
+    }
+
+    // = seg000:88d2 loc_088d2 — interpolate `src` into the 0xa6b0 buffer and,
+    // in a text-showing subtitle mode (< 2), lay it out and draw it. The talk
+    // verb's multi-part continuation re-enters the subtitle pipeline here
+    // (seg000:94e1) with the pending continuation text.
+    pub(crate) fn format_and_draw_subtitle(&mut self, src: &[u8]) {
+        let text = self.format_interpolated_string(src);
+        // = seg000:88da cmp voice_subtitle_mode,2; jnb loc_08888.
+        if self.voice_subtitle_mode >= 2 {
+            return;
+        }
+        self.draw_subtitle_text(&text);
     }
 
     // = seg000:88f1 expand_phrase_tokens — expand a phrase/command string
@@ -278,11 +291,17 @@ impl GameState {
                         (cur, pos) = frame;
                         continue;
                     }
-                    // = seg000:89c1 the terminator byte is stored; 0xfe (not
-                    //   0xff) would arm dialogue_text_continuation_ptr for
-                    //   the multi-part resume — TODO: the resume path in the
-                    //   talk verb is unported, so the pointer stays 0.
+                    // = seg000:89c1..89c8 the terminator byte is stored, and
+                    //   the continuation pointer is (re)written: a sentence
+                    //   separator (any terminator != 0xff) arms it with the
+                    //   text that follows — the talk verb's multi-part resume
+                    //   (loc_094dd) — while the final 0xff clears it.
                     out.push(b);
+                    self.dialogue_text_continuation = if b != 0xff {
+                        Some(cur[pos..].to_vec())
+                    } else {
+                        None
+                    };
                     // = seg000:89d3..89e0 a voiced line (dialogue_line_word0
                     //   bit 4) picks a random spoken-variant index
                     //   (data_047e0 = rand & 3) and consumes the flag.

@@ -671,11 +671,22 @@ impl GameState {
         // through unchanged (Leto id 0 → 'A' → the "PA" dir).
         let dir_id = head.lip_sync_resource_id.min(0x0e) as u8;
 
-        // = create_voc_file_name_from_bx (seg000:a8bc): "P<L>\P<L><idx><X>.VOC",
+        // = create_voc_file_name_from_bx (seg000:a8bc): "P<L>\P<L><idx><X>[V].VOC",
         // where the directory/name letter L = 'A' + dir_id, <idx> is the 3-hex-
-        // digit voc index, and <X> is the 'I'/'O' suffix.
+        // digit voc index (bx bits 0..11), and <X> is the 'I'/'O' suffix. The
+        // trailing variant letter V (a8fd..a907) is (bx bits 12..15) OR
+        // data_047e0, rendered as 'A'+v when non-zero: a multi-part line's
+        // continuations step the high nibble (seg000:94e8 += 0x1000) giving
+        // O -> OB -> OC parts, and an altvoc line's random data_047e0 picks
+        // O/OB/OC/OD alternates.
         let letter = (b'A' + dir_id) as char;
-        let name = format!("P{letter}\\P{letter}{voc_index:03X}{suffix}.VOC");
+        let variant = ((voc_index >> 12) as u8) | self.data_047e0;
+        let idx = voc_index & 0xfff;
+        let mut name = format!("P{letter}\\P{letter}{idx:03X}{suffix}");
+        if variant != 0 {
+            name.push((b'A' + variant) as char);
+        }
+        name.push_str(".VOC");
 
         // = load_voc_and_lipsync_data -> voc_get_lipsync_data: read the .voc,
         // pull the type-5 comment-block mouth stream and the type-1 PCM block.

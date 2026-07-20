@@ -3028,6 +3028,93 @@ mod tests {
         eprintln!("wrote leto_stop_talking.png ({vs_plain} px differ from the plain room)");
     }
 
+    // Gurney's opening lines exercise the multi-part text continuation
+    // (dialogue_text_continuation, = seg001:47b6). His second sentence entry
+    // (word 0x40E8, phrase 0xBE8) holds two sentences split by a top-level
+    // separator, so three presentations walk:
+    //   1. entry 0BE7 — "I'm Gurney Halleck. I have served…"
+    //   2. entry 40E8 part 1 — "I've just come into contact with the Fremen…"
+    //      (the interpolator arms the continuation; the entry stays unspoken
+    //      and the resume pointer stays AT the entry, seg000:a042)
+    //   3. the continuation (loc_094dd) — "I have tried to convince them…"
+    //      with current_subtitle_id += 0x1000 (the OB voc part), and only now
+    //      the event/spoken-mark/advance (seg000:94ee -> a049..a0a7).
+    // Asset-gated; run with:
+    //   cargo test -p dune -- --ignored gurney_multi_part
+    #[test]
+    #[ignore = "needs assets/DUNE.DAT"]
+    fn gurney_multi_part_line_resumes_on_talk_to_me() {
+        let dat_path = concat!(env!("CARGO_MANIFEST_DIR"), "/../../assets/DUNE.DAT");
+        let Ok(dat_file) = DatFile::open(dat_path) else {
+            eprintln!("skipping: {dat_path} not found");
+            return;
+        };
+        let (tx, _rx) = mpsc::sync_channel(64);
+        let mut game = GameState::new(dat_file, tx);
+        game.set_headless();
+        game.start(true);
+
+        // Talk to Gurney (person 4). His first line's condition holds at game
+        // start ((byte[0x18] & 0x20) == 0, game_phase < 0x14).
+        game.common_dialogue(0x4);
+        // The entry's raw phrase index is 0x131 (the analysis dump's absolute
+        // 0xBE7 minus Gurney's bank base); the walk presents it as
+        // (word1 byteswapped & 0x3ff) | 0x800.
+        assert_eq!(
+            game.current_subtitle_id, 0x931,
+            "line 1: I'm Gurney Halleck"
+        );
+        assert!(
+            game.dialogue_text_continuation.is_none(),
+            "a single-sentence line leaves no continuation"
+        );
+
+        // Second click: the 40E8 entry's first sentence. The separator arms
+        // the continuation; the entry is neither spoken nor advanced past.
+        game.menu_callback_choice_talk_to_me();
+        assert_eq!(game.current_subtitle_id, 0x932, "line 2: part 1");
+        assert!(
+            game.dialogue_text_continuation.is_some(),
+            "the separator arms the continuation"
+        );
+        let entry = game.dialogue_resume_entry_ptr as usize;
+        assert_eq!(
+            game.dialogue[entry] & 0x80,
+            0,
+            "the multi-part entry is not yet marked spoken"
+        );
+        let cont_len = game.dialogue_text_continuation.as_ref().unwrap().len();
+        assert!(cont_len > 20, "sentence 2 pending ({cont_len} bytes)");
+        // The part-2 voice exists in the DAT under the OB variant letter
+        // (create_voc_file_name_from_bx, seg000:a8fd..a907: bits 12..15 of
+        // the rebased index render as 'A'+v after the O suffix).
+        let idx = (0x1932u16 & 0xf3ff).wrapping_sub(game.voc_base(4)) & 0xfff;
+        let name = format!("PE\\PE{idx:03X}OB.VOC");
+        assert!(
+            game.dat_file.read(&name).is_ok(),
+            "part-2 voice {name} in the DAT"
+        );
+
+        // Third click: the continuation presents sentence 2, steps the voc
+        // part nibble, and only now fires the entry bookkeeping.
+        game.menu_callback_choice_talk_to_me();
+        assert_eq!(game.current_subtitle_id, 0x1932, "line 3: part 2 (+0x1000)");
+        assert!(
+            game.dialogue_text_continuation.is_none(),
+            "the final 0xff terminator clears the continuation"
+        );
+        assert_ne!(
+            game.dialogue[entry] & 0x80,
+            0,
+            "the entry is marked spoken after its last part"
+        );
+        assert_eq!(
+            game.dialogue_resume_entry_ptr as usize,
+            entry + 4,
+            "the resume pointer advances past the entry"
+        );
+    }
+
     // Bug 0001 (cont.): clicking Leto loads the DIALOGUE resource and selects his
     // greeting sentence (menu_callback_choice_talk_to_me -> the topic walk ->
     // dialogue_interpret_record). Verifies the dialogue-record format end to end.
@@ -3565,8 +3652,10 @@ mod tests {
         // troops — the troop system that bumps the counter is unported),
         // Leto's topic-1 walk reaches entry 0x012a (phrase 0x807, event 0x0b,
         // condition 7 `(game_phase - 1 < 2) &. (rallied == 2)`) and advances
-        // phase 1 -> 2. Each conversation presents one line, so re-enter
-        // until it fires.
+        // phase 1 -> 2. Each conversation presents one line — and a
+        // multi-part line's event fires only after its LAST part (a042), so
+        // walk any pending continuation with TALK TO ME (re-entering
+        // common_dialogue would clear it, seg000:940c) before resuming.
         game.number_of_rallied_troops = 2;
         // Entry 0x0116 (phrase 0x802, word0 bit 6 = repeatable) blocks the
         // walk while Gurney (bit 0x10) is neither travelling nor present
@@ -3577,9 +3666,16 @@ mod tests {
                 break;
             }
             game.common_dialogue(0x0);
+            while game.game_phase == 1 && game.dialogue_text_continuation.is_some() {
+                game.menu_callback_choice_talk_to_me();
+            }
         }
         assert_eq!(game.game_phase, 2, "Leto's mission line advances the phase");
-        assert_eq!(game.current_subtitle_id, 0x807, "the event-0x0b line spoke");
+        assert_eq!(
+            game.current_subtitle_id & 0xfff,
+            0x807,
+            "the event-0x0b line spoke (its last part)"
+        );
     }
 
     // set_game_phase_and_trigger_callbacks (seg000:121f): raising the phase
