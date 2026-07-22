@@ -3,6 +3,7 @@
 #![allow(dead_code)]
 
 mod attack;
+mod avi;
 mod blit;
 mod color;
 mod condit;
@@ -37,6 +38,7 @@ mod palace_plan;
 mod palette;
 mod pcm_player;
 mod point;
+mod recorder;
 mod rect;
 mod room_game_screen;
 mod room_renderer;
@@ -82,6 +84,7 @@ use crate::{
     mouse::{CursorMode, CursorShapeId, SharedCursor, cursor_shape},
     palette::Palette,
     point::Point,
+    recorder::{RecordFormat, Recorder, RecorderTee},
     rect::Rect,
     room_renderer::{DrawOptions, RoomRenderer, RoomSheet, sal_position_markers},
     sprite_blitter::{draw_sprite, draw_sprite_from_sheet, sprite_blitter},
@@ -545,6 +548,9 @@ struct App {
     last_frame: Option<(FrameBuffer, Palette)>,
     // Counter numbering successive screenshots.
     screenshot_seq: u32,
+    // Built-in clip recorder (video + audio), toggled with F9. Shared with the
+    // audio streams, which tee their output into it while recording.
+    recorder: Arc<Recorder>,
     // True while the window is fully hidden (minimised / another space / wholly
     // covered). The present loop re-arms `request_redraw` every frame and is
     // paced only by `Queue::present` blocking on vsync; once the surface is
@@ -560,6 +566,15 @@ struct App {
     system_cursor: bool,
     system_cursors: Option<SystemCursors>,
     system_cursor_applied: Option<(u32, bool)>,
+}
+
+impl Drop for App {
+    fn drop(&mut self) {
+        // Finalise any in-progress recording on every graceful teardown path,
+        // not just the window close button. (A hard kill / Ctrl-C still can't
+        // run this — stop recording with F9 or the window before quitting.)
+        self.recorder.stop();
+    }
 }
 
 impl App {
@@ -595,6 +610,11 @@ impl App {
     }
 
     fn compute_cursor_overlay(&self) -> CursorOverlayDraw {
+        // While recording the cursor is baked into the framebuffer, so the
+        // present-side overlay stays hidden.
+        if self.recorder.is_recording() {
+            return CursorOverlayDraw::hidden();
+        }
         let Some((_, pal)) = self.last_frame.as_ref() else {
             return CursorOverlayDraw::hidden();
         };
@@ -940,6 +960,8 @@ impl ApplicationHandler for App {
     fn window_event(&mut self, event_loop: &ActiveEventLoop, _id: WindowId, event: WindowEvent) {
         match event {
             WindowEvent::CloseRequested => {
+                // Finalise any in-progress recording before tearing down.
+                self.recorder.stop();
                 event_loop.exit();
             }
             WindowEvent::Occluded(occluded) => {
@@ -958,6 +980,10 @@ impl ApplicationHandler for App {
                     if code == KeyCode::F12 && event.state == ElementState::Pressed && !event.repeat
                     {
                         self.save_screenshot();
+                    }
+                    if code == KeyCode::F9 && event.state == ElementState::Pressed && !event.repeat
+                    {
+                        self.recorder.toggle(None);
                     }
                     if let Some(scancode) = keycode_to_scancode(code) {
                         let pressed = event.state == ElementState::Pressed;
@@ -1014,7 +1040,12 @@ impl ApplicationHandler for App {
                     self.last_frame = Some((framebuffer, palette));
                 }
 
-                let gpu_overlay = self.cursor_mode == CursorMode::Overlay && !self.system_cursor;
+                // While recording, the game bakes the cursor into the framebuffer
+                // (see `sync_recording_cursor_mode`); suppress the present-side
+                // cursor so the live view doesn't show a second one.
+                let recording = self.recorder.is_recording();
+                let gpu_overlay =
+                    self.cursor_mode == CursorMode::Overlay && !self.system_cursor && !recording;
                 let re_render = had_new || gpu_overlay;
                 if re_render
                     && let Some((fb, pal)) = self.last_frame.as_ref()
@@ -1039,7 +1070,16 @@ impl ApplicationHandler for App {
                 }
 
                 if self.system_cursor {
-                    self.update_system_cursor(event_loop);
+                    if recording {
+                        // Hide the OS cursor while the game bakes its own, so the
+                        // pointer isn't doubled. Force a re-apply afterwards.
+                        if let Some(window) = &self.window {
+                            window.set_cursor_visible(false);
+                        }
+                        self.system_cursor_applied = None;
+                    } else {
+                        self.update_system_cursor(event_loop);
+                    }
                 }
 
                 self.window.as_ref().unwrap().request_redraw();
@@ -1065,6 +1105,24 @@ enum Cursor {
     System,
 }
 
+/// Output format for the built-in recorder.
+#[derive(Copy, Clone, Debug, PartialEq, Eq, ValueEnum)]
+enum RecordFmt {
+    /// H.264 in MP4 via ffmpeg, aspect-corrected to 1600x1200 (needs ffmpeg).
+    Mp4,
+    /// Uncompressed 24-bit AVI written in-process, native 320x200 (no ffmpeg).
+    Avi,
+}
+
+impl From<RecordFmt> for RecordFormat {
+    fn from(f: RecordFmt) -> Self {
+        match f {
+            RecordFmt::Mp4 => RecordFormat::Mp4,
+            RecordFmt::Avi => RecordFormat::Avi,
+        }
+    }
+}
+
 #[derive(Parser, Debug)]
 #[command(name = "dune", about = "Dune reimplemented")]
 struct Args {
@@ -1086,6 +1144,17 @@ struct Args {
     /// How the mouse cursor is rendered.
     #[arg(long, value_enum, default_value_t = Cursor::System)]
     cursor: Cursor,
+
+    /// Start recording a video+audio clip at launch. Optional path (default
+    /// auto-numbered dune-rec-NNN.<ext>). Also toggled interactively with F9.
+    #[arg(long, value_name = "PATH")]
+    record: Option<Option<PathBuf>>,
+
+    /// Recorder output format: `mp4` (H.264 via ffmpeg) or `avi` (uncompressed,
+    /// in-process, no ffmpeg needed). Overridden by the extension of an explicit
+    /// `--record` path.
+    #[arg(long, value_enum, default_value_t = RecordFmt::Mp4)]
+    record_format: RecordFmt,
 
     /// The DUNE.DAT data file.
     dat_file: PathBuf,
@@ -1116,6 +1185,21 @@ fn main() {
     let game_frame_slot = frame_slot.clone();
     let (start_sender, start_receiver) = mpsc::channel();
 
+    // Built-in clip recorder, shared between the present thread (toggle + stop)
+    // and the game thread's audio streams (which tee into it). The game
+    // publishes frames through a RecorderTee so the recorder gets its own copy
+    // of every frame without racing the display for the FrameSlot.
+    let recorder = Arc::new(Recorder::new());
+    recorder.set_format(RecordFormat::from(args.record_format));
+    let game_recorder = Arc::clone(&recorder);
+    let game_sink = RecorderTee::new(game_frame_slot, Arc::clone(&recorder));
+
+    // --record: begin recording at launch. Frames haven't started yet; the
+    // capture thread writes black until the first frame is published.
+    if let Some(out) = args.record.clone() {
+        recorder.start(out);
+    }
+
     // Shared keyboard + mouse state: the event loop (this thread) writes it, the
     // game thread polls it. Both ends hold a handle to the same Arc.
     let input = InputState::shared();
@@ -1134,10 +1218,11 @@ fn main() {
 
         let mut game = GameState::new_with_input_and_cursor(
             dat_file,
-            game_frame_slot,
+            game_sink,
             game_input,
             cursor_mode,
             game_cursor,
+            game_recorder,
         );
         game.log_condit = args.log_condit;
         game.log_subtitle = args.log_subtitle;
@@ -1161,6 +1246,7 @@ fn main() {
         mouse_buttons: 0,
         last_frame: None,
         screenshot_seq: 0,
+        recorder,
         occluded: false,
         system_cursor,
         system_cursors: None,

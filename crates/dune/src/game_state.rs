@@ -13,6 +13,7 @@ use crate::{
     midi::{self, Midi},
     mouse::SharedCursor,
     pcm_player::{self, PcmPlayer},
+    recorder::Recorder,
     room_game_screen::{CommandMenuRecord, ROOM_PERSON_TABLE_INIT, RoomPerson, ScreenElement},
     settings_ui::{SETTINGS_RECORDS_INIT, SettingsRecord},
     sprite::Sprite,
@@ -183,14 +184,23 @@ pub struct GameState {
 
     pub(crate) pcm_player: PcmPlayer,
 
+    // The clip recorder, kept here so the in-game EXIT GAME path (`exit_to_dos`)
+    // can finalise a recording before `std::process::exit` skips all destructors.
+    pub(crate) recorder: std::sync::Arc<Recorder>,
+
     pub(crate) game_start: std::time::Instant,
     pub(crate) frame_sink: Box<dyn FrameSink>,
 
     // Where the cursor sprite gets composited. `Baked` runs the DOS
     // `vga_draw_cursor` / `vga_restore_cursor` pair on the game thread;
     // `Overlay` skips that and lets the present thread draw the cursor
-    // sprite on the GPU using the freshest pointer position.
+    // sprite on the GPU using the freshest pointer position. This is the
+    // *active* mode — it is forced to `Baked` while recording so the cursor
+    // lands in the captured framebuffer (see `sync_recording_cursor_mode`).
     pub(crate) cursor_mode: CursorMode,
+    // The cursor mode selected on the command line; `cursor_mode` is restored to
+    // this when a recording stops.
+    pub(crate) base_cursor_mode: CursorMode,
     // Shape + visibility published by `redraw_mouse` when `cursor_mode ==
     // Overlay`, sampled by the present thread once per redraw.
     pub(crate) shared_cursor: SharedCursor,
@@ -303,6 +313,14 @@ pub struct GameState {
     // currently in dialogue with.
     pub(crate) persons_talking_to: u16,
 
+    // = seg001:0019 line_spoken_this_conversation — a "has a dialogue line been
+    // spoken this conversation" flag: 0 when set_dialogue_speaker starts a
+    // conversation (seg000:9417), 0xff once any dialogue line is presented
+    // (fire_dialogue_line_event, seg000:a092). A fallback dialogue line tests
+    // this == 0 in its CONDIT condition, so the fallback presents only when no
+    // other line was presentable this conversation.
+    pub(crate) line_spoken_this_conversation: u8,
+
     // = seg001:001b related_to_stay_here_come_with_me_ds_1b — counts the
     // COME WITH ME / STAY HERE verb uses since the last TALK TO ME (which
     // clears it, seg000:947a).
@@ -316,18 +334,17 @@ pub struct GameState {
     // chief's WORK WITH ME charisma check, seg000:95de: 0 pass / 2 refuse).
     pub(crate) pending_room_action: u8,
 
-    // = seg001:00ac data_000ac — total population of the allegiance-flagged
-    // troops (the loc_0c049 scan sums troop byte +0x1a into ds:ac for troops
-    // with byte +0x10 bit 0x80, else into ds:aa); static init 0x1b58 (7000).
-    // Gates the Fremen WORK WITH ME charisma check (seg000:95c4). Its
-    // updaters — loc_0c02e from the new-day tick (seg000:1ca0) and the
-    // CHOAM/globe stats path (seg000:bee0) — are not yet ported, so the
-    // value keeps the DOS static initial.
-    pub(crate) data_000ac: u16,
-
     // = seg001:0025 number_of_sietches_visited — counts first visits to
     // locations with a code below 0x20 (the sietches)
     pub(crate) number_of_sietches_visited: u8,
+
+    // = seg001:0026 entering_new_sietch — 0xff while the player's first in-room
+    // move inside a freshly visited location is being committed
+    pub(crate) entering_new_sietch: u8,
+
+    // = seg001:0027 discovered_sietch_count — counts sietches whose location
+    // record lost its undiscovered bit (location_mark_discovered).
+    pub(crate) discovered_sietch_count: u8,
 
     // = seg001:0028 number_of_rallied_troops — how many Fremen troops have
     // been rallied to the Atreides cause. The troop system that maintains it
@@ -336,47 +353,6 @@ pub struct GameState {
     // read it.
     pub(crate) number_of_rallied_troops: u8,
 
-    // = seg001:1178 number_of_rallied_troops_for_Leto_being_killed — the
-    // rallied-troop threshold armed by the phase-0x48 (met Chani) callback
-    // (rallied + 2); 0xff (the static value) = not armed. Its reader (the
-    // Leto-killed event pump) is not yet ported.
-    pub(crate) number_of_rallied_troops_for_leto_killed: u8,
-
-    // = seg001:1154 data_01154 — game_time snapshot taken by the phase-0x2c
-    // (met Stilgar) callback; the time-of-day event pump reads it
-    // (seg000:1f6e, unported).
-    pub(crate) data_01154: u16,
-
-    // = seg001:1156 data_01156 — an in-game-day deadline (day + 3) armed by
-    // the phase-0x5c callback; its reader is unported.
-    pub(crate) data_01156: u16,
-
-    // = seg001:1190 vision_message_count + seg001:1191 vision_message_queue —
-    // the queued vision messages, (message id, location ptr or 0), max 10;
-    // queue_vision_message appends (deduplicated, oldest dropped on
-    // overflow). The vision presentation that consumes them is unported.
-    pub(crate) vision_messages: Vec<(u16, u16)>,
-
-    // = seg001:00c8 comm_sighting_count + seg001:1179 comm_sighting_list —
-    // the COMM-room person-sighting words ((location index << 8) | person
-    // id), max 10, appended by comm_add_person_sighting. The COMM screen
-    // that displays them is unported.
-    pub(crate) comm_sightings: Vec<u16>,
-
-    // = seg001:1225.. the scene records (palace_rooms et al) — the live,
-    // runtime-mutable copy of room_scene::SCENE_RECORDS: the game-phase
-    // callbacks unlock scripted palace exits (exit byte &= 0x7f) and patch
-    // palace_rooms[1].background in here.
-    pub(crate) scene_records: [crate::room_scene::SceneRecord; 83],
-
-    // = seg001:0027 discovered_sietch_count — counts sietches whose location
-    // record lost its undiscovered bit (location_mark_discovered).
-    pub(crate) discovered_sietch_count: u8,
-
-    // = seg001:0026 entering_new_sietch — 0xff while the player's first in-room
-    // move inside a freshly visited location is being committed
-    pub(crate) entering_new_sietch: u8,
-
     // = seg001:0029 charisma — Paul's charisma stat (capped at 0xc8 by
     // increase_charisma_and_increase_troop_motivation_accordingly).
     pub(crate) charisma: u8,
@@ -384,14 +360,17 @@ pub struct GameState {
     // = seg001:002a _byte_1F4DA_game_phase — the global story-progress counter.
     pub(crate) game_phase: u8,
 
-    // = seg001:00ff number_of_days_since_last_game_phase_change_ds_ff — zeroed
-    // on every phase change (the event-0x0b callback and
-    // set_game_phase_and_trigger_callbacks); the day-change hook that
-    // increments it (seg000:1c46) is not yet ported.
-    pub(crate) days_since_last_game_phase_change: u8,
-
     // = seg001:002b night_attack_stage.
     pub(crate) night_attack_stage: u8,
+
+    // = seg001:00ac data_000ac — total population of the allegiance-flagged
+    // troops (the loc_0c049 scan sums troop byte +0x1a into ds:ac for troops
+    // with byte +0x10 bit 0x80, else into ds:aa); static init 0x1b58 (7000).
+    // Gates the Fremen WORK WITH ME charisma check (seg000:95c4). Its
+    // updaters — loc_0c02e from the new-day tick (seg000:1ca0) and the
+    // CHOAM/globe stats path (seg000:bee0) — are not yet ported, so the
+    // value keeps the DOS static initial.
+    pub(crate) data_000ac: u16,
 
     // = seg001:00c5 person_marker_base — random base offset for arranging the
     // people standing in a room. Set to rand() at room setup (the arrival
@@ -407,17 +386,30 @@ pub struct GameState {
     // command verbs (build_room_command_records, bl==0x80 && dl==8). Inits to 0.
     pub(crate) data_000c8: u8,
 
-    // = seg001:00e8 _byte_1F598_ui_hud_head_index.
-    pub(crate) ui_hud_head_index: u8,
-
-    // = seg001:00ea data_000ea (signed).
-    pub(crate) data_000ea: i8,
+    // = seg001:00c8 comm_sighting_count + seg001:1179 comm_sighting_list —
+    // the COMM-room person-sighting words ((location index << 8) | person
+    // id), max 10, appended by comm_add_person_sighting. The COMM screen
+    // that displays them is unported.
+    pub(crate) comm_sightings: Vec<u16>,
 
     // = seg001:00e1 data_000e1 — the fly-over side flag set by
     // travel_scan_nearby_location (seg000:4156): 0 when the passed location is
     // to the left of the heading, 1 when to the right. Feeds the companion's
     // fly-over dialogue line (the spoken-line tail is not ported yet).
     pub(crate) data_000e1: u8,
+
+    // = seg001:00e8 _byte_1F598_ui_hud_head_index.
+    pub(crate) ui_hud_head_index: u8,
+
+    // = seg001:00ea data_000ea (signed).
+    pub(crate) data_000ea: i8,
+
+    // = seg001:00ed/00ee for_condit_related_to_overpowering_Harkonnen_captain
+    // — seeded by the captain classification (0xff when surrendered, else the
+    // troop's motivation; the pair word), consumed by the OVERPOWER THE
+    // PRISONER flow (seg000:9584).
+    pub(crate) data_000ed: u8,
+    pub(crate) data_000ee: u16,
 
     // = seg001:00f4 desert_walk_counter — counts compass moves taken in the
     // desert.
@@ -432,6 +424,12 @@ pub struct GameState {
     // init 1, no DOS writers); CONDIT condition 1 (`byte ds:[fc]`) gates the
     // first greeting on it.
     pub(crate) data_000fc: u8,
+
+    // = seg001:00ff number_of_days_since_last_game_phase_change_ds_ff — zeroed
+    // on every phase change (the event-0x0b callback and
+    // set_game_phase_and_trigger_callbacks); the day-change hook that
+    // increments it (seg000:1c46) is not yet ported.
+    pub(crate) days_since_last_game_phase_change: u8,
 
     // = seg001:0100 locations.
     pub(crate) locations: [Location; 70],
@@ -455,13 +453,6 @@ pub struct GameState {
     // = seg001:476c selected_fremen2_index — which fremen2_troop_ptrs slot
     // the active Fremen-2 conversation (or room draw) refers to.
     pub(crate) selected_fremen2: u8,
-
-    // = seg001:00ed/00ee for_condit_related_to_overpowering_Harkonnen_captain
-    // — seeded by the captain classification (0xff when surrendered, else the
-    // troop's motivation; the pair word), consumed by the OVERPOWER THE
-    // PRISONER flow (seg000:9584).
-    pub(crate) data_000ed: u8,
-    pub(crate) data_000ee: u16,
 
     // = seg001 vegetation_started_on_Dune — the ecology-victory flag the
     // motivation modifier reads; the event that sets it is not yet ported.
@@ -495,6 +486,27 @@ pub struct GameState {
     // npc_remove_companion_slot when a dialogue closes.
     pub(crate) companion_1: i16,
     pub(crate) companion_2: i16,
+
+    // = seg001:1154 data_01154 — game_time snapshot taken by the phase-0x2c
+    // (met Stilgar) callback; the time-of-day event pump reads it
+    // (seg000:1f6e, unported).
+    pub(crate) data_01154: u16,
+
+    // = seg001:1156 data_01156 — an in-game-day deadline (day + 3) armed by
+    // the phase-0x5c callback; its reader is unported.
+    pub(crate) data_01156: u16,
+
+    // = seg001:1178 number_of_rallied_troops_for_Leto_being_killed — the
+    // rallied-troop threshold armed by the phase-0x48 (met Chani) callback
+    // (rallied + 2); 0xff (the static value) = not armed. Its reader (the
+    // Leto-killed event pump) is not yet ported.
+    pub(crate) number_of_rallied_troops_for_leto_killed: u8,
+
+    // = seg001:1190 vision_message_count + seg001:1191 vision_message_queue —
+    // the queued vision messages, (message id, location ptr or 0), max 10;
+    // queue_vision_message appends (deduplicated, oldest dropped on
+    // overflow). The vision presentation that consumes them is unported.
+    pub(crate) vision_messages: Vec<(u16, u16)>,
 
     // = seg001:2222 ui_hud_companion_blink — per-companion-slot blink countdown
     // bytes: npc_assign_companion_slot arms 0x10 on the filled slot (8 blinks),
@@ -554,6 +566,12 @@ pub struct GameState {
     // accumulator, re-seeded to 0x80 (half a cell) by adjust_travel_heading;
     // consumed by the step math (loc_05206, travel-pump territory).
     pub(crate) travel_step_accum: u16,
+
+    // = seg001:1225.. the scene records (palace_rooms et al) — the live,
+    // runtime-mutable copy of room_scene::SCENE_RECORDS: the game-phase
+    // callbacks unlock scripted palace exits (exit byte &= 0x7f) and patch
+    // palace_rooms[1].background in here.
+    pub(crate) scene_records: [crate::room_scene::SceneRecord; 83],
 
     // = seg001:1968 data_01968 — the cockpit fly-over silhouette's signed
     // relative bearing (heading - location angle) * 0x20, latched by
@@ -1155,6 +1173,16 @@ pub struct GameState {
     // = seg001:d7f4 per_person_voc_base_table — see build_voc_base_table.
     pub(crate) voc_bases: [u16; 17],
 
+    // = seg001:47dc data_047dc — the shared "fixed-block" voc-bank flag: nonzero
+    // while a line is presented from a fixed dialogue block whose voc numbering
+    // does not belong to the speaking head's own P<X> directory. The fly-over
+    // narration (travel_play_flyover_line, seg000:96db) and the fixed-block COME
+    // WITH ME (seg000:95b7, unported) arm it around their present, then clear it.
+    // load_voc_and_lipsync_data (seg000:a6f1) reads it: when set, the voc index
+    // is rebased onto per_person_voc_base_table[0x10] + 0x3e7 instead of the
+    // speaker's own base, so the fly-over line finds its .voc.
+    pub(crate) data_047dc: u8,
+
     // = seg001:d824 _unk_2CCD4_rand_seed.
     pub(crate) rand_seed: u16,
 
@@ -1318,6 +1346,7 @@ impl GameState {
             input,
             CursorMode::Baked,
             SharedCursor::new(),
+            std::sync::Arc::new(Recorder::new()),
         )
     }
 
@@ -1330,13 +1359,14 @@ impl GameState {
         input: SharedInput,
         cursor_mode: CursorMode,
         shared_cursor: SharedCursor,
+        recorder: std::sync::Arc<Recorder>,
     ) -> Self {
         let mut dat_file = dat_file;
         let font = Font::new(&dat_file.read("DNCHAR.BIN").expect("load DNCHAR.BIN"));
         let command_bin = dat_file.read("COMMAND1.HSQ").expect("load COMMAND1.HSQ");
         let frame_tasks = Vec::<FrameTask>::with_capacity(20);
-        let pcm_player = PcmPlayer::new(PCM_OUTPUT_RATE);
-        let midi = midi::Midi::new();
+        let pcm_player = PcmPlayer::new(PCM_OUTPUT_RATE, std::sync::Arc::clone(&recorder));
+        let midi = midi::Midi::new(std::sync::Arc::clone(&recorder));
         Self {
             headless: false,
             debug_overlay: false,
@@ -1375,10 +1405,13 @@ impl GameState {
 
             pcm_player,
 
+            recorder,
+
             game_start: std::time::Instant::now(),
             frame_sink: Box::new(frame_sink),
 
             cursor_mode,
+            base_cursor_mode: cursor_mode,
             shared_cursor,
 
             input,
@@ -1409,6 +1442,7 @@ impl GameState {
             persons_travelling_with: 0,
             persons_in_room: 0,
             persons_talking_to: 0,
+            line_spoken_this_conversation: 0,
             data_0001b: 0,
             pending_room_action: 0,
             data_000ac: 0x1b58,
@@ -1580,6 +1614,7 @@ impl GameState {
             pause_enabled: 0,
             language_setting: 0,
             voc_bases: [0; 17],
+            data_047dc: 0,
             rand_seed: 1,
             rand_bits_seed: 1,
             screen_buffer: FbId::Screen,
@@ -1732,12 +1767,53 @@ impl GameState {
 
     // = seg000:d815 game_loop — the in-game per-frame loop.
     pub(crate) fn exit_to_dos(&mut self) -> ! {
+        // Finalise any in-progress recording first: `std::process::exit` below
+        // skips every destructor, so this is the only chance to mux the clip
+        // when the player quits through the in-game EXIT GAME menu.
+        self.recorder.stop();
         // = seg000:004e/0052 call MIDI_Reset / pcm_vtable_reset — silence audio
         //   before the process exits so the device is released cleanly.
         self.midi.midi_reset();
         self.pcm_player.stop();
         // = the INT 21/4C return to DOS.
         std::process::exit(0);
+    }
+
+    // Port-only: keep `cursor_mode` in sync with the recorder. While recording,
+    // force `Baked` so `redraw_mouse` composites the cursor into the framebuffer
+    // (which is what the recorder captures); restore the configured mode when it
+    // stops. Called at the top of each loop pass's cursor work, on the game
+    // thread, where the front buffer is the screen and no cursor state is
+    // mid-flight — so the Baked save/restore invariants stay intact across the
+    // switch.
+    fn sync_recording_cursor_mode(&mut self) {
+        let desired = if self.recorder.is_recording() {
+            CursorMode::Baked
+        } else {
+            self.base_cursor_mode
+        };
+        if desired == self.cursor_mode {
+            return;
+        }
+
+        if self.cursor_mode == CursorMode::Baked {
+            // Leaving Baked: erase the baked cursor so it doesn't leave a stuck
+            // imprint in the framebuffer, then present the cleaned frame.
+            if self.cursor_save_h != 0 {
+                gfx::vga_restore_cursor(self);
+                self.send_frame_to_display();
+            }
+        } else if desired == CursorMode::Baked {
+            // Entering Baked: zero the save footprint so the first
+            // `vga_restore_cursor` is a no-op (no stale region gets repainted),
+            // and invalidate the drawn position so the cursor is composited
+            // fresh on this pass even if the pointer has not moved.
+            self.mouse_draw_pos_x = u16::MAX;
+            self.mouse_draw_pos_y = u16::MAX;
+        }
+        self.cursor_save_w = 0;
+        self.cursor_save_h = 0;
+        self.cursor_mode = desired;
     }
 
     pub fn game_loop(&mut self) {
@@ -1851,6 +1927,11 @@ impl GameState {
                 self.get_mouse_pos_etc();
                 self.mouse_stuff()
             };
+
+            // Port-only: while recording, force the software (baked) cursor so it
+            // lands in the captured framebuffer. Switched here, before the pass's
+            // cursor work, where the front buffer is the screen.
+            self.sync_recording_cursor_mode();
 
             // = seg000:d866 call redraw_mouse — composite the cursor at its
             //   new position. DOS draws straight to VGA; the port presents
@@ -2740,26 +2821,24 @@ impl GameState {
         // (label, value) rows. The value column is placed at a fixed pixel x
         // past the widest label, so the values line up even though the glyph
         // font is proportional (space-padding would not align them).
-        let rows: [(&str, String); 10] = [
+        let rows: [(&str, String); 3] = [
             (
                 "PHASE",
-                format!("{:#04x} ({})", self.game_phase, self.game_phase),
+                // format!("{:#04x} ({})", self.game_phase, self.game_phase),
+                format!("{}", self.game_phase),
             ),
-            (
-                "LOC",
-                format!("{:#06x} room {}", self.location_and_room, self.current_room),
-            ),
-            ("APPEAR", format!("{:#06x}", self.location_appearance)),
-            ("DAY", format!("{}  time {:#06x}", day, self.game_time)),
-            ("CHARISMA", format!("{}", self.charisma)),
+            // (
+            //     "LOC",
+            //     format!("{:#06x} room {}", self.location_and_room, self.current_room),
+            // ),
+            // ("APPEAR", format!("{:#06x}", self.location_appearance)),
+            // ("DAY", format!("{}  time {:#06x}", day, self.game_time)),
+            // ("CHARISMA", format!("{}", self.charisma)),
+            ("SIETCHES", format!("{}", self.number_of_sietches_visited)),
             ("RALLIED", format!("{}", self.number_of_rallied_troops)),
-            (
-                "SIETCHES SEEN",
-                format!("{}", self.number_of_sietches_visited),
-            ),
-            ("MET", format!("{:#06x}", self.persons_met)),
-            ("TRAVEL", format!("{:#06x}", self.persons_travelling_with)),
-            ("IN ROOM", format!("{:#06x}", self.persons_in_room)),
+            // ("MET", format!("{:#06x}", self.persons_met)),
+            // ("TRAVEL", format!("{:#06x}", self.persons_travelling_with)),
+            // ("IN ROOM", format!("{:#06x}", self.persons_in_room)),
         ];
 
         let pad = 2u16;

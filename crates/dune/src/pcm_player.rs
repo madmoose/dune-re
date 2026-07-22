@@ -33,6 +33,8 @@ use std::sync::{Arc, Mutex};
 
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 
+use crate::recorder::{AudioTrack, Recorder};
+
 /// `+7` loop flag bit 6: replay the whole job from its first block at the
 /// terminator (`voc_blk0_terminator`, seg001:0697).
 pub const VOC_LOOP_WHOLE: u8 = 0x40;
@@ -531,9 +533,9 @@ impl PcmPlayer {
     // = dnsdb_init (seg001:0120): bring up the backend and leave the driver
     // idle. If no output device is available the engine still tracks state,
     // only the audio output is absent.
-    pub fn new(output_rate: u32) -> Self {
+    pub fn new(output_rate: u32, recorder: Arc<Recorder>) -> Self {
         let shared = Arc::new(Mutex::new(Engine::new()));
-        let stream = build_stream(Arc::clone(&shared), output_rate);
+        let stream = build_stream(Arc::clone(&shared), output_rate, recorder);
         Self {
             shared,
             _stream: stream,
@@ -651,7 +653,11 @@ pub(crate) fn supported_output_rate(device: &cpal::Device, preferred: u32) -> u3
 }
 
 /// Open a stereo CPAL output stream whose callback drains the engine.
-fn build_stream(shared: Arc<Mutex<Engine>>, output_rate: u32) -> Option<cpal::Stream> {
+fn build_stream(
+    shared: Arc<Mutex<Engine>>,
+    output_rate: u32,
+    recorder: Arc<Recorder>,
+) -> Option<cpal::Stream> {
     let host = cpal::default_host();
     let device = match host.default_output_device() {
         Some(device) => device,
@@ -670,15 +676,19 @@ fn build_stream(shared: Arc<Mutex<Engine>>, output_rate: u32) -> Option<cpal::St
     let stream = device.build_output_stream(
         config,
         move |data: &mut [f32], _: &cpal::OutputCallbackInfo| {
-            let mut engine = cb_shared.lock().unwrap();
-            // Balance is constant across the callback; split the mono sample into
-            // the stereo frame with the per-channel gains.
-            let (left_gain, right_gain) = balance_to_gains(engine.balance);
-            for frame in data.chunks_exact_mut(2) {
-                let sample = engine.next_sample(output_rate);
-                frame[0] = sample * left_gain;
-                frame[1] = sample * right_gain;
+            {
+                let mut engine = cb_shared.lock().unwrap();
+                // Balance is constant across the callback; split the mono sample
+                // into the stereo frame with the per-channel gains.
+                let (left_gain, right_gain) = balance_to_gains(engine.balance);
+                for frame in data.chunks_exact_mut(2) {
+                    let sample = engine.next_sample(output_rate);
+                    frame[0] = sample * left_gain;
+                    frame[1] = sample * right_gain;
+                }
             }
+            // Tee the finished stereo output into the recorder (no-op when idle).
+            recorder.mix_in(AudioTrack::Pcm, data, output_rate);
         },
         |err| eprintln!("PcmPlayer stream error: {err}"),
         None,

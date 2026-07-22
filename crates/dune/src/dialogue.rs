@@ -356,8 +356,11 @@ impl GameState {
         // = seg000:9412 data_047c2 = 0x80 — prime the verb-panel sentence mask
         // dialogue_interpret_record applies to each sentence's flag byte.
         self.data_047c2 = 0x80;
-        // = seg000:9417 data_00019 = 0 — write-only in the binary (set to 0xff at
-        // seg000:a092, never read); not modelled.
+        // = seg000:9417 line_spoken_this_conversation = 0 — no line spoken yet
+        // (seg001:0019); fire_dialogue_line_event sets it to 0xff once any line
+        // is presented. A fallback dialogue line tests it == 0, so it presents
+        // only when no other line was presentable this conversation.
+        self.line_spoken_this_conversation = 0;
     }
 
     // = seg000:9f40 loc_09f40 — per-presentation setup shared by the talk verb
@@ -814,28 +817,35 @@ impl GameState {
     // `.voc` over the lip-sync engine. Reads current_subtitle_id, which
     // show_voice_subtitle set. DOS runs this AFTER the spoken-line event fires.
     pub(crate) fn play_dialogue_voc(&mut self) {
-        // = seg000:9efd [last_line_voc_bank_flag] = data_047dc (the
-        //   come-with-me voc-bank flag, armed at seg000:95b7/96db —
-        //   unmodelled, reads 0; the WHAT verb restores it on replay); ax =
-        //   current_subtitle_id; bx = current_lip_sync_resource_id; call
-        //   load_voc_and_lipsync_data (a6cc). Its index transform:
+        // = seg000:9efd [last_line_voc_bank_flag] = data_047dc (the shared
+        //   fixed-block voc-bank flag, armed by travel_play_flyover_line at
+        //   seg000:96db; the save into last_line_voc_bank_flag for the WHAT
+        //   verb's replay is not modelled); ax = current_subtitle_id; bx =
+        //   current_lip_sync_resource_id; call load_voc_and_lipsync_data (a6cc).
+        //   Its index transform:
         // = seg000:a6e7 bl = min(speaker, 0x0e) — the voc directory id;
         // = seg000:a6ee ah &= 0xf3 — strip the phrase-marker bits.
         let dir_id = self.current_lip_sync_resource_id.min(0x0e);
         let mut voc_index = self.current_subtitle_id & 0xf3ff;
-        // = seg000:a6f1 data_047dc != 0 -> ax = ax - [data_0d814] + 0x3e7 — the
-        //   come-with-me voc bank; unmodelled (data_047dc is always 0 here).
-        // = seg000:a701 cmp suppress_sky_240_255,0; jnz — HNM/cutscene contexts
-        //   skip the per-person rebase.
-        if self.data_0227d == 0 {
+        if self.data_047dc != 0 {
+            // = seg000:a6f8 sub ax,[per_person_voc_base_table[0x10]]; a6fc add
+            //   ax,3e7h — a fixed-block line (fly-over narration / the fixed-block
+            //   COME WITH ME) rebases onto the shared bank at entry 0x10 plus
+            //   0x3e7, not the speaking head's own P<X> base. Without this the
+            //   fly-over "it looks like a sietch" line builds a P<companion> voc
+            //   name that is absent from the DAT, so the head idles silently.
+            voc_index = voc_index
+                .wrapping_sub(self.voc_base(0x10))
+                .wrapping_add(0x3e7);
+        } else if self.data_0227d == 0 {
+            // = seg000:a701 cmp suppress_sky_240_255,0; jnz — HNM/cutscene
+            //   contexts skip the per-person rebase.
             // = seg000:a708 sub ax,[bx*2 - 280ch] — rebase the global phrase
             //   index onto the speaker's 001-based P<X>\ voc numbering (the
             //   per_person_voc_base_table built at startup by seg000:cfb9).
             //   Leto's base is 0 (his first phrase index is 1); Jessica's is
             //   0x31, so her first line (phrase 0x836) plays PB005, not PB036.
-            // if let Some(records) = self.dialogue_records.as_ref() {
             voc_index = voc_index.wrapping_sub(self.voc_base(dir_id));
-            // }
         }
         // = seg000:a710..a726 — the dir_id == 0x0e troop special (voc index
         //   0x2c/0x2d retargets the lip-sync id to 0x0c) is not modelled.
@@ -902,13 +912,17 @@ impl GameState {
         // = seg000:96d8 mov [current_lip_sync_resource_id], ax — the companion
         //   (< 0x10) animates as the talking head over the ORNYCAB cabin.
         self.current_lip_sync_resource_id = companion as u16;
-        // = seg000:96db inc byte [data_047dc] — the come-with-me voc-bank flag
-        //   play_dialogue_voc reads (unmodelled, reads 0); cleared again at
-        //   loc_096eb below.
+        // = seg000:96db inc byte [data_047dc] — arm the shared fixed-block voc
+        //   bank so play_dialogue_voc rebases this line onto entry 0x10 + 0x3e7
+        //   (the fly-over line's own voc numbering, not the companion's P<X>
+        //   directory). Cleared again at loc_096eb below.
+        self.data_047dc = self.data_047dc.wrapping_add(1);
         // = seg000:96df ax = 0x10; call loc_09702 -> loc_0970b: si =
         //   DIALOGUE[(0x10 << 3) | 4] — the fixed fly-over dialogue block, topic 4.
         let ofs = container::entry_offset(&self.dialogue, (0x10u16 << 3) + 4);
         if ofs == 0xffff {
+            // = seg000:96eb data_047dc = 0 — the ret path still clears the flag.
+            self.data_047dc = 0;
             return false;
         }
         // = seg000:970b call loc_09f40 (prepare_dialogue_presentation).
@@ -919,6 +933,7 @@ impl GameState {
         //   ornament element while the fly-over head is up; the port handles
         //   those HUD elements structurally (no flags field to write).
         // = seg000:96eb data_047dc = 0.
+        self.data_047dc = 0;
         presented
     }
 
@@ -1090,8 +1105,12 @@ impl GameState {
                     (((entry_offset - 2) >> 2) as u16) | (self.current_lip_sync_resource_id << 11);
                 self.dialogue_played_log.push(packed);
             }
-            // = seg000:a092 data_00019 = 0xff — write-only in the binary (only
-            //   set_dialogue_speaker clears it back); not modelled.
+            // = seg000:a092 line_spoken_this_conversation = 0xff — a line has now
+            //   been spoken (set_dialogue_speaker set it to 0 at conversation
+            //   start; seg001:0019). A fallback line tests it == 0, so once any
+            //   line is presented the fallback stays suppressed for the rest of
+            //   the conversation.
+            self.line_spoken_this_conversation = 0xff;
             // = seg000:a097 or byte [si], 0x80 — mark the entry spoken (so a
             //   later verb-panel walk's mask skips it and the replay log does
             //   not re-add it).
@@ -1253,5 +1272,74 @@ impl GameState {
         self.present_game_area();
         // = seg000:98e2 jmp stop_lip_sync_and_remove_idle_head_task (loc_09b8b).
         self.stop_lip_sync_and_remove_idle_head_task();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::mpsc;
+
+    use crate::{GameState, container, dat_file::DatFile};
+
+    // Regression for the fly-over ("it looks like a sietch") line playing no
+    // voice: travel_play_flyover_line arms data_047dc (seg000:96db), so
+    // load_voc_and_lipsync_data (seg000:a6f8) must rebase the line onto the
+    // shared fly-over bank per_person_voc_base_table[0x10] + 0x3e7 rather than
+    // the companion's own P<X> base. This checks that the rebased .voc name is
+    // present in the DAT for the companion heads, while the per-speaker index
+    // the old (data_047dc-less) path computed is not — i.e. the rebase is what
+    // makes the fly-over line audible.
+    #[test]
+    #[ignore = "needs assets/DUNE.DAT"]
+    fn flyover_line_resolves_to_a_voc_file() {
+        let dat_path = concat!(env!("CARGO_MANIFEST_DIR"), "/../../assets/DUNE.DAT");
+        let Ok(dat_file) = DatFile::open(dat_path) else {
+            eprintln!("skipping: {dat_path} not found");
+            return;
+        };
+        let (tx, _rx) = mpsc::sync_channel(64);
+        let mut game = GameState::new(dat_file, tx);
+        game.set_headless();
+        game.start(true);
+
+        // The fixed fly-over block = DIALOGUE[(0x10 << 3) | 4] (person 0x10,
+        // topic 4); its first sentence entry's phrase id drives the voc index.
+        let ofs = container::entry_offset(&game.dialogue, (0x10u16 << 3) + 4) as usize;
+        assert_ne!(ofs, 0xffff, "fly-over block present");
+        let word1 = u16::from_le_bytes([game.dialogue[ofs + 2], game.dialogue[ofs + 3]]);
+        let phrase = (word1.swap_bytes() & 0x3ff) | 0x800;
+        // = play_dialogue_voc: ax = current_subtitle_id & 0xf3ff (the ah &= 0xf3
+        //   phrase-marker strip).
+        let voc_index_pre = phrase & 0xf3ff;
+        assert_ne!(game.voc_bases[0x10], 0, "fly-over bank base is built");
+
+        // Build the create_voc_file_name_from_bx name (suffix 'O', variant 0)
+        // for each companion directory letter and check the DAT.
+        let voc_name = |idx: u16, dir: u8| {
+            let l = (b'A' + dir) as char;
+            format!("P{l}\\P{l}{:03X}O.VOC", idx & 0xfff)
+        };
+
+        // = seg000:a6f8 the fixed-block rebase this fix restores.
+        let fixed_idx = voc_index_pre
+            .wrapping_sub(game.voc_bases[0x10])
+            .wrapping_add(0x3e7);
+        let fixed_hits: Vec<_> = (0u8..=0x0e)
+            .filter(|&d| game.dat_file.read(&voc_name(fixed_idx, d)).is_ok())
+            .collect();
+        assert!(
+            !fixed_hits.is_empty(),
+            "fly-over line must resolve to a real .voc under the fixed-block rebase (idx {fixed_idx:#x})"
+        );
+
+        // The old per-speaker rebase gave those same companion heads a name that
+        // is absent from the DAT — which is why the port played no audio.
+        for &d in &fixed_hits {
+            let stale = voc_index_pre.wrapping_sub(game.voc_bases[d as usize]);
+            assert!(
+                game.dat_file.read(&voc_name(stale, d)).is_err(),
+                "the per-speaker index {stale:#x} for head {d} should NOT resolve",
+            );
+        }
     }
 }

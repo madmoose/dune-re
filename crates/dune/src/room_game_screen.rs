@@ -26,8 +26,10 @@ pub(crate) struct CommandMenuRecord {
     /// 0x4000 = greyed/disabled, 0x8000 = highlighted. The low 0x3fff resolve
     /// the text via get_phrase_or_command_string_si.
     pub text_id: u16,
-    /// seg000 offset of the verb's click/action handler. Stored raw; the click
-    /// dispatcher is gameplay code not yet ported, so nothing reads it yet.
+    /// seg000 offset of the verb's click/action handler, dispatched on click.
+    /// Also identifies the active menu: slot 0's handler being the TALK TO ME
+    /// verb (menu_callback_choice_talk_to_me, 0x9472) marks the NPC dialogue
+    /// panel apart from the fly-over submenus sharing its priority class.
     pub handler: u16,
 }
 
@@ -833,12 +835,13 @@ impl GameState {
     //
     // The game_screen_mode_flags != 0 branch (97f2) resumes a paused travel
     // (the fly-over cabin's menu) via travel_resume_flight_view; the room branch
-    // (loc_0980c) re-renders the room. TODO: 097cf also clears data_047e1 and
-    // restores the subtitle backdrop (subtitle_restore_prior) — subtitle state
-    // not modelled yet. The room path's pending_room_action-gated transition-
-    // reveal variant (loc_09898, a wiped re-render + leave scan that lets an
-    // evicted companion speak) is not ported; the port always takes the instant
-    // re-render path (loc_09879).
+    // (loc_0980c) re-renders the room. room_render_flags bit 7 (the dialogue-zoom
+    // flag) picks between two HUD-reconciliation paths — the zoom path
+    // (loc_09849) and the non-zoom path (loc_0982e); both are modelled below.
+    // TODO: 097cf also clears data_047e1 and restores the subtitle backdrop
+    // (subtitle_restore_prior) — subtitle state not modelled yet. The room path's
+    // pending_room_action-gated transition-reveal variant (loc_09898, a wiped
+    // re-render + leave scan that lets an evicted companion speak) is not ported.
     fn menu_npc_actions_cleanup(&mut self) {
         // = seg000:97cf call lip_sync_stop — stop the speaker's voice lip-sync
         //   (also patching the TALK TO ME verb template back to its idle text
@@ -878,43 +881,72 @@ impl GameState {
             self.travel_resume_flight_view();
             return;
         }
-        // = seg000:9849 loc_09849 (the room_render_flags bit-7 dialogue-zoom
-        //   path, the one the port always takes) — retire the head overlay
-        //   element and update the companion HUD slots.
-        self.ui_elements[20].flags = 0;
-        // = seg000:984f test [si+0fh],40h; 9855 call npc_assign_companion_slot
-        //   — a travelling speaker (COME WITH ME set flags 0x40) takes a
-        //   companion HUD slot. Note the asymmetry: only the non-zoom branch
-        //   (loc_0982e, unreached in room dialogues since the first presented
-        //   line sets the zoom flag) removes a non-travelling speaker — after
-        //   STAY HERE the portrait stays until a travel departure detaches it
-        //   (npc_travel_detach_companion) or an eviction displaces it.
-        if self.room_persons[speaker].flags & 0x40 != 0 {
-            self.npc_assign_companion_slot(speaker);
+        // = seg000:980f cmp room_render_flags,0; 9818 js loc_09849 — bit 7 (the
+        //   dialogue-zoom flag) selects the HUD path. dialogue_zoom_room sets
+        //   bit 7 only when the speaker has an on-screen anchor, i.e. the dialogue
+        //   was opened by clicking a person standing in the room. A dialogue
+        //   opened from a companion's HUD portrait has no room anchor, so bit 7
+        //   stays clear and the non-zoom path runs.
+        if (self.room_render_flags as i8) < 0 {
+            // = seg000:9849 loc_09849 — the zoom path (room-standing speaker):
+            //   retire the head overlay element, then for a travelling speaker
+            //   (COME WITH ME set flags 0x40) take a companion HUD slot. A
+            //   non-travelling speaker keeps its slot here (there is no removal on
+            //   this branch); it is dropped only at travel departure
+            //   (npc_travel_detach_companion) or on eviction.
+            self.ui_elements[20].flags = 0;
+            // = seg000:984f test [si+0fh],40h; 9855 call npc_assign_companion_slot.
+            if self.room_persons[speaker].flags & 0x40 != 0 {
+                self.npc_assign_companion_slot(speaker);
+            }
+            // = seg000:9868 and room_render_flags,7fh — drop the redraw-for-zoom
+            //   flag dialogue_zoom_room set, so the room renders un-zoomed.
+            self.room_render_flags &= 0x7f;
+            // = seg000:9879 loc_09879 — the shared re-render tail.
+            self.menu_npc_actions_redraw_room();
+        } else {
+            // = seg000:9825 loc_09825 — the non-zoom path (HUD-portrait dialogue).
+            //   test [si+0fh],40h routes on the travelling flag.
+            if self.room_persons[speaker].flags & 0x40 != 0 {
+                // = seg000:982b jmp npc_assign_companion_slot — a still-travelling
+                //   speaker keeps its slot (tail jump; no room re-render).
+                self.npc_assign_companion_slot(speaker);
+            } else {
+                // = seg000:982e call npc_remove_companion_slot — the speaker no
+                //   longer travels (STAY HERE ran npc_clear_travelling), so its
+                //   HUD portrait is removed as the dialogue closes.
+                self.npc_remove_companion_slot(speaker);
+                // = seg000:9838 test room_render_flags,1; 983d jz loc_09879 —
+                //   re-render the room + raise the HUD head unless bit 0 is set.
+                //   (The night_attack_stage gate at 9831/9836 is not modelled.)
+                if self.room_render_flags & 1 == 0 {
+                    self.menu_npc_actions_redraw_room();
+                }
+            }
         }
-        // = seg000:9868 and room_render_flags,7fh — drop the redraw-for-zoom flag
-        //   dialogue_zoom_room set, so the room renders un-zoomed from here on.
-        self.room_render_flags &= 0x7f;
-        // = seg000:9886 call draw_room_scene — re-render the room scene (un-zoomed)
-        //   into fb1, tearing down the talking head (reset_scene_lip_sync_state).
+    }
+
+    // = seg000:9879 loc_09879 — the cleanup re-render tail shared by both HUD
+    // paths of menu_npc_actions_cleanup: re-render the room scene un-zoomed (the
+    // draw_room_scene reset_scene_lip_sync_state tears down the talking head),
+    // keep fb2 in sync, update the palette, and raise the small HUD head ornament.
+    // DOS runs build_room_command_records / build_persons_in_room_records at the
+    // head of this block; the port rebuilds those in
+    // screen_element_stack_pop_and_cleanup after the cleanup returns and pops back
+    // to RoomCommandMenu, so they are not duplicated here.
+    fn menu_npc_actions_redraw_room(&mut self) {
+        // = seg000:9886 call draw_room_scene.
         self.draw_room_scene();
-        // = seg000:9889 call copy_active_framebuffer_to_framebuffer_2 — keep fb2 in
-        //   sync with the freshly rendered fb1.
+        // = seg000:9889 call copy_active_framebuffer_to_framebuffer_2.
         self.copy_active_framebuffer_to_framebuffer_2();
         // = seg000:988c call update_screen_palette.
         self.update_screen_palette();
-        // = seg000:988f call ui_hud_head_save_rect — grab the game-area strip under
-        //   the HUD head out of the new fb1 before the head rises.
+        // = seg000:988f call ui_hud_head_save_rect.
         self.ui_hud_head_save_rect();
-        // = seg000:9892 call present_game_area — present the un-zoomed game area to screen.
+        // = seg000:9892 call present_game_area.
         self.present_game_area();
-        // = seg000:9895 jmp ui_hud_head_animate_up — raise the small HUD head
-        //   ornament back into view now the conversation is over.
+        // = seg000:9895 jmp ui_hud_head_animate_up.
         self.ui_hud_head_animate_up();
-        // NOTE: build_room_command_records / build_persons_in_room_records (the
-        // loc_09879 head of this block) are run by screen_element_stack_pop_and_
-        // cleanup after this cleanup returns and pops back to RoomCommandMenu, so
-        // they are not duplicated here.
     }
 
     // ---- LOOK AT MIRROR (palace bedroom, location_and_room 0x2009) ---------
@@ -1701,9 +1733,22 @@ impl GameState {
         // text_id and the active element's live copy in command_menu_records).
         let changed = self.menu_npc_actions_talk_text_id != text_id;
         self.menu_npc_actions_talk_text_id = text_id;
-        // = seg000:d630 jz — unchanged; d632 cmp bp,si; jnz — the NPC menu is
-        // not the active screen element (the template patch alone persists).
-        if !changed || self.get_active_screen_element() != ScreenElement::NpcActionsMenu {
+        // = seg000:d630 jz — unchanged; d632 cmp bp,si; jnz — repaint the live
+        // slot 0 only when the active command menu is specifically
+        // menu_NPC_actions (the dialogue verb panel whose slot 0 is TALK TO ME).
+        // DOS compares the active buffer pointer against menu_NPC_actions; the
+        // fly-over submenus (menu_go_towards_this_place /
+        // menu_change_destination_ignore_warning) share its NpcActionsMenu
+        // priority class but stage a different slot-0 verb (handler !=
+        // menu_callback_choice_talk_to_me 0x9472), so DOS's bp != si skips them
+        // and their "GO TOWARDS THIS PLACE" text survives.
+        let is_npc_dialogue_menu = self.get_active_screen_element()
+            == ScreenElement::NpcActionsMenu
+            && self
+                .command_menu_records
+                .first()
+                .is_some_and(|rec0| rec0.handler == 0x9472);
+        if !changed || !is_npc_dialogue_menu {
             return;
         }
         if let Some(rec0) = self.command_menu_records.first_mut() {
@@ -2363,11 +2408,19 @@ impl GameState {
         }
     }
 
-    // = seg000:2ee5 call_restore_cursor (rect 0dbech) — repaint the saved
-    // background under the hardware mouse cursor before the verbs redraw, so a
-    // stale cursor image is not baked into the panel.
-    // TODO: port the software-cursor save/restore; no-op stub.
-    pub(crate) fn restore_cursor_over_panel(&mut self) {}
+    // = seg000:2ee5 / seg000:c4e5 call call_restore_cursor — repaint the saved
+    // background under the software cursor and mark it hidden, before the panel
+    // verbs (seg000:2edd) or a fresh game-area frame (present_game_area,
+    // seg000:c4dd) overwrite the screen. Two effects matter: no stale cursor
+    // image is baked into the pushed rect, and — because the hide is committed
+    // to cursor_hide_counter — the game loop's redraw_mouse (seg000:dc20) sees
+    // the cursor as hidden and redraws it fresh on the new frame instead of
+    // repainting its now-stale saved background over the new pixels. The latter
+    // is what stops the software cursor from leaving turds over the per-pass
+    // flight-HNM frames (travel_pump -> hnm_present_flight_frame).
+    pub(crate) fn restore_cursor_over_panel(&mut self) {
+        self.call_restore_cursor();
+    }
 
     // = seg000:2ec6 the dialogue branch's jmp screen_element_stack_push (loc_02ebf:
     // bp = [data_02220] the dialogue record buffer, bx = 0f66h). It would install
@@ -3456,6 +3509,16 @@ mod tests {
         // Close the reopened dialogue before the STAY HERE checks below.
         game.menu_callback_choice_exit_menu();
 
+        // A travelling companion is talked to from the HUD portrait, not from a
+        // figure standing in the room: her location_and_room (0x2004) is not the
+        // current room (0x200a), so a normal room render draws no sprite for her
+        // and leaves character_screen_pos[1] absent (loc_03ae9 clears it to
+        // 0xffff). The recruitment dialogue left a stale anchor here that the
+        // synthetic flow never re-rendered away; clear it so the STAY HERE
+        // dialogue below does not zoom (dialogue_zoom_room, seg000:3b1f), matching
+        // the HUD-portrait open — the case whose cleanup removes the portrait.
+        game.character_screen_pos[1] = (0xffff, 0xffff);
+
         // The next dialogue menu build offers STAY HERE in slot 1
         // (setup_npc_dialogue_menu, seg000:9108..910e).
         game.setup_npc_dialogue_menu(1);
@@ -3478,16 +3541,13 @@ mod tests {
         game.setup_npc_dialogue_menu(1);
         assert_eq!(game.command_menu_records[1].text_id, 0x91);
 
-        // Closing the dialogue after STAY HERE does NOT vacate the HUD slot:
-        // the zoom-path cleanup (loc_09849) only assigns; DOS removes the
-        // portrait at travel departure (seg000:40f5) or on eviction.
+        // Closing the dialogue after STAY HERE vacates the HUD slot: the
+        // portrait dialogue never zoomed (room_render_flags bit 7 clear), so the
+        // cleanup takes the non-zoom path (loc_0982e) and, with the speaker no
+        // longer travelling, calls npc_remove_companion_slot — clearing the slot
+        // and its blink counter and reverting the portrait to the empty frame.
         game.menu_callback_choice_exit_menu();
-        assert_eq!(game.companion_1, 1, "dismissed portrait lingers (DOS)");
-
-        // The travel-departure detach (npc_remove_companion_slot, 40f5)
-        // vacates it and clears the blink counter.
-        game.npc_remove_companion_slot(1);
-        assert_eq!(game.companion_1, -1, "slot vacated");
+        assert_eq!(game.companion_1, -1, "STAY HERE removes the portrait");
         assert_eq!(game.ui_hud_companion_blink[0], 0, "blink cleared");
         assert_eq!(game.ui_elements[21].sprite_id, 0x40, "empty button frame");
 

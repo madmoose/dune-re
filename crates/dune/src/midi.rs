@@ -18,6 +18,7 @@ use crate::{
     dat_file::DatFile,
     herad::HeradADL,
     pcm_player::{balance_to_gains, supported_output_rate},
+    recorder::{AudioTrack, Recorder},
 };
 
 const QUEUE_MAX: usize = 8192;
@@ -54,7 +55,7 @@ struct MidiShared {
 }
 
 impl Midi {
-    pub fn new() -> Self {
+    pub fn new(recorder: Arc<Recorder>) -> Self {
         let shared = Arc::new(MidiShared {
             status: AtomicU8::new(0),
             measure: AtomicU16::new(0),
@@ -63,7 +64,7 @@ impl Midi {
         let (cmd_tx, cmd_rx) = mpsc::channel::<MidiCommand>();
         let shared_audio = Arc::clone(&shared);
         let audio_thread = thread::spawn(move || {
-            audio_thread_main(cmd_rx, shared_audio);
+            audio_thread_main(cmd_rx, shared_audio, recorder);
         });
 
         Self {
@@ -234,7 +235,7 @@ impl Midi {
 
 impl Default for Midi {
     fn default() -> Self {
-        Self::new()
+        Self::new(Arc::new(Recorder::new()))
     }
 }
 
@@ -267,9 +268,14 @@ fn song_name(idx: u8) -> &'static str {
         .unwrap_or_else(|| panic!("unknown song index {idx}"))
 }
 
-fn audio_thread_main(cmd_rx: mpsc::Receiver<MidiCommand>, shared: Arc<MidiShared>) {
+fn audio_thread_main(
+    cmd_rx: mpsc::Receiver<MidiCommand>,
+    shared: Arc<MidiShared>,
+    recorder: Arc<Recorder>,
+) {
     let queue: Arc<Mutex<VecDeque<f32>>> = Arc::new(Mutex::new(VecDeque::new()));
-    let (_stream, sample_rate) = start_audio_stream(Arc::clone(&queue), MIDI_SAMPLE_RATE, 2);
+    let (_stream, sample_rate) =
+        start_audio_stream(Arc::clone(&queue), MIDI_SAMPLE_RATE, 2, recorder);
 
     // Nuked-OPL3 synthesizes at the chip-native 49716 Hz and resamples to the
     // rate it is created with, so the stream's actual device rate keeps the
@@ -396,6 +402,7 @@ fn start_audio_stream(
     queue: Arc<Mutex<VecDeque<f32>>>,
     sample_rate: u32,
     channels: u16,
+    recorder: Arc<Recorder>,
 ) -> (cpal::Stream, u32) {
     let host = cpal::default_host();
     let device = host
@@ -411,10 +418,14 @@ fn start_audio_stream(
         .build_output_stream(
             config,
             move |data: &mut [f32], _| {
-                let mut q = queue.lock().unwrap();
-                for out in data.iter_mut() {
-                    *out = q.pop_front().unwrap_or(0.0);
+                {
+                    let mut q = queue.lock().unwrap();
+                    for out in data.iter_mut() {
+                        *out = q.pop_front().unwrap_or(0.0);
+                    }
                 }
+                // Tap the music output at playback time (no-op when idle).
+                recorder.mix_in(AudioTrack::Midi, data, sample_rate);
             },
             |err| eprintln!("Audio stream error: {err}"),
             None,

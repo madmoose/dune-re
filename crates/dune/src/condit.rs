@@ -7,6 +7,11 @@ use crate::{GameState, container};
 fn condit_var_name(addr: u16) -> Option<(&'static str, bool)> {
     Some(match addr {
         0x00 => ("rand_bits", true),
+        0x02 => ("game_time", true),
+        0x04 => ("location_and_room", true),
+        0x06 => ("location_appearance", true),
+        0x08 => ("data_00008", false),
+        0x09 => ("data_00009", false),
         0x0a => ("bitfield_paul_events", false),
         0x0b => ("current_room", false),
         0x0c => ("pending_destination_room", false),
@@ -14,6 +19,8 @@ fn condit_var_name(addr: u16) -> Option<(&'static str, bool)> {
         0x0e => ("persons_met", true),
         0x10 => ("persons_travelling_with", true),
         0x12 => ("persons_in_room", true),
+        0x14 => ("persons_talking_to", true),
+        0x19 => ("line_spoken_this_conversation", false),
         0x1b => ("stay_here_come_with_me_count", false),
         0x23 => ("pending_room_action", false),
         0x2c => ("troop.offset_of_location", true),
@@ -40,11 +47,22 @@ fn condit_var_name(addr: u16) -> Option<(&'static str, bool)> {
         0x54 => ("location.water", false),
         0x25 => ("number_of_sietches_visited", false),
         0x26 => ("entering_new_sietch", false),
+        0x27 => ("discovered_sietch_count", false),
         0x28 => ("number_of_rallied_troops", false),
         0x29 => ("charisma", false),
         0x2a => ("game_phase", false),
         0x2b => ("night_attack_stage", false),
+        0xac => ("data_000ac", true),
+        0xc5 => ("person_marker_base", false),
+        0xc6 => ("data_000c6", false),
+        0xc8 => ("data_000c8", false),
+        0xe1 => ("data_000e1", false),
+        0xe8 => ("ui_hud_head_index", false),
+        0xea => ("data_000ea", false),
+        0xed => ("data_000ed", false),
+        0xee => ("data_000ee", true),
         0xf4 => ("desert_walk_counter", false),
+        0xfb => ("room_view_toggle", false),
         0xff => ("days_since_phase_change", false),
         // 0xfc => ("data_000fc", true),
         _ => return None,
@@ -54,6 +72,12 @@ fn condit_var_name(addr: u16) -> Option<(&'static str, bool)> {
 impl GameState {
     fn condit_ds_byte(&self, addr: u16) -> Option<u8> {
         Some(match addr {
+            // = seg001:0008 data_00008 — the current room/apparence selector
+            // byte (0xff = no room scene to draw).
+            0x08 => self.data_00008,
+            // = seg001:0009 data_00009 — the current location slot byte
+            // (0xff while out in the desert).
+            0x09 => self.data_00009,
             // = seg001:000a bitfield_Paul_events — Paul's story-progress bits;
             // bit 0x10 (met Stilgar) gates the army-recruit dialogue lines
             // (e.g. the WORK WITH ME refusal/acceptance conditions).
@@ -65,6 +89,11 @@ impl GameState {
             0x0c => self.pending_destination_room,
             // = seg001:000d previous_room.
             0x0d => self.previous_room,
+            // = seg001:0019 line_spoken_this_conversation — 0 = no line spoken
+            // yet, 0xff once any line is presented. A fallback dialogue line's
+            // condition tests it == 0, so the fallback presents only when no
+            // other line was presentable.
+            0x19 => self.line_spoken_this_conversation,
             // = seg001:001b related_to_stay_here_come_with_me_ds_1b — the
             // COME WITH ME / STAY HERE use counter (cleared by TALK TO ME).
             0x1b => self.data_0001b,
@@ -76,6 +105,19 @@ impl GameState {
             // maintains.
             0x25 => self.number_of_sietches_visited,
             0x26 => self.entering_new_sietch,
+            // = seg001:0027 discovered_sietch_count — counts sietches whose
+            // location has been discovered (bumped by seg000:426f).
+            0x27 => self.discovered_sietch_count,
+            // = seg001:0028 number_of_rallied_troops — conditions 4/5/7 gate
+            // early-game Leto lines on it. The troop-rally system that bumps
+            // it is not yet ported.
+            0x28 => self.number_of_rallied_troops,
+            // = seg001:0029 charisma.
+            0x29 => self.charisma,
+            // = seg001:002a game_phase.
+            0x2a => self.game_phase,
+            // = seg001:002b night_attack_stage.
+            0x2b => self.night_attack_stage,
             // = seg001:002e..0041 the staged troop block (troop_prepare_troop_
             // data_for_condit, troops.rs).
             0x2e => self.troop_condit.troop_id,
@@ -100,22 +142,28 @@ impl GameState {
             0x53 => self.location_condit.unused_equipment,
             0x54 => self.location_condit.water,
             0x55..=0x5b => self.location_condit.equipment[(addr - 0x55) as usize],
-            // = seg001:0028 number_of_rallied_troops — conditions 4/5/7 gate
-            // early-game Leto lines on it. The troop-rally system that bumps
-            // it is not yet ported.
-            0x28 => self.number_of_rallied_troops,
-            // = seg001:0029 charisma.
-            0x29 => self.charisma,
-            // = seg001:002a game_phase.
-            0x2a => self.game_phase,
-            // = seg001:002b night_attack_stage.
-            0x2b => self.night_attack_stage,
+            // = seg001:00c5 person_marker_base.
+            0xc5 => self.person_marker_base,
+            // = seg001:00c6 data_000c6.
+            0xc6 => self.data_000c6,
+            // = seg001:00c8 data_000c8 — the smuggler-present flag.
+            0xc8 => self.data_000c8,
+            // = seg001:00e1 data_000e1 — the fly-over side flag.
+            0xe1 => self.data_000e1,
+            // = seg001:00e8 ui_hud_head_index.
+            0xe8 => self.ui_hud_head_index,
+            // = seg001:00ea data_000ea (signed).
+            0xea => self.data_000ea as u8,
+            // = seg001:00ed data_000ed — the overpower-captain condit byte.
+            0xed => self.data_000ed,
             // = seg001:00f4 desert_walk_counter.
             0xf4 => self.desert_walk_counter,
-            // = seg001:00ff number_of_days_since_last_game_phase_change_ds_ff.
-            0xff => self.days_since_last_game_phase_change,
+            // = seg001:00fb room_view_toggle.
+            0xfb => self.room_view_toggle,
             // = seg001:00fc data_000fc.
             0xfc => self.data_000fc,
+            // = seg001:00ff number_of_days_since_last_game_phase_change_ds_ff.
+            0xff => self.days_since_last_game_phase_change,
             _ => return None,
         })
     }
@@ -125,11 +173,21 @@ impl GameState {
             // = seg001:0000 rand_bits — the rolling random-bit word (conditions
             // 0x25..0x28 pick a branch off its low bits).
             0x00 => self.rand_bits,
+            // = seg001:0002 game_time — the in-game clock (16 ticks per day).
+            0x02 => self.game_time,
+            // = seg001:0004 location_and_room — the current scene's
+            // (location << 8) | room code.
+            0x04 => self.location_and_room,
+            // = seg001:0006 location_appearance — the current location
+            // slot/index.
+            0x06 => self.location_appearance,
             // = seg001:000e persons_met / 0010 persons_travelling_with / 0012
-            // persons_in_room — the person bitmasks several conditions test.
+            // persons_in_room / 0014 persons_talking_to — the person bitmasks
+            // several conditions test.
             0x0e => self.persons_met,
             0x10 => self.persons_travelling_with,
             0x12 => self.persons_in_room,
+            0x14 => self.persons_talking_to,
             // = seg001:002c..004a the staged troop block words.
             0x2c => self.troop_condit.offset_of_location,
             0x32 => self.troop_condit.bitfield_10,
@@ -141,6 +199,11 @@ impl GameState {
             0x4a => self.troop_condit.ds_4a,
             // = seg001:004e the staged location area+name word.
             0x4e => self.location_condit.area_and_name,
+            // = seg001:00ac data_000ac — total population of the
+            // allegiance-flagged troops.
+            0xac => self.data_000ac,
+            // = seg001:00ee data_000ee — the overpower-captain condit word.
+            0xee => self.data_000ee,
             _ => return None,
         })
     }

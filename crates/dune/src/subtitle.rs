@@ -246,7 +246,12 @@ impl GameState {
                     } else {
                         self.string_subst_id_table[(b & 0x0f) as usize]
                     };
-                    // = seg000:8984 push (si, ds); loc_08a3b; the lookup.
+                    // = seg000:898f call subtitle_pick_voice_variant — for a
+                    //   voiced line, derive
+                    //   the spoken-variant letter from this placeholder before
+                    //   expanding it.
+                    self.subtitle_pick_voice_variant(b, id);
+                    // = seg000:8984 push (si, ds); the lookup.
                     stack.push((std::mem::take(&mut cur), pos));
                     cur = self.get_phrase_or_command_string(id).to_vec();
                     pos = 0;
@@ -302,9 +307,13 @@ impl GameState {
                     } else {
                         None
                     };
-                    // = seg000:89d3..89e0 a voiced line (dialogue_line_word0
-                    //   bit 4) picks a random spoken-variant index
-                    //   (data_047e0 = rand & 3) and consumes the flag.
+                    // = seg000:89d3..89e0 the terminator fallback: a voiced line
+                    //   (dialogue_line_word0 bit 4) whose flag no name
+                    //   placeholder consumed (subtitle_pick_voice_variant clears
+                    //   it, seg000:8a3b) picks a RANDOM spoken-variant index
+                    //   (data_047e0 = rand_masked(3)). The fly-over line's 0x84
+                    //   placeholder consumes the flag first, so it lands here
+                    //   only for placeholder-less voiced lines.
                     if self.dialogue_line_word0 & 0x10 != 0 {
                         self.data_047e0 = (self.rand() & 3) as u8;
                         self.dialogue_line_word0 &= !0x10;
@@ -314,6 +323,84 @@ impl GameState {
             }
         }
         out
+    }
+
+    // = seg000:8a3b subtitle_pick_voice_variant — for a voiced line
+    // (dialogue_line_word0 bit 4), derive the spoken-variant index data_047e0
+    // from the FIRST name placeholder substituted into the line and consume the
+    // flag, so create_voc_file_name appends the matching variant letter
+    // (seg000:8aff `or bh,[data_047e0]`: 0 -> "O", 1 -> "OB", 2 -> "OC", ...).
+    // Consuming the flag (subtitle_set_voice_variant clears bit 4) stops both a
+    // later placeholder and the terminator's rand_masked
+    // fallback (seg000:89dd) from overriding the choice.
+    //
+    // `placeholder` is the 0x80..0x8f control byte (data_0477f); `subst_id` is
+    // the string id it expands to (ax/si at seg000:898d). This is what makes the
+    // fly-over "It looks like a <type>, there ..." line speak the recording that
+    // matches its location-type caption (placeholder 0x84 = subst_id_04 =
+    // 0x48 + type: sietch/palace -> O, village -> OB, fortress -> OC).
+    fn subtitle_pick_voice_variant(&mut self, placeholder: u8, subst_id: u16) {
+        // = seg000:8a3b test dialogue_line_word0,10h; jz ret.
+        if self.dialogue_line_word0 & 0x10 == 0 {
+            return;
+        }
+        let ax = subst_id;
+        // = seg000:8a84/8a9c bl = dialogue_line_word0 & 0x0f — the event id some
+        //   branches gate on.
+        let w0lo = (self.dialogue_line_word0 & 0x0f) as u8;
+        // Each matched branch yields the variant in AL; the range-checked ones
+        // (`cmp al,N; jnb skip`) yield None to leave the flag for the fallback.
+        let al: Option<u8> = match placeholder {
+            // = seg000:8a48 bh==0x8b — Paul Atreides name variants (id 0x108).
+            0x8b => Some(ax.wrapping_sub(0x108) as u8),
+            // = seg000:8a52 bh==0x84 — the location-type caption (0x48 + type):
+            //   type 0/1 (sietch/palace) -> 0, 2 (village) -> 1, 3 (fortress)
+            //   -> 2.
+            0x84 => {
+                let t = ax.wrapping_sub(0x48);
+                if t == 0 {
+                    // = seg000:8a5a jz.
+                    Some(0)
+                } else {
+                    // = seg000:8a5c dec ax; 8a5d cmp al,3; jb set.
+                    let v = t.wrapping_sub(1);
+                    if v as u8 <= 2 {
+                        Some(v as u8)
+                    } else {
+                        // = seg000:8a61 sub ax,0ffcfh; cmp ax,0ch; jnb skip.
+                        let v2 = v.wrapping_add(0x31);
+                        (v2 < 0x0c).then_some(v2 as u8)
+                    }
+                }
+            }
+            // = seg000:8a69 bh==0x83/0x8c — id 0xe8 base, al < 7.
+            0x83 | 0x8c => {
+                let v = ax.wrapping_sub(0xe8) as u8;
+                (v < 7).then_some(v)
+            }
+            // = seg000:8a7a bh in 0x86..0x88 (only when the event id == 1) —
+            //   id 0xd1 base, al < 7.
+            0x86..=0x88 if w0lo == 1 => {
+                let v = ax.wrapping_sub(0xd1) as u8;
+                (v < 7).then_some(v)
+            }
+            // = seg000:8a97 bh==0x85 (only when the event id == 1) — 0x74 -> 1,
+            //   else 0.
+            0x85 if w0lo == 1 => Some(u8::from(ax == 0x74)),
+            // = seg000:8ab2 bh==0x89 — id 0xda base, al < 8.
+            0x89 => {
+                let v = ax.wrapping_sub(0xda) as u8;
+                (v < 8).then_some(v)
+            }
+            // = seg000:8abc any other placeholder leaves the flag set.
+            _ => None,
+        };
+        if let Some(al) = al {
+            // = seg000:8ac3 subtitle_set_voice_variant: data_047e0 = al; and
+            //   dialogue_line_word0, 0efh (consume the voiced-variant flag).
+            self.data_047e0 = al;
+            self.dialogue_line_word0 &= 0xef;
+        }
     }
 
     // = seg000:8c8a subtitle_restore_prior — take down the previously drawn
@@ -899,5 +986,56 @@ fn commit_line(words: &mut Vec<Vec<u8>>, remaining: i32) -> SubLine {
         words: std::mem::take(words),
         advance,
         pad,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::mpsc;
+
+    use crate::{GameState, dat_file::DatFile};
+
+    // Regression for the fly-over line speaking the wrong location type (subtitle
+    // "sietch" over a "fortress" voice): subtitle_pick_voice_variant (seg000:8a3b)
+    // must pick the spoken-variant letter from the 0x84 location-type caption —
+    // subst_id_04 = 0x48 + type — so sietch/palace -> O, village -> OB, fortress
+    // -> OC, matching the recorded P<L>...O/OB/OC.VOC takes. The port previously
+    // only had the terminator's rand_masked fallback, so the variant was random.
+    #[test]
+    #[ignore = "needs assets/DUNE.DAT"]
+    fn flyover_voice_variant_follows_location_type() {
+        let dat_path = concat!(env!("CARGO_MANIFEST_DIR"), "/../../assets/DUNE.DAT");
+        let Ok(dat_file) = DatFile::open(dat_path) else {
+            eprintln!("skipping: {dat_path} not found");
+            return;
+        };
+        let (tx, _rx) = mpsc::sync_channel(64);
+        let mut game = GameState::new(dat_file, tx);
+
+        // subst_id_04 = 0x48 + get_location_type_string_offset:
+        //   sietch 0x48, palace 0x49, village 0x4a, fortress 0x4b.
+        for (subst, expect) in [(0x48u16, 0u8), (0x49, 0), (0x4a, 1), (0x4b, 2)] {
+            // A voiced fly-over entry: dialogue_line_word0 bit 4 set, event id 0.
+            game.dialogue_line_word0 = 0xbe10;
+            game.data_047e0 = 0;
+            game.subtitle_pick_voice_variant(0x84, subst);
+            assert_eq!(
+                game.data_047e0, expect,
+                "location-type caption {subst:#x} must pick variant {expect}"
+            );
+            // = seg000:8ac3 the flag is consumed so the terminator rand fallback
+            //   cannot override the type-matched choice.
+            assert_eq!(game.dialogue_line_word0 & 0x10, 0, "voiced flag consumed");
+        }
+
+        // A voiced line with no qualifying placeholder keeps the flag (the
+        // terminator rand_masked fallback still applies).
+        game.dialogue_line_word0 = 0xbe10;
+        game.subtitle_pick_voice_variant(0x8a, 0x1234);
+        assert_eq!(
+            game.dialogue_line_word0 & 0x10,
+            0x10,
+            "flag left for the fallback"
+        );
     }
 }
