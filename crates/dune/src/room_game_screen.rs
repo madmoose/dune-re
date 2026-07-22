@@ -70,14 +70,14 @@ const CMD_MIXER_PANEL: CommandMenuRecord = rec(0x009e, 0xa3f0);
 // = 21f8: "CHANGE DESTINATION" — the map/book-mode travel verb (the third
 // slot in both map sub-modes).
 const CMD_CHANGE_DESTINATION: CommandMenuRecord = rec(0x0058, 0x497a);
-// = 21fc: "SKIP TO DESTINATION" — the default map-mode verb when the
-// phase-gated alternates do not apply (data_011cb == 0 || game_phase < 0x32).
+// = 21fc: "SKIP TO DESTINATION" — the default map-mode verb for a flight
+// homing on a real location (travel_no_location_dest == 0).
 const CMD_SKIP_TO_DESTINATION: CommandMenuRecord = rec(0x00a9, 0x4ffb);
-// = 2200: "BACK TO STARTING POINT" — the first phase-gated map-mode verb
-// (data_011cb != 0 && game_phase >= 0x32).
+// = 2200: "BACK TO STARTING POINT" — replaces SKIP TO DESTINATION for a
+// fixed-heading (directional) flight with no location target (travel_no_location_dest != 0).
 const CMD_BACK_TO_STARTING_POINT: CommandMenuRecord = rec(0x00ac, 0x50a5);
-// = 2204: "TOWARDS NEAREST PLACE" — the second phase-gated map-mode verb
-// (same gate as CMD_BACK_TO_STARTING_POINT).
+// = 2204: "TOWARDS NEAREST PLACE" — appended after BACK TO STARTING POINT once
+// game_phase >= 0x32 (travel_no_location_dest != 0 && game_phase >= 0x32).
 const CMD_TOWARDS_NEAREST_PLACE: CommandMenuRecord = rec(0x00aa, 0x50c4);
 // = 220c: "SEE DUNE MAP" — the leading verb on every special-room and
 // plain-room verb list (opens the planet-map view).
@@ -181,6 +181,31 @@ pub(crate) const MENU_EXIT_GAME_CONFIRMATION: [CommandMenuRecord; 2] = [
 #[rustfmt::skip]
 pub(crate) const MENU_DONE: [CommandMenuRecord; 1] = [
     rec(0x00a1, 0xd2e2), // " Done"                  menu_callback_choice_exit_menu
+];
+
+/// = seg001:1f92 menu_go_towards_this_place — the fly-over divert menu
+/// install_pending_room_action_menu (loc_03551) stages when a passed location
+/// armed pending_room_action 3. DOS's leading priority word (0x00fc, the
+/// NpcActionsMenu class) and trailing 0-word fence are implicit here. GO TOWARDS
+/// THIS PLACE just closes the menu (the divert travel is pre-armed in
+/// travel_scan_nearby_location); WHAT ? replays the companion's line.
+#[rustfmt::skip]
+const MENU_GO_TOWARDS_THIS_PLACE: [CommandMenuRecord; 2] = [
+    rec(0x00ad, 0xd2e2), // GO TOWARDS THIS PLACE    menu_callback_choice_exit_menu
+    rec(0x0095, 0x9ed5), // " WHAT ? "               menu_callback_choice_what
+];
+
+/// = seg001:1f9e menu_change_destination_ignore_warning — the fly-over hostile-
+/// zone warning menu install_pending_room_action_menu (loc_03551) stages for
+/// pending_room_action 4. DOS's leading priority word (0x00f8) and trailing
+/// fence are implicit here. CHANGE DESTINATION opens the destination picker;
+/// IGNORE WARNING closes the menu (the flight continues); WHAT ? replays the
+/// line.
+#[rustfmt::skip]
+const MENU_CHANGE_DESTINATION_IGNORE_WARNING: [CommandMenuRecord; 3] = [
+    rec(0x0058, 0x497a), // CHANGE DESTINATION       menu_callback_choice_change_destination
+    rec(0x00ae, 0xd2e2), // IGNORE WARNING           menu_callback_choice_exit_menu
+    rec(0x0095, 0x9ed5), // " WHAT ? "               menu_callback_choice_what
 ];
 
 /// One entry of the seg001:0fd8 room-person table (= the chani `RoomPerson`
@@ -806,12 +831,14 @@ impl GameState {
     // scaled fb1); this cleanup re-renders the room at 1:1 and presents it, so
     // STOP TALKING returns to the un-zoomed room view.
     //
-    // TODO: 097cf also clears data_047e1 and restores the subtitle backdrop
-    // (subtitle_restore_prior) — subtitle state not modelled yet. The
-    // game_screen_mode_flags != 0 branch (97f2, the map/globe nav-panel rebuild)
-    // and the pending_room_action-gated transition-reveal variant (loc_09898, a wiped
-    // re-render + leave scan that lets an evicted companion speak) are not
-    // ported; the port always takes the instant re-render path (loc_09879).
+    // The game_screen_mode_flags != 0 branch (97f2) resumes a paused travel
+    // (the fly-over cabin's menu) via travel_resume_flight_view; the room branch
+    // (loc_0980c) re-renders the room. TODO: 097cf also clears data_047e1 and
+    // restores the subtitle backdrop (subtitle_restore_prior) — subtitle state
+    // not modelled yet. The room path's pending_room_action-gated transition-
+    // reveal variant (loc_09898, a wiped re-render + leave scan that lets an
+    // evicted companion speak) is not ported; the port always takes the instant
+    // re-render path (loc_09879).
     fn menu_npc_actions_cleanup(&mut self) {
         // = seg000:97cf call lip_sync_stop — stop the speaker's voice lip-sync
         //   (also patching the TALK TO ME verb template back to its idle text
@@ -830,6 +857,27 @@ impl GameState {
         //   talked-to (0x20) and drop bit 0x04 on the way out.
         let speaker = self.current_lip_sync_resource_id as usize;
         self.room_persons[speaker].flags = (self.room_persons[speaker].flags | 0x20) & !0x04;
+        // = seg000:97eb cmp game_screen_mode_flags,0; jnz — the flight branch:
+        //   the fly-over cabin is up over a travel, not a room dialogue. Tear the
+        //   head down, rebuild the flight nav panel and resume the flight instead
+        //   of re-rendering a room.
+        if self.game_screen_mode_flags != 0 {
+            // = seg000:97f5 tear_down_prior_talking_head_overlay -> its 98e2 tail
+            //   stop_lip_sync_and_remove_idle_head_task: drop the companion head
+            //   and its idle animator so it stops compositing over the flight.
+            self.ui_elements[18].flags = 0;
+            self.ui_elements[19].flags = 0;
+            self.ui_elements[20].flags = 0;
+            self.stop_lip_sync_and_remove_idle_head_task();
+            // = seg000:97fd call rebuild_and_draw_room_nav_panel (DOS holds
+            //   data_011ca at 0 around it; travel_resume_flight_view clears it
+            //   for good below).
+            self.rebuild_and_draw_room_nav_panel();
+            // = seg000:9809 jmp loc_04abe — reload the flight view, present it,
+            //   and clear data_011ca so travel_pump resumes.
+            self.travel_resume_flight_view();
+            return;
+        }
         // = seg000:9849 loc_09849 (the room_render_flags bit-7 dialogue-zoom
         //   path, the one the port always takes) — retire the head overlay
         //   element and update the companion HUD slots.
@@ -1237,15 +1285,23 @@ impl GameState {
             recs.push(CMD_MIXER_PANEL);
         } else if self.game_screen_mode_flags & 3 != 0 {
             // = seg000:2fd7 loc_02fd7 — the map/book-mode verbs.
-            if self.data_011cb != 0 && self.game_phase >= 0x32 {
-                // = seg000:2fe1 si=2200h; the phase-gated map verb pair
-                // ("BACK TO STARTING POINT" + "TOWARDS NEAREST PLACE").
+            if self.travel_no_location_dest != 0 {
+                // = seg000:2fe1 si=2200h; a fixed-heading (directional) flight —
+                // travel_no_location_dest != 0 means there is no specific location target
+                // (the travel homes on the starting point, last_location_ptr),
+                // so the verb is "BACK TO STARTING POINT" rather than "SKIP TO
+                // DESTINATION".
                 recs.push(CMD_BACK_TO_STARTING_POINT);
-                recs.push(CMD_TOWARDS_NEAREST_PLACE);
+                // = seg000:2fe4 cmp game_phase,32h; jb — from phase 0x32 the
+                // list also offers si=2204h "TOWARDS NEAREST PLACE".
+                if self.game_phase >= 0x32 {
+                    recs.push(CMD_TOWARDS_NEAREST_PLACE);
+                }
             } else {
-                // = seg000:2fda si=21fch; "SKIP TO DESTINATION" default. The
-                // template copy carries the live flags byte DOS patches in
-                // place (data_021fd, set_skip_to_destination_verb_flags).
+                // = seg000:2fda si=21fch; "SKIP TO DESTINATION" default (a flight
+                // homing on a real location). The template copy carries the live
+                // flags byte DOS patches in place (data_021fd,
+                // set_skip_to_destination_verb_flags).
                 recs.push(rec(
                     CMD_SKIP_TO_DESTINATION.text_id
                         | ((self.cmd_skip_to_destination_flags as u16) << 8),
@@ -1932,11 +1988,11 @@ impl GameState {
     // person's dialogue verb menu. data_047a7 latches after the first person
     // speaks so only one interrupts the move.
     //
-    // MINIMAL PORT: the present path (present_room_person_dialogue) and the verb-menu install
-    // (loc_03595) are modelled. Deferred: the messages_02aaf queued-message path
-    // taken when no line is selected (seg000:3533), and the pending_room_action == 3 / == 4
-    // come-with-me / special-menu branches (seg000:3555..3592) — the room-leave
-    // scan runs with pending_room_action == 1.
+    // MINIMAL PORT: the present path (present_room_person_dialogue) and the
+    // fall-through into install_pending_room_action_menu (loc_03551) are
+    // modelled. Deferred: the messages_02aaf queued-message path taken when no
+    // line is selected (seg000:3533). The room-leave scan runs with
+    // pending_room_action == 1, so loc_03551 takes its speaker branch.
     fn npc_auto_dialogue(&mut self, _index: u8, entry: &RoomPerson) {
         // = seg000:3520 cmp byte [data_047a7], 0; jnz ret — someone already spoke.
         if self.data_047a7 != 0 {
@@ -1950,22 +2006,92 @@ impl GameState {
         if !self.present_room_person_line(entry.person_index) {
             return;
         }
+        // = seg000:3542..354c messages_02a51 (the "<person> is here" queued
+        //   message) is not modelled; fall through into loc_03551.
+        self.install_pending_room_action_menu();
+    }
 
-        // = seg000:3551 loc_03551 inc byte [data_047a7] — latch so no other
-        //   standing person speaks during this scan.
+    // = seg000:3551 loc_03551 — install the command menu (or dialogue speaker)
+    // for the currently-armed pending_room_action, then reveal it with the panel
+    // fold. Fallen into by room_person_present_auto_dialogue after a room-leave
+    // line (pending_room_action == 1 -> the loc_03595 speaker branch) and called
+    // from the fly-over dispatch (travel_settle_companion_dispatch, seg000:3633)
+    // after the companion's line (pending_room_action 3 / 4 -> the divert /
+    // hostile-zone-warning menus).
+    pub(crate) fn install_pending_room_action_menu(&mut self) {
+        // = seg000:3551 inc byte [data_047a7] — latch so no other standing
+        //   person speaks (or a further settle pass raises the cabin) this scan.
         self.data_047a7 = self.data_047a7.wrapping_add(1);
+        match self.pending_room_action {
+            // = seg000:3555 pending_room_action == 3: a fly-over passed a
+            //   revealed location with companions aboard — the GO TOWARDS THIS
+            //   PLACE divert menu.
+            3 => {
+                // = seg000:355c bp = menu_go_towards_this_place; 355f bx =
+                //   menu_npc_actions_cleanup; 3562 call loc_0d323.
+                self.stage_command_submenu(MENU_GO_TOWARDS_THIS_PLACE.to_vec());
+                // = seg000:3565/356b ui_hud_elements[18]/[19].flags = 0 — drop the
+                //   HUD head-ornament and balloon elements (the port handles those
+                //   HUD elements structurally; no flags field to write).
+            }
+            // = seg000:3572 pending_room_action == 4: the flight is entering a
+            //   hostile/non-Atreides zone — the CHANGE DESTINATION / IGNORE
+            //   WARNING menu.
+            4 => {
+                // = seg000:357c and byte [menu_change_destination_ignore_warning
+                //   + 0bh], 0bfh — clear the greyed (0x4000) bit on the WHAT ?
+                //   entry's text id. The port stages a fresh (never-greyed) copy
+                //   of the record set, so this is a no-op here.
+                // = seg000:3580 bx = menu_npc_actions_cleanup; 3583 call loc_0d323.
+                self.stage_command_submenu(MENU_CHANGE_DESTINATION_IGNORE_WARNING.to_vec());
+                // = seg000:3586/358c ui_hud_elements[18]/[19].flags = 0 (as above).
+                // = seg000:3592 jmp rebuild_and_draw_room_nav_panel — rebuild the
+                //   bottom-right nav/compass HUD for the warning menu context.
+                self.rebuild_and_draw_room_nav_panel();
+            }
+            // = seg000:3595 loc_03595 — the room-leave speaker branch (any other
+            //   pending_room_action, e.g. the scan's value 1).
+            action => {
+                // = seg000:3595 cmp data_04774,0; jnz loc_035ac (ret) — skip while
+                //   a dialogue panel is already up.
+                if self.is_dialogue_active {
+                    return;
+                }
+                // = seg000:359c cmp pending_room_action,64h; jnb loc_035ac (ret) —
+                //   a >= 0x64 value is a speaking-person encoding, not an action.
+                if action >= 0x64 {
+                    return;
+                }
+                // = seg000:35a3 ax = current_lip_sync_resource_id; 35a6 call
+                //   set_dialogue_speaker — mark the speaker met and stage their
+                //   dialogue verb panel (TALK TO ME / COME WITH ME / WHAT? /
+                //   STOP TALKING).
+                let speaker = self.current_lip_sync_resource_id as u8;
+                self.set_dialogue_speaker(speaker);
+                // = seg000:35a9 call play_pending_panel_fold — reveal the staged
+                //   verb panel with the accordion fold.
+                self.play_pending_panel_fold();
+            }
+        }
+    }
 
-        // = seg000:3595 loc_03595 — the pending_room_action == 1 (room-leave) path. The
-        //   data_04774 gate (seg000:3595) and the pending_room_action >= 0x64 guard
-        //   (seg000:359c) both pass for value 1.
-        // = seg000:35a3 ax = current_lip_sync_resource_id; 35a6 call
-        //   set_dialogue_speaker — mark the speaker met and stage their dialogue
-        //   verb panel (TALK TO ME / COME WITH ME / WHAT? / STOP TALKING).
-        let speaker = self.current_lip_sync_resource_id as u8;
-        self.set_dialogue_speaker(speaker);
-        // = seg000:35a9 call play_pending_panel_fold — reveal the staged verb panel
-        //   with the accordion fold (animating the speaker's mouth through it).
+    // = seg000:d323 loc_0d323 — stage a submenu (DOS bp = record buffer) with its
+    // render/cleanup func (DOS bx) and reveal it with the panel fold: arm the fb1
+    // transition, push the element, fold it in, then light the slot under the
+    // cursor. Both fly-over menus carry the menu_npc_actions_cleanup cleanup, so
+    // they push as NpcActionsMenu (menu_go_towards_this_place shares its 0xfc
+    // priority; menu_change_destination_ignore_warning's DOS 0xf8 priority only
+    // matters to the unmodelled deep-stack replace/pop, so it is folded in here).
+    fn stage_command_submenu(&mut self, records: Vec<CommandMenuRecord>) {
+        // = seg000:d323 call screen_overlay_request_transition — stage into fb1.
+        self.screen_overlay_request_transition();
+        // = seg000:d326 call screen_element_stack_push (bp menu, bx cleanup).
+        self.screen_element_stack_push(ScreenElement::NpcActionsMenu, records);
+        // = seg000:d329 call play_pending_panel_fold — reveal with the fold.
         self.play_pending_panel_fold();
+        // = seg000:d32c jmp loc_0d410 -> highlight_hovered_text_action_item —
+        //   light the slot under the cursor now the menu is shown.
+        self.highlight_hovered_text_action_item();
     }
 
     // = seg000:30b9 build_room_person_record_a — template-a builder for
@@ -2444,30 +2570,8 @@ impl GameState {
                 // = seg000:37e9 falls into loc_037eb.
                 self.draw_desert_view();
             } else {
-                // = seg000:37f4 loc_037f4 — the travel flight view: the
-                // minimap + trail into the back buffer and the flight HNM's
-                // first frame.
-                // = seg000:37f4 travel_minimap_state = 0.
-                self.travel_minimap_state = 0;
-                // = seg000:37f9 call travel_minimap_setup; 37fc call
-                //   travel_trail_redraw.
-                self.travel_minimap_setup();
-                self.travel_trail_redraw();
-                // = seg000:37ff/3802 ax = travel_vehicle_mode; call
-                //   hnm_load_first_frame — open the flight HNM by the vehicle
-                //   id (2 = MNT1) and decode its first frame at blit offset 0:
-                //   the 320x152 frames span the whole game area (the in-game
-                //   fb row offset is 0, clear_global_y_offset). The MNT clips'
-                //   bit-4 resource flag routes the frame through
-                //   hnm_present_flight_frame (seg000:ccee), which stamps the
-                //   minimap over it.
-                let id = self.travel_vehicle_mode;
-                self.hnm_load_first_frame_by_id(id, 0);
-                self.hnm_present_flight_frame();
-                // = seg000:3805 call [gfx_vtable_vga_save_palette_to_fade_
-                //   target]; 3809 jmp set_sky_palette.
-                gfx::vga_save_palette_to_fade_target(self);
-                self.set_sky_palette();
+                // = seg000:37f4 loc_037f4 — the travel flight view.
+                self.travel_load_flight_view();
             }
             return;
         }
@@ -2519,8 +2623,14 @@ impl GameState {
 
     // = seg000:978e start_room_lip_sync — start the current speaker's lip-sync
     // (current_lip_sync_resource_id; 0xffff = none).
-    // TODO: port; no-op stub.
-    fn start_room_lip_sync(&mut self) {}
+    // MINIMAL PORT: only its opening loc_04aca step (data_011ca = 1) is
+    // modelled — during a travel that pauses travel_pump so the flight HNM does
+    // not overdraw the head. The lip-sync data setup + head render (9799..97cb)
+    // are the port's setup_talking_head at the call sites.
+    fn start_room_lip_sync(&mut self) {
+        // = seg000:978e call loc_04aca — data_011ca = 1.
+        self.data_011ca = 1;
+    }
 }
 
 #[cfg(test)]
@@ -3600,6 +3710,85 @@ mod tests {
         assert!(
             !game.shared_cursor.snapshot().hidden,
             "no cursor hide while composing offscreen"
+        );
+    }
+
+    // The map-mode travel verb (build_room_command_records, seg000:2fd7)
+    // depends on whether the flight has a location target. A homing flight
+    // (travel_no_location_dest == 0) offers "SKIP TO DESTINATION" (seg000:4ffb); a
+    // fixed-heading directional flight (travel_no_location_dest != 0 — no target, homing on
+    // the starting point) replaces it with "BACK TO STARTING POINT"
+    // (seg000:50a5), and from game_phase 0x32 also appends "TOWARDS NEAREST
+    // PLACE" (seg000:50c4). Asset-gated:
+    //   cargo test -p dune --lib -- --ignored directional_flight
+    #[test]
+    #[ignore = "needs assets/DUNE.DAT"]
+    fn directional_flight_replaces_skip_to_destination_with_back_to_starting_point() {
+        let dat_path = concat!(env!("CARGO_MANIFEST_DIR"), "/../../assets/DUNE.DAT");
+        let Ok(dat_file) = DatFile::open(dat_path) else {
+            eprintln!("skipping: {dat_path} not found");
+            return;
+        };
+        let (tx, _rx) = mpsc::sync_channel(64);
+        let mut game = GameState::new(dat_file, tx);
+        game.set_headless();
+
+        // A plain (non-special) room in map mode: location_appearance low byte
+        // != 0x80 and game_screen_mode_flags & 3 != 0 select the loc_02fd7
+        // travel-verb branch.
+        game.location_appearance = 0x0000;
+        game.game_screen_mode_flags = 1;
+
+        // Homing flight (travel_no_location_dest == 0): SKIP TO DESTINATION, then CHANGE
+        // DESTINATION.
+        game.travel_no_location_dest = 0;
+        game.game_phase = 0;
+        game.build_room_command_records();
+        assert_eq!(game.command_menu_records.len(), 2);
+        assert_eq!(
+            game.command_menu_records[0].handler, 0x4ffb,
+            "SKIP TO DESTINATION"
+        );
+        assert_eq!(
+            game.command_menu_records[1].handler, 0x497a,
+            "CHANGE DESTINATION"
+        );
+
+        // Directional flight before phase 0x32: BACK TO STARTING POINT alone
+        // (the case the port previously got wrong, showing SKIP TO DESTINATION).
+        game.travel_no_location_dest = 0xff;
+        game.game_phase = 0x20;
+        game.build_room_command_records();
+        assert_eq!(
+            game.command_menu_records.len(),
+            2,
+            "no TOWARDS NEAREST PLACE yet"
+        );
+        assert_eq!(
+            game.command_menu_records[0].handler, 0x50a5,
+            "BACK TO STARTING POINT"
+        );
+        assert_eq!(
+            game.command_menu_records[1].handler, 0x497a,
+            "CHANGE DESTINATION"
+        );
+
+        // Directional flight from phase 0x32: BACK TO STARTING POINT + TOWARDS
+        // NEAREST PLACE, then CHANGE DESTINATION.
+        game.game_phase = 0x32;
+        game.build_room_command_records();
+        assert_eq!(game.command_menu_records.len(), 3);
+        assert_eq!(
+            game.command_menu_records[0].handler, 0x50a5,
+            "BACK TO STARTING POINT"
+        );
+        assert_eq!(
+            game.command_menu_records[1].handler, 0x50c4,
+            "TOWARDS NEAREST PLACE"
+        );
+        assert_eq!(
+            game.command_menu_records[2].handler, 0x497a,
+            "CHANGE DESTINATION"
         );
     }
 

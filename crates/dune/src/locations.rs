@@ -2056,7 +2056,7 @@ impl GameState {
     // appearance byte into its type-string offset: 0 for the sietches
     // (< 0x20), 2 for 0x21..0x27, 3 for 0x28..0x2f, and 1 (the palaces) for
     // both 0x20 and >= 0x30.
-    fn get_location_type_string_offset(&self, location_index: usize) -> u16 {
+    pub(crate) fn get_location_type_string_offset(&self, location_index: usize) -> u16 {
         // = seg000:6232 bl = [di+8] (appearance); 6235..624e the threshold
         //   ladder (the >= 0x30 tail lands on 3 - 2 = 1).
         match self.locations[location_index].appearance {

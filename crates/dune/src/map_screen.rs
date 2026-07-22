@@ -58,6 +58,12 @@ const MAP_SCROLL_DELTA_RIGHT: (u16, i16) = (0x1002, 0);
 const MAP_SCROLL_DELTA_DOWN: (u16, i16) = (0, 0x0c);
 const MAP_SCROLL_DELTA_LEFT: (u16, i16) = (0x1002u16.wrapping_neg(), 0);
 
+// = seg001:196d table_196d — the cockpit fly-over silhouette sprite id per
+// location SAL tier (calc_sal_index 0..4): SIET 0x11, PALACE 0x10, VILG 0x12,
+// HARK 0x13/0x13. Indexed by travel_flyover_detect after the xlat at
+// seg000:424a.
+const TABLE_196D: [u8; 5] = [0x11, 0x10, 0x12, 0x13, 0x13];
+
 // = seg001:148a travel_minimap_rect — the flight minimap view rect, copied
 // into data_046e3_rect (map_view_rect) by travel_minimap_setup.
 const TRAVEL_MINIMAP_RECT: Rect = rect(0xcc, 4, 0x13c, 0x3c);
@@ -1255,17 +1261,17 @@ impl GameState {
     // = seg000:4944 arm_pending_travel — arm the pending travel from the
     // selected hover state and the click screen position.
     fn arm_pending_travel(&mut self, hover: u16, x: i16, y: i16) {
-        // = seg000:4944 call loc_050be — data_011cb = 0.
-        self.data_011cb = 0;
+        // = seg000:4944 call loc_050be — travel_no_location_dest = 0.
+        self.travel_no_location_dest = 0;
         // = seg000:4947 cmp di,0fff0h; jb travel_aim_at_location — a
         //   location ptr aims home at it.
         if hover < 0xfff0 {
             self.travel_aim_at_location(location_index_from_ptr(hover));
             return;
         }
-        // = seg000:494c dec [data_011cb] — 0xff marks a fixed-heading
-        //   (desert) travel; the map verbs switch on it.
-        self.data_011cb = self.data_011cb.wrapping_sub(1);
+        // = seg000:494c dec [travel_no_location_dest] — 0xff marks a directional
+        //   flight with no location destination; the map verbs switch on it.
+        self.travel_no_location_dest = self.travel_no_location_dest.wrapping_sub(1);
         // = seg000:4950 call map_screen_to_position — the clicked map
         //   cell; 4953/4955 it becomes the target; 4957/495a aim at it
         //   from the player position.
@@ -1377,12 +1383,12 @@ impl GameState {
 
     // = seg000:51cb travel_update_heading — re-aim travel_heading before a
     // step from the position (x, lat). In fixed-heading mode
-    // (travel_heading_mode or data_011cb) only the polar guard applies: past
+    // (travel_heading_mode or travel_no_location_dest) only the polar guard applies: past
     // |lat| 0x4d a poleward heading is bent to due east/west. In homing mode
     // the heading re-aims at travel_destination_ptr.
     fn travel_update_heading(&mut self, x: u16, lat: i16) {
         // = seg000:51cb/51d2 either flag selects the fixed-heading path.
-        if self.data_011cb != 0 || self.travel_heading_mode != 0 {
+        if self.travel_no_location_dest != 0 || self.travel_heading_mode != 0 {
             // = seg000:51d9..51e1 within lat -0x4d..0x4d nothing to do.
             if (-0x4d..=0x4d).contains(&lat) {
                 return;
@@ -1509,11 +1515,13 @@ impl GameState {
             self.travel_arrive();
             return;
         }
-        // = seg000:4f52 call loc_02e52 — the post-step settle: finish_room_
-        //   screen_setup (loc_035ad, a port stub) and the game-clock stamp;
-        //   its dialogue / auto-action / head-raise branches all bail during
-        //   a travel (game_screen_mode_flags != 0 at seg000:2e7d and
-        //   data_04735's auto-action bit is clear in flight).
+        // = seg000:4f52 call loc_02e52 — the post-step settle. It opens by
+        //   calling loc_035ad (unconditionally): during a travel that runs the
+        //   mode != 0 branch (loc_035e9), which re-detects a passed location
+        //   and raises the fly-over companion cabin. The remaining loc_02e52
+        //   tail (2e5b onward: the auto-action / head-raise branches) bails in
+        //   flight, so only the game-clock stamp is modelled after it.
+        self.travel_settle_companion_dispatch();
         self.game_clock_tick_base = self.game_ticks() as u16;
         // = seg000:4f55 a staged night attack pauses the flight side effects.
         if self.data_047a7 != 0 {
@@ -1673,9 +1681,9 @@ impl GameState {
         self.travel_aim_at_location(self.last_location_index);
         // = seg000:50b5 call loc_04ac4 — data_011ca = 0.
         self.data_011ca = 0;
-        // = seg000:50b8 call loc_050be — data_011cb = 0 (back to the homing
+        // = seg000:50b8 call loc_050be — travel_no_location_dest = 0 (back to the homing
         //   verb pair).
-        self.data_011cb = 0;
+        self.travel_no_location_dest = 0;
         // = seg000:50bb jmp ui_draw_room_command_panel.
         self.ui_draw_room_command_panel();
     }
@@ -1695,8 +1703,8 @@ impl GameState {
         // = seg000:50d0 travel_heading_mode = 0 (already 0 from the location
         //   path of arm_pending_travel).
         self.travel_heading_mode = 0;
-        // = seg000:50d5 call loc_050be — data_011cb = 0.
-        self.data_011cb = 0;
+        // = seg000:50d5 call loc_050be — travel_no_location_dest = 0.
+        self.travel_no_location_dest = 0;
         // = seg000:50d8 jmp ui_draw_room_command_panel.
         self.ui_draw_room_command_panel();
     }
@@ -1748,7 +1756,7 @@ impl GameState {
         }
         // = seg000:418b a fixed-heading (desert) travel skips the
         //   destination test.
-        if self.data_011cb == 0 {
+        if self.travel_no_location_dest == 0 {
             // = seg000:4192/4196/4199 a homing travel to an Atreides
             //   destination is safe.
             let dest = location_index_from_ptr(self.travel_destination_ptr);
@@ -1775,6 +1783,251 @@ impl GameState {
         if self.data_04726 == 0 {
             self.pending_room_screen_request = 2;
         }
+    }
+
+    // = seg000:35ad loc_035ad / loc_035e9 — the per-settle companion dispatch,
+    // run once per travel step (from loc_02e52). During a travel
+    // (game_screen_mode_flags != 0) this is the mode != 0 branch (loc_035e9):
+    // it re-detects a location the flight passes near
+    // (travel_scan_nearby_location) and the hostile-zone warning
+    // (travel_route_hostile_zone_check); if either armed a room action and a
+    // companion is aboard, it raises the fly-over cabin — ORNYCAB drawn over
+    // the game area plus the companion as a talking head. The mode == 0
+    // room-auto-dialogue branch (loc_035b4) is unrelated to travel.
+    fn travel_settle_companion_dispatch(&mut self) {
+        // = seg000:35e9..35f1 reset the per-frame staging flags.
+        self.data_047a7 = 0;
+        self.pending_room_action = 0;
+        // = seg000:35f4..35fa a staged action (data_047a6) skips this pass.
+        let staged = self.data_047a6;
+        self.data_047a6 = 0;
+        if staged != 0 {
+            return;
+        }
+        // = seg000:35fc without a companion aboard only the hostile-zone
+        //   warning runs (loc_03637); the cabin view needs someone to speak.
+        if self.companion_1 == -1 && self.companion_2 == -1 {
+            self.travel_route_hostile_zone_check();
+            return;
+        }
+        // = seg000:3603 detect a location the flight passes near.
+        self.travel_scan_nearby_location();
+        // = seg000:3606 the hostile-zone warning.
+        self.travel_route_hostile_zone_check();
+        // = seg000:3609/360e nothing armed this pass.
+        if self.pending_room_action == 0 {
+            return;
+        }
+        // = seg000:3610/3613 pick the companion who speaks.
+        let Some(companion) = self.travel_pick_speaking_companion() else {
+            return;
+        };
+        // = seg000:3615 restore the cursor before the cabin overlay.
+        self.call_restore_cursor();
+        // = seg000:3618 draw the ORNYCAB cabin and raise the companion head.
+        self.travel_show_companion_cabin(companion);
+        // = seg000:361b push ax — keep the speaking companion across the pause.
+        // = seg000:361c ax = 0x4b; call wait_a_bit — a 0x4b PIT-tick beat (a
+        //   busy-wait that keeps the idle frame tasks running) before the voice
+        //   plays; no deterministic state effect headless.
+        // = seg000:3624 call loc_096d8 — the companion speaks the fly-over line.
+        // = seg000:3628 jb loc_03636 — no sentence matched: skip the menu install.
+        if self.travel_play_flyover_line(companion) {
+            // = seg000:362a..3631 si = &room_persons[companion] — loaded for
+            //   loc_03551, but its pending_room_action 3/4 branches read
+            //   current_lip_sync_resource_id, not si, so the port omits it.
+            // = seg000:3633 call loc_03551 — install the GO TOWARDS THIS PLACE
+            //   (action 3) or CHANGE DESTINATION / IGNORE WARNING (action 4)
+            //   command menu and, for action 4, rebuild the room nav panel.
+            self.install_pending_room_action_menu();
+        }
+    }
+
+    // = seg000:40f9 loc_040f9 — scan the map around the flight for a location
+    // it passes near. With companions aboard, sweep the 9×9 block of map cells
+    // centred on the player; a qualifying location — one flagged a
+    // discoverable landmark (status bit 0x80) already revealed by the story
+    // phase, whose bearing sits within ±0x60 of the heading — arms room action
+    // 3 and records the location-type caption strings the companion's line
+    // substitutes. DOS keeps scanning, so the last match in the block wins.
+    fn travel_scan_nearby_location(&mut self) {
+        // = seg000:40f9 only while a map/travel sub-mode is active.
+        if self.game_screen_mode_flags & 3 == 0 {
+            return;
+        }
+        // = seg000:4101 nothing to say without travelling companions.
+        if self.persons_travelling_with == 0 {
+            return;
+        }
+        // = seg000:4108..4111 the 9×9 map-cell block around the player.
+        let (x, lat) = self.get_map_position();
+        let strip = self.map_build_cell_strip(x, lat, 9, 9);
+        // = seg000:4114..417f scan the 81 cells.
+        for (byte, offset) in strip {
+            // = seg000:4118 not a location cell.
+            if byte & 0x40 == 0 {
+                continue;
+            }
+            // = seg000:411c..4123 the location owning this cell.
+            let Some(idx) = self.find_location_by_map_offset(offset) else {
+                continue;
+            };
+            let loc = self.locations[idx];
+            // = seg000:4125..4131 a discoverable landmark the phase has
+            //   revealed.
+            if loc.status & 0x80 == 0 {
+                continue;
+            }
+            if self.game_phase < loc.discoverable_at_phase as u8 {
+                continue;
+            }
+            // = seg000:4133..4142 the bearing must be within ±0x60 of the
+            //   heading; a location on the player cell (CF set) is skipped.
+            let (px, plat) = self.get_map_position();
+            if loc.map_x as u16 == px && loc.map_y == plat {
+                continue;
+            }
+            let angle = self.compass_angle_to_location(idx);
+            let rel = angle.wrapping_sub(self.travel_heading).wrapping_add(0x60);
+            if rel >= 0xc0 {
+                continue;
+            }
+            // = seg000:4144..4152 the caption id + which side of the heading.
+            let (side, caption) = if rel < 0x60 {
+                (0u8, 0x00ce)
+            } else {
+                (1u8, 0x00d0)
+            };
+            self.string_subst_id_table[5] = caption;
+            self.data_000e1 = side;
+            // = seg000:415a..4160 the location-type string ("Sietch: ", ...).
+            self.string_subst_id_table[4] =
+                self.get_location_type_string_offset(idx).wrapping_add(0x48);
+            // = seg000:4163 arm room action 3 (companions are following).
+            self.pending_room_action = 3;
+            // = seg000:4168 mark the landmark discovered.
+            self.location_mark_discovered(idx);
+            // = seg000:416b call arm_pending_travel (di = the found location's
+            //   record, so its travel_aim_at_location branch): re-aim the flight
+            //   home at the passed location in homing mode. GO TOWARDS THIS
+            //   PLACE (menu_callback_choice_exit_menu) then just closes the
+            //   fly-over menu; travel_resume_flight_view resumes the flight,
+            //   now bound for the new destination.
+            self.arm_pending_travel(location_ptr(idx as u16), 0, 0);
+            // = seg000:416e call call_restore_cursor.
+            self.call_restore_cursor();
+            // = seg000:4171..4177 DOS also rebuilds the underlying room command
+            //   panel here (build_room_command_records /
+            //   rebuild_and_draw_room_nav_panel / redraw_active_command_menu).
+            //   install_pending_room_action_menu stages and redraws the GO
+            //   TOWARDS submenu over it, so the port defers that beneath-panel
+            //   rebuild. TODO: port the flight command-panel rebuild.
+        }
+    }
+
+    // = seg000:366f loc_0366f — pick which companion speaks the fly-over line:
+    // the sole companion, or a rand_bits coin-flip between the two. None when
+    // no companion is aboard.
+    fn travel_pick_speaking_companion(&self) -> Option<u8> {
+        // = seg000:3672 both slots empty.
+        if self.companion_1 == -1 && self.companion_2 == -1 {
+            return None;
+        }
+        // = seg000:3677..3684 one companion, or rand_bits bit 0x80 chooses.
+        let pick = if self.companion_2 == -1 || self.rand_bits & 0x80 != 0 {
+            self.companion_1
+        } else {
+            self.companion_2
+        };
+        Some(pick as u8)
+    }
+
+    // = seg000:368b loc_0368b — the fly-over companion cabin. While an
+    // ornithopter travel is up (game_screen_mode_flags & 3 == 1) draw the
+    // ORNYCAB cabin over the game area and raise `companion` (the speaking
+    // companion's person index) as a lip-sync talking head; the worm branch
+    // (& 3 == 2) instead re-composites the worm view. A recenter of the
+    // minimap is scheduled for when the cabin closes.
+    fn travel_show_companion_cabin(&mut self, companion: u8) {
+        // = seg000:368e travel_minimap_state |= 1 — a recenter/redraw is due.
+        self.travel_minimap_state |= 1;
+        // = seg000:3693..36a1 branch on the travel sub-mode.
+        match self.game_screen_mode_flags & 3 {
+            2 => {
+                // = seg000:36cb the worm-travel view (loc_04aeb +
+                //   copy_game_rect_fb1_to_fb2). TODO: port the worm cabin.
+            }
+            1 => {
+                // = seg000:36a3/36a8 cockpit mode; a room render is pending.
+                self.map_ornithopter_mode = 1;
+                self.room_render_flags = 1;
+                // = seg000:36ae open ORNYCAB and draw its sprite 0 over the
+                //   game area.
+                self.open_resource_and_draw_sprite0(sprite_bank::ORNYCAB);
+                // = seg000:36b3 fold the ORNYCAB palette in.
+                self.update_screen_palette();
+                // = seg000:36b6 snapshot the cabin as the head's backdrop.
+                self.copy_active_framebuffer_to_framebuffer_2();
+                // = seg000:36ba..36c1 setup the companion talking head
+                //   (skipped for an empty slot); setup_talking_head bundles
+                //   the DOS current_lip_sync_resource_id store +
+                //   start_room_lip_sync.
+                if (companion as i8) >= 0 {
+                    self.current_lip_sync_resource_id = companion as u16;
+                    // = seg000:36c1 call start_room_lip_sync, which opens with
+                    //   loc_04aca (data_011ca = 1). That pauses travel_pump
+                    //   (it bails while data_011ca != 0), so the flight HNM
+                    //   stops decoding and the cabin + head is not overdrawn
+                    //   while the companion speaks and the fly-over menu is up.
+                    //   travel_resume_flight_view (loc_04abe) clears it when the
+                    //   menu is dismissed. The rest of start_room_lip_sync (the
+                    //   lip-sync data setup + head render) is setup_talking_head.
+                    self.data_011ca = 1;
+                    self.setup_talking_head(companion, 0);
+                }
+                // = seg000:36c4 push the composed cabin to the screen.
+                self.present_game_area();
+            }
+            _ => {}
+        }
+    }
+
+    // = seg000:37f4 loc_037f4 — (re)load the travel flight view: reset the
+    // minimap state, set up the minimap + trail into the back buffer, open the
+    // flight HNM at its first frame, then save the palette and install the sky
+    // palette. Shared by the scene reload (draw_room_scene) and the fly-over
+    // resume (travel_resume_flight_view).
+    pub(crate) fn travel_load_flight_view(&mut self) {
+        // = seg000:37f4 travel_minimap_state = 0.
+        self.travel_minimap_state = 0;
+        // = seg000:37f9 call travel_minimap_setup; 37fc call travel_trail_redraw.
+        self.travel_minimap_setup();
+        self.travel_trail_redraw();
+        // = seg000:37ff/3802 ax = travel_vehicle_mode; call hnm_load_first_frame
+        //   — open the flight HNM by the vehicle id (2 = MNT1) and decode its
+        //   first frame at blit offset 0: the 320x152 frames span the whole game
+        //   area. The MNT clips' bit-4 resource flag routes the frame through
+        //   hnm_present_flight_frame (seg000:ccee), which stamps the minimap.
+        let id = self.travel_vehicle_mode;
+        self.hnm_load_first_frame_by_id(id, 0);
+        self.hnm_present_flight_frame();
+        // = seg000:3805 call [gfx_vtable_vga_save_palette_to_fade_target]; 3809
+        //   jmp set_sky_palette.
+        gfx::vga_save_palette_to_fade_target(self);
+        self.set_sky_palette();
+    }
+
+    // = seg000:4abe loc_04abe — resume the flight after the fly-over cabin/menu
+    // (reached from menu_npc_actions_cleanup's flight branch, seg000:9809):
+    // reload the flight view, present it, then clear data_011ca (loc_04ac4) so
+    // travel_pump resumes pumping the flight HNM.
+    pub(crate) fn travel_resume_flight_view(&mut self) {
+        // = seg000:4abe call loc_037f4.
+        self.travel_load_flight_view();
+        // = seg000:4ac1 call present_game_area.
+        self.present_game_area();
+        // = seg000:4ac4 loc_04ac4: data_011ca = 0.
+        self.data_011ca = 0;
     }
 
     // = seg000:4988 travel_minimap_setup — set up the flight minimap view:
@@ -1997,8 +2250,9 @@ impl GameState {
         self.travel_step_accum = saved_accum;
         // = seg000:4eb9 the byte seven steps ahead.
         let b = self.read_map_byte(nx, nlat);
-        // = seg000:4ebd call travel_flyover_detect.
-        self.travel_flyover_detect();
+        // = seg000:4ebd call travel_flyover_detect — with the position seven
+        //   steps ahead (dx/bx) still live.
+        self.travel_flyover_detect(nx, nlat);
         // = seg000:4ec2/4ec4 the byte-averaged terrain falls into
         //   travel_select_flight_video.
         let terrain = a.wrapping_add(b) >> 1;
@@ -2006,13 +2260,117 @@ impl GameState {
     }
 
     // = seg000:41e1 travel_flyover_detect — detect a location the flight
-    // passes: scan a strip across the heading for a location cell whose
-    // bearing is within ±0x20 of travel_heading, latching its relative angle
-    // (data_01968) and SAL-type sprite (data_0196a) for the cockpit fly-over
-    // overlay, with data_0196c as the re-arm countdown. The overlay draw that
-    // consumes data_0196x is not ported, so this stays a no-op stub.
-    // TODO: port with the cockpit fly-over overlay.
-    fn travel_flyover_detect(&mut self) {}
+    // passes near: scan an 8-cell strip across the heading (built at the probe
+    // position x/lat, seven steps ahead) for a location cell (map bit 0x40)
+    // whose bearing is within ±0x20 of travel_heading, and latch its signed
+    // relative angle * 0x20 (data_01968) and SAL-tier silhouette sprite
+    // (data_0196a) into a 3-entry (x, sprite) array at seg001:1960..196b, with
+    // data_0196c the re-arm countdown. That silhouette array is vestigial in
+    // this build: nothing reads it to draw (verified — no code references the
+    // addresses and no pointer to 0x1960 exists), and its sprite ids 0x10..0x17
+    // are absent from ORNYCAB/ORNYPAN, so the latch is inert. The visible
+    // fly-over cabin is a separate path: travel_scan_nearby_location
+    // (seg000:40f9) + travel_show_companion_cabin (seg000:368b).
+    fn travel_flyover_detect(&mut self, x: u16, lat: i16) {
+        // = seg000:41e1..41e6 while the re-arm countdown is live just tick it
+        //   down (loc_041db); don't re-detect.
+        if self.data_0196c != 0 {
+            // = seg000:41db dec [data_0196c]; clc; ret.
+            self.data_0196c -= 1;
+            return;
+        }
+        // = seg000:41e8..41f7 orient an 8-cell strip across the heading: a 1×8
+        //   longitude run when (heading + 0x20) & 0x40 == 0 (heading near
+        //   E/W), else an 8×1 latitude run (near N/S).
+        let (rows, cols) = if self.travel_heading.wrapping_add(0x20) & 0x40 == 0 {
+            (1, 8)
+        } else {
+            (8, 1)
+        };
+        // = seg000:41f8 call loc_0b56c — build the (map byte, map offset) strip.
+        let strip = self.map_build_cell_strip(x, lat, rows, cols);
+        // = seg000:41fb..4209 scan the 8 cells for a location cell (bit 0x40).
+        for (byte, offset) in strip {
+            // = seg000:41ff..4206 test al,40h; not a location cell → next.
+            if byte & 0x40 == 0 {
+                continue;
+            }
+            // = seg000:420a..4211 find the location owning this cell; a cell
+            //   with no owning record (DOS end sentinel, ZF clear) is skipped.
+            let Some(idx) = self.find_location_by_map_offset(offset) else {
+                continue;
+            };
+            let loc = self.locations[idx];
+            // = seg000:4213..421f status bit 0x80 gates on story progress: the
+            //   location stays hidden until game_phase reaches its
+            //   discoverable phase (unsigned byte compare).
+            if loc.status & 0x80 != 0 && self.game_phase < loc.discoverable_at_phase as u8 {
+                continue;
+            }
+            // = seg000:4221..4226 the compass angle from the player to the
+            //   location; a location sitting exactly on the player cell returns
+            //   CF set (both deltas zero) and is skipped.
+            let (px, plat) = self.get_map_position();
+            if loc.map_x as u16 == px && loc.map_y == plat {
+                continue;
+            }
+            let angle = self.compass_angle_to_location(idx);
+            // = seg000:4228..4230 keep it only within ±0x20 of the heading.
+            let rel = angle.wrapping_sub(self.travel_heading).wrapping_add(0x20);
+            if rel >= 0x40 {
+                continue;
+            }
+            // = seg000:4232..423f latch the signed relative angle × 0x20.
+            let signed = rel.wrapping_sub(0x20) as i8 as i16;
+            self.data_01968 = signed << 5;
+            // = seg000:4242..424b the SAL-tier silhouette sprite (table_196d).
+            self.data_0196a = TABLE_196D[crate::room_scene::calc_sal_index(loc.appearance)] as u16;
+            // = seg000:4250..4256 arm the re-arm countdown; stop scanning.
+            self.data_0196c = 6;
+            return;
+        }
+        // = seg000:4208 clc; ret — no fly-over this pass.
+    }
+
+    // = seg000:b56c loc_0b56c (with loc_0b53b, seg000:b53b) — build a
+    // rows × cols block of the planet map centred on (x = longitude, lat =
+    // latitude row) into a strip of (map byte, map offset) cells, row-major
+    // (the DOS data_09e68 scratch of 3-byte [byte, offset] entries). The
+    // latitude is centred at lat - rows/2, clamped to the south pole, and each
+    // row is a horizontal run of `cols` cells centred on the longitude's cell,
+    // wrapping within the row.
+    fn map_build_cell_strip(&self, x: u16, lat: i16, rows: usize, cols: usize) -> Vec<(u8, usize)> {
+        let mut strip = Vec::with_capacity(rows * cols);
+        // = seg000:b56d..b578 bx = lat - rows/2, clamped to -98 (0xff9e).
+        let mut latitude = (lat - (rows / 2) as i16).max(-98);
+        for _ in 0..rows {
+            // = seg000:b58b map_func — the row's map offset, cell index and
+            //   byte length. DOS reads one past the tablat at the poles; the
+            //   port clamps the latitude into range so the lookup stays valid.
+            let (offset0, cell0, bp) = self.map_position_to_offset(x, latitude.clamp(-98, 98));
+            let bp = bp as i32;
+            // = seg000:b58e..b592 di = res_map_ofs + row start; row_base is the
+            //   row's map offset without the longitude cell.
+            let row_base = offset0 as i32 - cell0 as i32;
+            // = seg000:b543..b54f cell -= cols/2, wrapping once within the row.
+            let mut cell = cell0 as i32 - (cols / 2) as i32;
+            if cell < 0 {
+                cell += bp;
+            }
+            // = seg000:b551..b566 the horizontal run of `cols` cells.
+            for _ in 0..cols {
+                let di = (row_base + cell) as usize;
+                strip.push((self.map[di], di));
+                cell += 1;
+                if cell >= bp {
+                    cell -= bp;
+                }
+            }
+            // = seg000:b583 inc bx — the next latitude row.
+            latitude += 1;
+        }
+        strip
+    }
 
     // = seg000:4ec6 travel_select_flight_video — pick hnm_active_video_id from
     // the vehicle and the terrain byte; the HNM loop point switches clips when
@@ -2627,11 +2985,11 @@ mod tests {
 
         // arm_pending_travel's desert branch (seg000:494c): a compass-ray
         // state converts the click to a map cell and arms a fixed heading
-        // (mode 1, destination = the last location, data_011cb = 0xff so the
+        // (mode 1, destination = the last location, travel_no_location_dest = 0xff so the
         // map verbs switch to the CHANGE DESTINATION pair).
         game.arm_pending_travel(0xfff0, ax, ay - 20);
         assert_eq!(game.travel_heading_mode, 1);
-        assert_eq!(game.data_011cb, 0xff);
+        assert_eq!(game.travel_no_location_dest, 0xff);
         assert_eq!(
             game.travel_destination_ptr,
             location_ptr(game.last_location_index as u16)
@@ -2640,7 +2998,7 @@ mod tests {
         // Reset the armed state so the marker click below starts clean.
         game.travel_destination_ptr = 0;
         game.travel_heading_mode = 0;
-        game.data_011cb = 0;
+        game.travel_no_location_dest = 0;
 
         // Outside the map window the state drops to 0, the label strip is
         // space-padded clean and the caption typewriter re-arms.
@@ -3106,7 +3464,7 @@ mod tests {
             "a hidden nearest"
         );
         assert_eq!(game.travel_heading_mode, 0);
-        assert_eq!(game.data_011cb, 0);
+        assert_eq!(game.travel_no_location_dest, 0);
         assert_eq!(
             game.travel_step_accum, 0x80,
             "the step accumulator did not re-seed"
@@ -3141,7 +3499,7 @@ mod tests {
         game.dispatch_command_handler(0x50a5, 0);
         assert_eq!(game.travel_destination_ptr, location_ptr(start as u16));
         assert_eq!(game.travel_heading_mode, 0);
-        assert_eq!(game.data_011cb, 0);
+        assert_eq!(game.travel_no_location_dest, 0);
 
         // SKIP TO DESTINATION fast-forwards the travel and lands it: the pump
         // disarms, the mode flags clear and the start location's room is

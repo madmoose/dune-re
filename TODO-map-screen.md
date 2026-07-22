@@ -164,9 +164,25 @@ not yet started.
   arrival (seg000:4fb0: pad landing, disarm, `desert_check_arrival` =
   loc_04002 → `arrive_at_location` → scene reload). `map_screen_cleanup`'s
   `travel_minimap_state > 0` gate re-enters the flight view
-  (`travel_enter_minimap_view`, 49d4). Remaining stub:
-  `travel_flyover_detect` (seg000:41e1, the cockpit fly-over silhouette
-  latch data_01968/196a/196c — its overlay consumer is unported).
+  (`travel_enter_minimap_view`, 49d4). `travel_flyover_detect` (seg000:41e1)
+  is ported but its data_01968/196a/196c silhouette-array latch is vestigial
+  in this build (no draw consumer exists). The real fly-over cabin — ORNYCAB
+  over the game area + the companion talking head when the flight passes a
+  revealed sietch/landmark — is ported: `travel_scan_nearby_location`
+  (40f9), `travel_settle_companion_dispatch` (35e9, wired into `travel_pump`),
+  `travel_pick_speaking_companion` (366f), `travel_show_companion_cabin`
+  (368b), the companion's spoken line `travel_play_flyover_line`
+  (loc_096d8: the fixed dialogue block 0x10 topic 4, presented over the
+  companion head via `present_dialogue_line_with_auto_mask`), and the
+  follow-up command menu `install_pending_room_action_menu` (loc_03551: the
+  GO TOWARDS THIS PLACE menu for action 3 and the CHANGE DESTINATION / IGNORE
+  WARNING menu + nav-panel rebuild for action 4, at seg001:1f92 / seg001:1f9e,
+  staged as `NpcActionsMenu` via the `stage_command_submenu` = loc_0d323
+  helper). loc_03551 is shared: `room_person_present_auto_dialogue` (3520)
+  falls into it for the room-leave speaker branch, so `npc_auto_dialogue` now
+  calls it too. Remaining tail: the divert-verb payload pre-armed in loc_040f9
+  (`arm_pending_travel` + the room command-panel rebuild), so GO TOWARDS THIS
+  PLACE actually diverts the flight.
 - [x] **Arrival landing / approach video** — DONE 2026-07-17
   (`travel_arrival_landing_sequence`, seg000:488a, gated on `data_04732`
   bit 0 at the scene reload's loc_02dfb; verify with

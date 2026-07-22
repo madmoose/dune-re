@@ -887,6 +887,41 @@ impl GameState {
         self.present_dialogue_line_with_auto_mask(ofs as usize)
     }
 
+    // = seg000:96d8 loc_096d8 — play the fly-over narration line for a passed
+    // location: the `companion` (ax) becomes the lip-sync speaker while a FIXED
+    // dialogue block supplies the line (loc_09702's `or ax,4` on ax = 0x10 picks
+    // topic 0x84 = 0x10*8 + 4, so the block is independent of who speaks). The
+    // presented sentence's text substitutes the location-type and bearing
+    // captions travel_scan_nearby_location staged. The shape mirrors
+    // present_room_person_line, but with the fixed block instead of the person's
+    // own topic-4 record.
+    //
+    // Returns whether a line was presented (DOS's carry-clear exit); the fly-over
+    // dispatch tests it (seg000:3628 jb) to gate the follow-up menu install.
+    pub(crate) fn travel_play_flyover_line(&mut self, companion: u8) -> bool {
+        // = seg000:96d8 mov [current_lip_sync_resource_id], ax — the companion
+        //   (< 0x10) animates as the talking head over the ORNYCAB cabin.
+        self.current_lip_sync_resource_id = companion as u16;
+        // = seg000:96db inc byte [data_047dc] — the come-with-me voc-bank flag
+        //   play_dialogue_voc reads (unmodelled, reads 0); cleared again at
+        //   loc_096eb below.
+        // = seg000:96df ax = 0x10; call loc_09702 -> loc_0970b: si =
+        //   DIALOGUE[(0x10 << 3) | 4] — the fixed fly-over dialogue block, topic 4.
+        let ofs = container::entry_offset(&self.dialogue, (0x10u16 << 3) + 4);
+        if ofs == 0xffff {
+            return false;
+        }
+        // = seg000:970b call loc_09f40 (prepare_dialogue_presentation).
+        self.prepare_dialogue_presentation();
+        // = seg000:9716 jmp present_dialogue_line_with_auto_mask (seg000:9f8b).
+        let presented = self.present_dialogue_line_with_auto_mask(ofs as usize);
+        // = seg000:96e5 ui_hud_elements[18].flags = 0 — drop the small HUD head
+        //   ornament element while the fly-over head is up; the port handles
+        //   those HUD elements structurally (no flags field to write).
+        // = seg000:96eb data_047dc = 0.
+        presented
+    }
+
     // = seg000:9f9e present_first_matching_dialogue_line — walk the dialogue
     // record's sentence entries from absolute offset `start` and present the
     // first entry whose condition holds: show the talking head (loc_09fd8),

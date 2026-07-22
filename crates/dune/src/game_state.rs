@@ -107,6 +107,11 @@ pub struct GameState {
     pub(crate) debug_overlay: bool,
     debug_overlay_key_down: bool,
 
+    // Port-only testing hotkey: the `=`/`+` key bumps game_phase by one and
+    // runs the usual phase triggers. `debug_advance_phase_key_down` edge-detects
+    // the press so a held key advances only once.
+    debug_advance_phase_key_down: bool,
+
     // ---- Host/runtime state and buffers (not seg001 data-segment globals) ----
     pub dat_file: DatFile,
 
@@ -408,6 +413,12 @@ pub struct GameState {
     // = seg001:00ea data_000ea (signed).
     pub(crate) data_000ea: i8,
 
+    // = seg001:00e1 data_000e1 — the fly-over side flag set by
+    // travel_scan_nearby_location (seg000:4156): 0 when the passed location is
+    // to the left of the heading, 1 when to the right. Feeds the companion's
+    // fly-over dialogue line (the spoken-line tail is not ported yet).
+    pub(crate) data_000e1: u8,
+
     // = seg001:00f4 desert_walk_counter — counts compass moves taken in the
     // desert.
     pub(crate) desert_walk_counter: u8,
@@ -528,16 +539,37 @@ pub struct GameState {
     // transition); travel_pump (seg000:4f0c) bails when set so it does not race the swap.
     pub(crate) data_011ca: u8,
 
-    // = seg001:11cb data_011cb — gates the second map-mode command verb
-    // (build_room_command_records, the game_screen_mode_flags & 3 branch).
-    // Static-inits to 0; arm_pending_travel clears it for a location
-    // destination and sets it to 0xff for a fixed-heading (desert) one.
-    pub(crate) data_011cb: u8,
+    // = seg001:11cb travel_no_location_dest — 0xff when the travel has no
+    // location destination: a directional flight on a fixed compass heading
+    // across open desert (fly east/west/etc), where travel_destination_ptr holds
+    // only the starting point (last_location_ptr). 0 for a homing flight to a
+    // real location. Static-inits to 0; arm_pending_travel sets it (dec,
+    // seg000:494c) when the map click misses any location, and loc_050be clears
+    // it. Gates the map travel verb (BACK TO STARTING POINT vs SKIP TO
+    // DESTINATION, build_room_command_records), the polar heading guard
+    // (travel_update_heading) and the route hostile-zone check.
+    pub(crate) travel_no_location_dest: u8,
 
     // = seg001:11cc travel_step_accum — the travel step's 8.8 sub-cell
     // accumulator, re-seeded to 0x80 (half a cell) by adjust_travel_heading;
     // consumed by the step math (loc_05206, travel-pump territory).
     pub(crate) travel_step_accum: u16,
+
+    // = seg001:1968 data_01968 — the cockpit fly-over silhouette's signed
+    // relative bearing (heading - location angle) * 0x20, latched by
+    // travel_flyover_detect (seg000:41e1) and by the outdoor-scene detector
+    // (loc_04e12). Consumed by the fly-over overlay draw, which is not ported
+    // yet, so the latch is currently write-only.
+    pub(crate) data_01968: i16,
+
+    // = seg001:196a data_0196a — the fly-over silhouette sprite id (table_196d
+    // indexed by the location's SAL tier), latched alongside data_01968.
+    pub(crate) data_0196a: u16,
+
+    // = seg001:196c data_0196c — travel_flyover_detect's re-arm countdown:
+    // after a fly-over is latched the detector idles for 6 probe passes
+    // (decrementing this) before scanning for the next one.
+    pub(crate) data_0196c: u8,
 
     // = seg001:1176 location_visibility_distance — the sietch visibility
     // radius in map cells (static init 1): sietch map markers farther than
@@ -1309,6 +1341,7 @@ impl GameState {
             headless: false,
             debug_overlay: false,
             debug_overlay_key_down: false,
+            debug_advance_phase_key_down: false,
             // ---- Host/runtime state and buffers ----
             dat_file,
 
@@ -1398,6 +1431,7 @@ impl GameState {
             data_000c8: 0,
             ui_hud_head_index: 0,
             data_000ea: 0,
+            data_000e1: 0,
             desert_walk_counter: 0,
             room_view_toggle: 0xff,
             data_000fc: 1,
@@ -1424,8 +1458,11 @@ impl GameState {
             travel_heading_mode: 0,
             game_screen_mode_flags: 0,
             data_011ca: 0,
-            data_011cb: 0,
+            travel_no_location_dest: 0,
             travel_step_accum: 0,
+            data_01968: 0,
+            data_0196a: 0,
+            data_0196c: 0,
             location_visibility_distance: 1,
             zoomed_globe_longitude: 0,
             zoomed_globe_latitude: 0,
@@ -1720,6 +1757,10 @@ impl GameState {
             // Read the raw key state so this does not consume the buffered
             // scancode the game's own key handling uses.
             self.poll_debug_overlay_toggle();
+
+            // Port-only testing hotkey: `=`/`+` steps game_phase forward by one,
+            // firing the usual phase triggers. Also reads the raw key state.
+            self.poll_debug_advance_game_phase();
 
             // = seg000:d820..d82e — the Ctrl+V (scancode 0x2f + kb_keys[0x1d]
             // held; chani labels [0x1d] "_w" but 0x1d is Left Ctrl, not W)
@@ -2671,6 +2712,21 @@ impl GameState {
             self.send_frame_to_display();
         }
         self.debug_overlay_key_down = down;
+    }
+
+    // Port-only testing hotkey: on a `=`/`+` (scancode 0x0d) key-press edge,
+    // raise game_phase by one through set_game_phase_and_trigger_callbacks so it
+    // fires the usual per-phase triggers and callback, letting a tester step the
+    // phase progression forward. Reads the raw kb_keys state (not the one-shot
+    // scancode buffer) so it never steals a keypress from the game.
+    pub(crate) fn poll_debug_advance_game_phase(&mut self) {
+        const SCANCODE_EQUAL: usize = 0x0d;
+        let down = self.input.lock().unwrap().kb_keys[SCANCODE_EQUAL] != 0;
+        if down && !self.debug_advance_phase_key_down {
+            let next = self.game_phase.saturating_add(1);
+            self.set_game_phase_and_trigger_callbacks(next);
+        }
+        self.debug_advance_phase_key_down = down;
     }
 
     // Port-only: draw the debug overlay — a small panel of live game state in
