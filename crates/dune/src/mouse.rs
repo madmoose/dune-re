@@ -440,12 +440,18 @@ impl GameState {
         if self.front_buffer_is_fb1() {
             return;
         }
-        // = seg000:dbb3 al = cursor_hide_counter; dec, committing the decrement
-        // only when the result is negative (so a visible 0 goes to -1 but a
-        // positive over-shown count is left alone).
+        // = seg000:dbb3 al = cursor_hide_counter (the pre-decrement value used by
+        //   the restore test below).
         let old = self.cursor_hide_counter;
-        if old <= 0 {
-            self.cursor_hide_counter = old - 1;
+        // = seg000:dbb6 dec [cursor_hide_counter]; dbba js keep / dbbc inc undo —
+        //   decrement in place, but keep the result only when it is negative;
+        //   otherwise inc it straight back, so a positive over-shown count is left
+        //   unchanged. The `dec` wraps like the 8086 byte op, so at the -128 floor
+        //   `dec` yields +127 (not negative) and the undo restores -128: the
+        //   counter saturates there instead of overflowing.
+        let dec = old.wrapping_sub(1);
+        if dec < 0 {
+            self.cursor_hide_counter = dec;
         }
         if self.cursor_mode == CursorMode::Baked {
             // = seg000:dbc0 or al,al; js — restore only when it was visible.
