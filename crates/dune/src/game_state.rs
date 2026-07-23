@@ -879,6 +879,14 @@ pub struct GameState {
     // travel arrival (seg000:4fcb).
     pub(crate) travel_active: u8,
 
+    // Port-only: the fb1 pixels under the flight minimap as they were BEFORE
+    // hnm_present_flight_frame stamped the minimap over the decoded frame.
+    // travel_show_companion_cabin puts them back so the ORNYCAB cockpit's
+    // transparent windshield shows the plain desert frame — the original
+    // shows no minimap while the fly-over cabin is up; it returns when
+    // travel_resume_flight_view reloads the flight view.
+    pub(crate) travel_minimap_saved_under: Vec<u8>,
+
     // = seg001:4728 travel_minimap_state — the flight minimap state: 0 normal,
     // 1 = recenter + redraw pending (set by the pump when the position leaves
     // the minimap bounds, seg000:4f8e, and by CHANGE DESTINATION at
@@ -1618,6 +1626,7 @@ impl GameState {
             available_equipment: Equipment::default(),
             data_04726: 0,
             travel_active: 0,
+            travel_minimap_saved_under: Vec::new(),
             travel_minimap_state: 0,
             travel_trail_ring: [(0x800, 0x800); TRAVEL_TRAIL_LEN],
             travel_trail_cursor: 0,

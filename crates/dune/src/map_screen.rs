@@ -1930,12 +1930,17 @@ impl GameState {
             self.arm_pending_travel(location_ptr(idx as u16), 0, 0);
             // = seg000:416e call call_restore_cursor.
             self.call_restore_cursor();
-            // = seg000:4171..4177 DOS also rebuilds the underlying room command
-            //   panel here (build_room_command_records /
-            //   rebuild_and_draw_room_nav_panel / redraw_active_command_menu).
-            //   install_pending_room_action_menu stages and redraws the GO
-            //   TOWARDS submenu over it, so the port defers that beneath-panel
-            //   rebuild. TODO: port the flight command-panel rebuild.
+            // = seg000:4171 call build_room_command_records — rebuild the
+            //   flight strip (command_menu_buf) beneath the fly-over menu:
+            //   arm_pending_travel above just re-aimed the flight at the
+            //   spotted location and cleared travel_no_location_dest, so the
+            //   strip now offers SKIP TO DESTINATION instead of BACK TO
+            //   STARTING POINT. GO TOWARDS THIS PLACE's exit pop reveals it.
+            self.build_room_command_records();
+            // = seg000:4174 call rebuild_and_draw_room_nav_panel.
+            self.rebuild_and_draw_room_nav_panel();
+            // = seg000:4177 call redraw_active_command_menu.
+            self.redraw_active_command_menu();
         }
     }
 
@@ -1975,6 +1980,18 @@ impl GameState {
                 // = seg000:36a3/36a8 cockpit mode; a room render is pending.
                 self.map_ornithopter_mode = 1;
                 self.room_render_flags = 1;
+                // Port-only (verified against the original): restore the fb1
+                // pixels hnm_present_flight_frame saved from under the minimap
+                // stamp, so the cockpit's transparent windshield shows the
+                // plain desert frame — the original shows no minimap while the
+                // cabin is up; travel_resume_flight_view's flight-view reload
+                // brings it back.
+                if !self.travel_minimap_saved_under.is_empty() {
+                    let yoff = self.y_offset as i16;
+                    let r = TRAVEL_MINIMAP_RESTORE_RECT;
+                    let dst = rect(r.x0, r.y0 + yoff, r.x1, r.y1 + yoff);
+                    gfx::vga_put_rect(&mut self.framebuffer, &self.travel_minimap_saved_under, dst);
+                }
                 // = seg000:36ae open ORNYCAB and draw its sprite 0 over the
                 //   game area.
                 self.open_resource_and_draw_sprite0(sprite_bank::ORNYCAB);
@@ -2237,6 +2254,10 @@ impl GameState {
                 let yoff = self.y_offset as i16;
                 let r = TRAVEL_MINIMAP_RESTORE_RECT;
                 let src_rect = rect(r.x0, r.y0 + yoff, r.x1, r.y1 + yoff);
+                // Port-only: keep the pre-stamp frame pixels so the fly-over
+                // cabin can show a minimap-free windshield (see
+                // travel_show_companion_cabin).
+                self.travel_minimap_saved_under = gfx::vga_grab_rect(&self.framebuffer, src_rect);
                 gfx::vga_copy_rect(&mut self.framebuffer, &self.framebuffer_back, src_rect);
             }
         }
@@ -2676,6 +2697,105 @@ mod tests {
     use std::sync::mpsc;
 
     use crate::{GameState, dat_file::DatFile, room_game_screen::ScreenElement};
+
+    // A companion spotting a discoverable landmark during an ornithopter
+    // flight (pending_room_action 3): the ORNYCAB cockpit's transparent
+    // windshield must show the plain desert frame — not the minimap stamp
+    // hnm_present_flight_frame left in fb1 (the original shows no minimap
+    // while the cabin is up; it returns when the flight resumes) — and the
+    // scan tail's seg000:4171 rebuild must flip the flight strip to SKIP TO
+    // DESTINATION now that arm_pending_travel re-aimed the flight at the
+    // spotted location. Asset-gated:
+    //   cargo test -p dune --bin dune -- --ignored flyover_spot
+    #[test]
+    #[ignore = "needs assets/DUNE.DAT"]
+    fn flyover_spot_hides_minimap_and_offers_skip_to_destination() {
+        let dat_path = concat!(env!("CARGO_MANIFEST_DIR"), "/../../assets/DUNE.DAT");
+        let Ok(dat_file) = DatFile::open(dat_path) else {
+            eprintln!("skipping: {dat_path} not found");
+            return;
+        };
+        let (tx, rx) = mpsc::sync_channel(64);
+        let mut game = GameState::new(dat_file, tx);
+        game.cmd_args_memory |= 0x10;
+        game.start(true);
+        // Gurney travels with us.
+        game.room_persons[4].flags |= 0x40;
+        game.persons_travelling_with |= 1 << 4;
+        game.npc_assign_companion_slot(4);
+        while rx.try_recv().is_ok() {}
+
+        // Orni map + a directional desert takeoff.
+        game.menu_callback_choice_map_main_take_an_ornithopter_notransition();
+        while rx.try_recv().is_ok() {}
+        game.map_confirm_travel_and_close(0xfff0, 200, 70);
+        assert_eq!(game.travel_no_location_dest, 0xff, "directional flight");
+
+        // Teleport the flight three cells west of a discoverable landmark and
+        // aim at it, so the scan arms room action 3 (GO TOWARDS THIS PLACE).
+        game.game_phase = 0x40;
+        let idx = (0..game.locations.len())
+            .find(|&i| {
+                let l = &game.locations[i];
+                l.status & 0x80 != 0
+                    && game.game_phase >= l.discoverable_at_phase as u8
+                    && l.map_x > 4
+            })
+            .expect("a discoverable location");
+        let loc = game.locations[idx];
+        game.location_and_room = (loc.map_x as u16).wrapping_sub(3);
+        game.location_appearance = (game.location_appearance & 0xff00) | (loc.map_y as u8 as u16);
+        game.travel_heading = game.compass_angle_to_location(idx);
+
+        // Pump (forcing the step timer) until the cabin pauses the flight.
+        let mut cabin = false;
+        for _ in 0..60 {
+            game.travel_step_tick_stamp = (game.game_ticks() as u16).wrapping_sub(0x300);
+            game.travel_pump();
+            game.process_frame_tasks();
+            while rx.try_recv().is_ok() {}
+            if game.data_011ca != 0 {
+                cabin = true;
+                break;
+            }
+            let start = game.game_ticks();
+            game.sleep_ticks(start, 1);
+        }
+        assert!(cabin, "the fly-over cabin must rise");
+        assert_eq!(game.pending_room_action, 3, "the spot arms room action 3");
+        assert_eq!(
+            game.get_active_screen_element(),
+            ScreenElement::GoTowardsThisPlace
+        );
+
+        // = seg000:4944/50be — the divert is a homing travel at the spotted
+        //   location, and the rebuilt strip beneath offers SKIP TO DESTINATION.
+        assert_eq!(game.travel_no_location_dest, 0);
+        assert_eq!(
+            game.command_menu_buf.records.first().map(|r| r.handler),
+            Some(0x4ffb),
+            "SKIP TO DESTINATION beneath the fly-over menu"
+        );
+
+        // The windshield region of fb1 holds the pre-stamp desert frame, not
+        // the minimap: it must differ from the back buffer's minimap in the
+        // restore rect.
+        let yoff = game.y_offset as u16;
+        let mut same = 0;
+        let mut total = 0;
+        for y in 4..60u16 {
+            for x in 204..316u16 {
+                total += 1;
+                if game.framebuffer.get(x, y + yoff) == game.framebuffer_back.get(x, y + yoff) {
+                    same += 1;
+                }
+            }
+        }
+        assert!(
+            same < total / 2,
+            "the minimap must not sit in fb1 under the cabin ({same}/{total} pixels match)"
+        );
+    }
 
     // TAKE AN ORNITHOPTER (seg000:42e9) opens the map screen: the ORNYPAN
     // cockpit frames a one-cell-per-pixel map window centred on the player's
