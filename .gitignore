@@ -2,3 +2,6 @@
 /target
 DUNE.DAT
 *.png
+/docs
+*.avi
+*.mp4
