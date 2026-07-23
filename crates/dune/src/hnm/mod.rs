@@ -198,6 +198,9 @@ impl GameState {
             return;
         }
 
+        // = the seg000 close path zeroing video_decode_buf_seg — drop any
+        // prefetched pipeline frame with the stream.
+        self.hnm_video_frame_ready = false;
         self.hnm_reset_frame_counters();
         self.hnm_bytes = None;
     }

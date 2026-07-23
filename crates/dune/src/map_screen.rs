@@ -1980,20 +1980,11 @@ impl GameState {
                 // = seg000:36a3/36a8 cockpit mode; a room render is pending.
                 self.map_ornithopter_mode = 1;
                 self.room_render_flags = 1;
-                // Port-only (verified against the original): restore the fb1
-                // pixels hnm_present_flight_frame saved from under the minimap
-                // stamp, so the cockpit's transparent windshield shows the
-                // plain desert frame — the original shows no minimap while the
-                // cabin is up; travel_resume_flight_view's flight-view reload
-                // brings it back.
-                if !self.travel_minimap_saved_under.is_empty() {
-                    let yoff = self.y_offset as i16;
-                    let r = TRAVEL_MINIMAP_RESTORE_RECT;
-                    let dst = rect(r.x0, r.y0 + yoff, r.x1, r.y1 + yoff);
-                    gfx::vga_put_rect(&mut self.framebuffer, &self.travel_minimap_saved_under, dst);
-                }
                 // = seg000:36ae open ORNYCAB and draw its sprite 0 over the
-                //   game area.
+                //   game area. The cockpit's transparent windshield shows fb1
+                //   beneath — the clean upcoming flight frame, minimap-free,
+                //   because the streaming pipeline decoded it over the stamp
+                //   (see hnm_present_flight_frame's prefetch).
                 self.open_resource_and_draw_sprite0(sprite_bank::ORNYCAB);
                 // = seg000:36b3 fold the ORNYCAB palette in.
                 self.update_screen_palette();
@@ -2254,10 +2245,6 @@ impl GameState {
                 let yoff = self.y_offset as i16;
                 let r = TRAVEL_MINIMAP_RESTORE_RECT;
                 let src_rect = rect(r.x0, r.y0 + yoff, r.x1, r.y1 + yoff);
-                // Port-only: keep the pre-stamp frame pixels so the fly-over
-                // cabin can show a minimap-free windshield (see
-                // travel_show_companion_cabin).
-                self.travel_minimap_saved_under = gfx::vga_grab_rect(&self.framebuffer, src_rect);
                 gfx::vga_copy_rect(&mut self.framebuffer, &self.framebuffer_back, src_rect);
             }
         }
@@ -2265,6 +2252,18 @@ impl GameState {
         //   game area fb1 -> screen (skipped while composing offscreen, like
         //   every present).
         self.present_game_area();
+        // = seg000:caa0 loc_0caa0 — the streaming pipeline: with the frame
+        //   consumed (video_decode_buf_seg cleared), the reader immediately
+        //   decodes the NEXT video chunk into fb1
+        //   (hnm_decode_typed_chunk_video_to_bp, bp = framebuffer_1). That
+        //   overwrites the minimap stamp above, so fb1 holds a clean frame
+        //   between presents — which is why the fly-over cabin's transparent
+        //   windshield shows plain desert, and the minimap returns with the
+        //   next present when the flight resumes. hnm_do_frame consumes this
+        //   prefetched frame without decoding when its tick arrives.
+        if self.hnm_is_open() && !self.hnm_finished && self.hnm_step_frame() {
+            self.hnm_video_frame_ready = true;
+        }
     }
 
     // = seg000:4e8e travel_probe_terrain_ahead — probe the terrain ahead of
@@ -2697,6 +2696,37 @@ mod tests {
     use std::sync::mpsc;
 
     use crate::{GameState, dat_file::DatFile, room_game_screen::ScreenElement};
+
+    #[test]
+    #[ignore = "needs assets/DUNE.DAT"]
+    fn tmp_dump_ornycab_header() {
+        let dat_path = concat!(env!("CARGO_MANIFEST_DIR"), "/../../assets/DUNE.DAT");
+        eprintln!("opening {dat_path}");
+        let Ok(mut dat_file) = DatFile::open(dat_path) else {
+            eprintln!("open failed");
+            return;
+        };
+        for name in ["ORNYCAB.HSQ", "ORNYPAN.HSQ", "ICONES.HSQ"] {
+            let data = dat_file.read(name).unwrap();
+            let toc_pos = u16::from_le_bytes([data[0], data[1]]) as usize;
+            let sprite0 = u16::from_le_bytes([data[toc_pos], data[toc_pos + 1]]) as usize;
+            let count = sprite0 / 2;
+            for id in 0..3usize.min(count) {
+                let entry = u16::from_le_bytes([data[toc_pos + id * 2], data[toc_pos + id * 2 + 1]])
+                    as usize;
+                let ofs = toc_pos + entry;
+                let w0 = u16::from_le_bytes([data[ofs], data[ofs + 1]]);
+                let w1 = u16::from_le_bytes([data[ofs + 2], data[ofs + 3]]);
+                eprintln!(
+                    "{name} sprite {id}: w0={w0:04x} w1={w1:04x} flags={:02x} w={} h={} pal_offset={:02x}",
+                    (w0 & 0xfe00) >> 8,
+                    w0 & 0x1ff,
+                    w1 & 0xff,
+                    (w1 & 0xff00) >> 8
+                );
+            }
+        }
+    }
 
     // A companion spotting a discoverable landmark during an ornithopter
     // flight (pending_room_action 3): the ORNYCAB cockpit's transparent
@@ -3468,10 +3498,13 @@ mod tests {
         assert_eq!(game.hnm_video_id, 2, "the flight did not start on MNT1");
         assert_eq!(game.map_view_rect.x0, 0xcc, "the minimap rect is not live");
         // The minimap landed in the back buffer and was stamped over the
-        // flight frame in fb1: the minimap window region holds map pixels
-        // (palette bank 1, incl. the 0x17..0x1c globe-edge shades).
+        // flight frame at present time: the SCREEN's minimap window holds map
+        // pixels (palette bank 1, incl. the 0x17..0x1c globe-edge shades).
+        // fb1 itself holds the clean NEXT frame — the streaming pipeline
+        // (hnm_present_flight_frame's loc_0caa0 prefetch) decodes it over the
+        // stamp right after each present, so the stamp never lingers in fb1.
         let minimap_pixels = |g: &GameState| -> usize {
-            let fb = g.framebuffer.pixels();
+            let fb = g.screen.pixels();
             (4..60)
                 .map(|y| {
                     (0xcc..0x13c)
@@ -3480,10 +3513,16 @@ mod tests {
                 })
                 .sum()
         };
+        // One pump pass so a flight present lands on the visible screen (the
+        // departure itself composed offscreen behind the reveal transition).
+        // The step timer is re-armed so this pass advances no travel step.
+        game.hnm_last_frame_tick = 0;
+        game.travel_step_tick_stamp = game.game_ticks() as u16;
+        game.travel_pump();
         let lit = minimap_pixels(&game);
         assert!(
             lit > 3000,
-            "the minimap did not stamp over the frame: {lit}"
+            "the minimap did not stamp over the presented frame: {lit}"
         );
 
         // Fly: force the 0x300-tick step cadence each pump pass until the

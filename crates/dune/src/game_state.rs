@@ -879,13 +879,17 @@ pub struct GameState {
     // travel arrival (seg000:4fcb).
     pub(crate) travel_active: u8,
 
-    // Port-only: the fb1 pixels under the flight minimap as they were BEFORE
-    // hnm_present_flight_frame stamped the minimap over the decoded frame.
-    // travel_show_companion_cabin puts them back so the ORNYCAB cockpit's
-    // transparent windshield shows the plain desert frame — the original
-    // shows no minimap while the fly-over cabin is up; it returns when
-    // travel_resume_flight_view reloads the flight view.
-    pub(crate) travel_minimap_saved_under: Vec<u8>,
+    // = seg001:dc16 video_decode_buf_seg (as an occupancy flag) — the HNM
+    // streaming pipeline: DOS's reader decodes the NEXT video frame into the
+    // target buffer as soon as the present consumes the current one
+    // (loc_0caa0 -> hnm_decode_typed_chunk_video_to_bp, bp = fb1 for the
+    // flight clips), and hnm_decode_video_frame consumes it with
+    // `xchg bp,[video_decode_buf_seg]` (seg000:cc9f). True = a prefetched
+    // frame is already decoded and waiting for its tick. For the flight clips
+    // this is what keeps fb1 clean between presents: the minimap stamp only
+    // lives in fb1 for the instant of hnm_present_flight_frame, so the
+    // fly-over cabin's transparent windshield shows plain desert.
+    pub(crate) hnm_video_frame_ready: bool,
 
     // = seg001:4728 travel_minimap_state — the flight minimap state: 0 normal,
     // 1 = recenter + redraw pending (set by the pump when the position leaves
@@ -1626,7 +1630,7 @@ impl GameState {
             available_equipment: Equipment::default(),
             data_04726: 0,
             travel_active: 0,
-            travel_minimap_saved_under: Vec::new(),
+            hnm_video_frame_ready: false,
             travel_minimap_state: 0,
             travel_trail_ring: [(0x800, 0x800); TRAVEL_TRAIL_LEN],
             travel_trail_cursor: 0,
@@ -2427,6 +2431,8 @@ impl GameState {
     pub fn hnm_load_first_frame_by_id(&mut self, video_id: u16, y_offset: i16) {
         self.hnm_last_frame_tick = self.game_ticks();
         self.hnm_y_offset = y_offset;
+        // A fresh clip starts with an empty pipeline (video_decode_buf_seg 0).
+        self.hnm_video_frame_ready = false;
         // Reset audio-driven timing state. decode_sd_block below sets
         // hnm_audio_active when this clip carries SD chunks; clips without audio
         // leave it false and fall back to tick timing.
@@ -2570,10 +2576,13 @@ impl GameState {
             self.hnm_last_frame_tick = current_tick;
         }
 
+        // = seg000:cc9f xchg bp,[video_decode_buf_seg] — a frame the streaming
+        // pipeline already decoded (hnm_present_flight_frame's loc_0caa0
+        // prefetch) is consumed as-is; otherwise decode one now.
         // = ca80..ca8c: decode the next frame (into framebuffer_active = active_fb)
         // and advance. hnm_step_frame returns false if it stepped onto the
         // end-of-stream marker without decoding.
-        if !self.hnm_step_frame() {
+        if !std::mem::take(&mut self.hnm_video_frame_ready) && !self.hnm_step_frame() {
             return false;
         }
 
