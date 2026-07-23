@@ -1077,8 +1077,8 @@ impl GameState {
 
         // = seg000:088c..0895 vga_fill_rect(_word_20920_game_area_rect, 0deh,
         // es = [_word_2D08A_framebuffer_active_seg]): the game area is
-        // (0,0)..(0x140,0x98).
-        gfx::vga_fill_rect(self, self.active_fb(), 0, 0, 0x140, 0x98, 0xde);
+        // (0,0)..(320,152).
+        gfx::vga_fill_rect(self, self.active_fb(), 0, 0, 320, 152, 0xde);
 
         // = seg001:154e icon list: sprite 4 mirrored at x=0, sprite 4 at x=236.
         const PANELS: [(u16, i16, i16); 2] = [(0x4004, 0, 0), (0x0004, 236, 0)];

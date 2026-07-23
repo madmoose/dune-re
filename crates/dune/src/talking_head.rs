@@ -16,7 +16,7 @@
 //! Stage 2 adds the random idle frame task (`loc_099be`). Stage 3 wires the
 //! `.voc` lip-sync stream.
 
-use crate::{GameState, Lipsync, Rect, SpriteSheet, gfx, sprite_blitter};
+use crate::{GameState, Lipsync, Rect, SpriteSheet, gfx, rect::rect, sprite_blitter};
 
 // = the resource-index → portrait list. DOS opens the head sheet with
 // open_spritesheet(al + 2); the resource table at seg001:3203 starts
@@ -56,8 +56,7 @@ const HEAD_PAUL: usize = 0x2d;
 // copies the byte into the x0 word of all three balloon descriptors
 // (seg000:91d4) when the talking head changes.
 const TALKING_HEAD_BALLOON_X: [u8; 17] = [
-    0x60, 0x5a, 0x74, 0x60, 0x64, 0x68, 0x7e, 0x68, 0x6a, 0x70, 0x7c, 0x60, 0x50, 0x50, 0x72, 0x74,
-    0x5a,
+    96, 90, 116, 96, 100, 104, 126, 104, 106, 112, 124, 96, 80, 80, 114, 116, 90,
 ];
 
 // = the DOS `mov al, talking_head_balloon_x_table[si]` (seg000:91ce) with
@@ -65,9 +64,9 @@ const TALKING_HEAD_BALLOON_X: [u8; 17] = [
 // 0x62, inside unrelated string data past the table.
 fn balloon_x_for_head(head: usize) -> i16 {
     if head == HEAD_PAUL {
-        0x62
+        98
     } else {
-        TALKING_HEAD_BALLOON_X.get(head).map_or(0x50, |&x| x as i16)
+        TALKING_HEAD_BALLOON_X.get(head).map_or(80, |&x| x as i16)
     }
 }
 
@@ -77,24 +76,25 @@ fn balloon_x_for_head(head: usize) -> i16 {
 // stamp clips to it (seg000:9df8..9e0f) and the idle diff clamps its redraw
 // box above it while the voice plays (seg000:9c90..9ca4). Each rect tightly
 // bounds the head's speech mouth sprites, in head-element-relative coords.
-const TALKING_HEAD_MOUTH_BOX: [(i16, i16, i16, i16); 17] = [
-    (0x42, 0x37, 0x63, 0x56), // LETO
-    (0x2f, 0x54, 0x69, 0x72), // JESS
-    (0x3f, 0x59, 0x8c, 0x88), // HAWA
-    (0x44, 0x0d, 0x65, 0x45), // IDAH
-    (0x28, 0x50, 0x68, 0x70), // GURN
-    (0x38, 0x47, 0x72, 0x76), // STIL
-    (0x26, 0x52, 0x6d, 0x98), // KYNE
-    (0x48, 0x4b, 0x72, 0x65), // CHAN
-    (0x30, 0x48, 0x65, 0x6a), // HARA
-    (0x44, 0x09, 0x71, 0x24), // BARO
-    (0x52, 0x5b, 0x7e, 0x86), // FEYD
-    (0x42, 0x3d, 0x78, 0x66), // EMPR
-    (0x38, 0x0d, 0x54, 0x2b), // HARK
-    (0x2c, 0x33, 0x56, 0x53), // SMUG
-    (0x44, 0x61, 0x77, 0x8f), // FRM1
-    (0x5b, 0x3b, 0x89, 0x60), // FRM2
-    (0x48, 0x36, 0x64, 0x59), // FRM3
+#[rustfmt::skip]
+const TALKING_HEAD_MOUTH_BOX: [Rect; 17] = [
+    rect(66, 55,  99 , 86), // LETO
+    rect(47, 84, 105, 114), // JESS
+    rect(63, 89, 140, 136), // HAWA
+    rect(68, 13, 101,  69), // IDAH
+    rect(40, 80, 104, 112), // GURN
+    rect(56, 71, 114, 118), // STIL
+    rect(38, 82, 109, 152), // KYNE
+    rect(72, 75, 114, 101), // CHAN
+    rect(48, 72, 101, 106), // HARA
+    rect(68,  9, 113,  36), // BARO
+    rect(82, 91, 126, 134), // FEYD
+    rect(66, 61, 120, 102), // EMPR
+    rect(56, 13,  84,  43), // HARK
+    rect(44, 51,  86,  83), // SMUG
+    rect(68, 97, 119, 143), // FRM1
+    rect(91, 59, 137,  96), // FRM2
+    rect(72, 54, 100,  89), // FRM3
 ];
 
 // = lip_sync_frame_task (seg000:a7c2) advance cadence. The per-frame time is
@@ -352,13 +352,13 @@ impl GameState {
             // = char_to_sprite_player (loc_0917a): the player's idle expression
             // (talking_head_idle_expr / data_047d0) tracks the in-game clock so
             // Paul visibly ages across the game. ah = min((game_time*4)>>8, 8) ==
-            // min(game_time>>6, 8), doubled, + (desert_walk_counter >= 0x10), + 1.
+            // min(game_time>>6, 8), doubled, + (desert_walk_counter >= 16), + 1.
             // Higher game_time selects the later (blue-eyed) idle animations; at
             // game start game_time is small so facing == 1 -> the youngest idle
             // animation 0.
             let mut anim = (self.game_time >> 6).min(8) as u8;
             anim <<= 1;
-            if self.desert_walk_counter >= 0x10 {
+            if self.desert_walk_counter >= 16 {
                 anim += 1;
             }
             anim += 1;
@@ -454,11 +454,11 @@ impl GameState {
             .expect("portrait sheet has no lip-sync resource");
         let lipsync = Lipsync::from_bytes(lipsync_data);
 
-        // = loc_009c7: shift the rect right by `dx`, clamping x1 ≤ 0x140.
+        // = loc_009c7: shift the rect right by `dx`, clamping x1 ≤ 320.
         let (mut x0, y0, mut x1, y1) = lipsync.rect;
         if x0 < dx {
             x0 += dx;
-            x1 = (x1 + dx).min(0x140);
+            x1 = (x1 + dx).min(320);
         }
 
         // = copy_active_framebuffer_to_framebuffer_2: save the freshly-drawn
@@ -974,17 +974,16 @@ impl GameState {
     // 0x2d — he never voices a line).
     fn mouth_clip_rect(&self) -> Rect {
         let head = self.talking_head.as_ref().unwrap();
-        let Some(&(mx0, my0, mx1, my1)) = TALKING_HEAD_MOUTH_BOX.get(head.talking_head_id as usize)
-        else {
+        let Some(r) = TALKING_HEAD_MOUTH_BOX.get(head.talking_head_id as usize) else {
             return self.head_clip_rect();
         };
         let yoff = self.y_offset as i16;
         let (x0, y0, _, _) = head.rect;
         Rect {
-            x0: mx0 + x0,
-            y0: my0 + y0 + yoff,
-            x1: mx1 + x0,
-            y1: my1 + y0 + yoff,
+            x0: r.x0 + x0,
+            y0: r.y0 + y0 + yoff,
+            x1: r.x1 + x0,
+            y1: r.y1 + y0 + yoff,
         }
     }
 
@@ -1084,11 +1083,11 @@ impl GameState {
         // difference of the two frames (loc_09c54 walks each list looking for an
         // exact id+x+y match in the other; an unmatched image is "changed" and
         // expands the box via loc_09cc6). Seeded inverted — x0,y0 at the max
-        // corner, x1,y1 at the min — so an x0 still at 0x13f flags "no change".
-        let mut x0 = 0x13fi16;
-        let mut y0 = 0xc7i16;
-        let mut x1 = 0i16;
-        let mut y1 = 0i16;
+        // corner, x1,y1 at the min — so an x0 still at 319 flags "no change".
+        let mut x0 = 319;
+        let mut y0 = 199;
+        let mut x1 = 0;
+        let mut y1 = 0;
         for &(id, x, y) in cur
             .iter()
             .filter(|i| !head.prev_images.contains(i))
@@ -1119,13 +1118,12 @@ impl GameState {
         // port adds only yoff. The data_047e1 0x80/0x81 vision branches at
         // 9c79/9ca6 are not modelled.)
         if head.speaking && !matches!(head.lip_sync_resource_id, 9 | 0x0c) {
-            if let Some(&(_, my0, _, _)) = TALKING_HEAD_MOUTH_BOX.get(head.talking_head_id as usize)
-            {
-                let mouth_top = my0 + yoff;
+            if let Some(&r) = TALKING_HEAD_MOUTH_BOX.get(head.talking_head_id as usize) {
+                let mouth_top = r.y0 + yoff;
                 if mouth_top < y1 {
                     y1 = mouth_top;
                     if mouth_top <= y0 {
-                        x0 = 0x13f;
+                        x0 = 319;
                     }
                 }
             }
@@ -1134,9 +1132,8 @@ impl GameState {
         // = seg000:9bcf/9a05 `cmp [2CCE4],13fh; jz` — x0 never moved, so no image
         // changed and the screen already shows this pose; skip the redraw.
         let mut dirty = None;
-        if x0 != 0x13f {
+        if x0 != 319 {
             // = seg000:9bda clamp the dirty box's bottom to the game-area floor
-            // (0x98 = 152) so the head redraw never reaches the subtitle strip.
             let clip = Rect {
                 x0,
                 y0,

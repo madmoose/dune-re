@@ -62,11 +62,11 @@ impl GameState {
                 (self.balloon_x, b[1], b[2], b[3])
             }
             // = seg001:223c the mode-0 strip layout.
-            0x223c => (0, 0, 0x140, 0x47),
+            0x223c => (0, 0, 320, 0x47),
             // = seg001:224c the free-form narration layout.
             0x224c => (0x10, 0, 0x120, 0x42),
             // = seg001:2275 the dusk/night strip.
-            0x2275 => (0, 0x99, 0x140, 0x2f),
+            0x2275 => (0, 0x99, 320, 0x2f),
             _ => (0, 0, 0, 0),
         }
     }
@@ -843,7 +843,7 @@ impl GameState {
     // this is the mode-0 strip (whose finishing outline pass the caller
     // runs).
     fn draw_speech_bubble(&mut self, layout: u16, rect: Rect, _lines: &[SubLine]) -> bool {
-        // = seg000:8f73..8f7b the ui_hud_elements[18] rect clamps x1 to 0x140:
+        // = seg000:8f73..8f7b the ui_hud_elements[18] rect clamps x1 to 320:
         //   the widest per-head balloons (balloon_x 0x7e + w 0xd0) reach past
         //   the screen edge. Only the painted/saved rect clamps — the pen and
         //   budgets upstream keep the descriptor width.

@@ -356,7 +356,7 @@ impl GameState {
         self.open_sprite_bank(sprite_bank::STARS);
 
         // = seg000:0a4a copy_game_area_rect_to_clip_rect — clip to the game-area
-        // rect {0,0,0x140,0x98} offset by the framebuffer base row.
+        // rect {0,0,320,152} offset by the framebuffer base row.
         let y0 = self.y_offset as i16;
         let clip = Rect {
             x0: 0,
