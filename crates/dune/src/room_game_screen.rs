@@ -867,24 +867,7 @@ impl GameState {
         }
 
         // = seg000:d2f8 mov ax,[si+2]; call ax — the element's cleanup func.
-        match active {
-            // = loc_0a541 settings_ui_cleanup — the mixer panel's cleanup.
-            ScreenElement::MixerPanel => self.settings_ui_cleanup(),
-            // = seg000:97cf menu_npc_actions_cleanup — end the conversation.
-            // The fly-over submenus are staged with the same cleanup func
-            // (seg000:355f/3580 bx = menu_npc_actions_cleanup).
-            ScreenElement::NpcActionsMenu
-            | ScreenElement::GoTowardsThisPlace
-            | ScreenElement::ChangeDestinationIgnoreWarning => self.menu_npc_actions_cleanup(),
-            // = seg000:19fc loc_019fc — restore the room view the PALACE PLAN
-            //   overlay covered.
-            ScreenElement::PalacePlan => self.palace_plan_cleanup(),
-            // = seg000:4415 map_screen_cleanup — leave the map/globe view and
-            //   restore the room screen.
-            ScreenElement::MapScreen => self.map_screen_cleanup(),
-            // RoomCommandMenu is the stack base; it has no cleanup func.
-            _ => {}
-        }
+        self.run_element_cleanup(active);
 
         // = seg000:d2fd screen_element_stack_pop_and_redraw — pop the entry unless already at the room base
         //   (DOS `cmp si,21beh; jz`).
@@ -1334,13 +1317,13 @@ impl GameState {
         self.rebuild_and_draw_room_nav_panel();
         // = seg000:2eef call loc_0d763 — redraw the book/companion buttons.
         self.ui_hud_draw_companions();
-        // = seg000:2ef2 bp = command_menu_buf, bx = 0f66h; jmp
-        // screen_element_stack_push, which paints the menu via redraw_active_
-        // command_menu. command_menu_buf is the room's persistent stack bottom
-        // (RoomCommandMenu); re-inserting an equal-priority buffer replaces it in
-        // place (d345 jz), so unlike the mirror overlay the flattened port skips
-        // the push and just repaints the freshly built records here.
-        self.redraw_active_command_menu();
+        // = seg000:2ef2 bp = command_menu_buf, bx = nullsub_00f66; jmp
+        // screen_element_stack_push — re-insert the room verb strip and paint
+        // it. In room mode the equal-0xff insert replaces the base with itself
+        // (a repaint); in map/flight mode the insert walk (seg000:d349) first
+        // pops any transient overlays still stacked, their cleanups included,
+        // making command_menu_buf the active strip.
+        self.screen_element_stack_push(ScreenElement::RoomCommandMenu);
     }
 
     // ---- Command-panel callees (linked stubs; see the .chani annotations).
@@ -1553,32 +1536,77 @@ impl GameState {
     // implicit in redraw_active_command_menu starting from "nothing hovered".
     pub(crate) fn screen_element_stack_push(&mut self, element: ScreenElement) {
         // The caller has already staged `element`'s record buffer (DOS builds
-        // or patches the static buffer, then inserts its pointer).
-        //
-        // = seg000:d343 `cmp al,[di]; jz loc_0d368` — an element whose buffer's
-        // priority byte (`[buf]`) equals the current top's REPLACES the top
-        // slot in place instead of deepening the stack. This is how a
-        // mid-dialogue verb-panel rebuild (setup_npc_dialogue_menu after the
-        // chief's troop rally) swaps the WORK FOR ME panel for the Fremen-2
-        // one without stacking a second NpcActionsMenu — one STOP TALKING
-        // still closes the dialogue. The 0xff base/locked class (room menu,
-        // mirror overlay) is excluded: the flattened port keeps the room base
-        // on the stack and pops the mirror overlay explicitly (see the 0x0eb9
-        // handler) where DOS really does replace its room slot. (The d349
-        // branch that pops stacked lower-z entries before inserting is not
-        // modelled; no port flow reaches it.)
+        // or patches the static buffer, then inserts its pointer). The insert
+        // walk compares the incoming buffer's priority byte (`[buf]`, DOS al)
+        // against the top's per iteration (= seg000:d343..d359):
         let priority = self.menu_buffer(element).priority;
-        let replace = priority != 0xff
-            && self
-                .screen_element_stack
-                .last()
-                .is_some_and(|&top| self.menu_buffer(top).priority == priority);
-        if replace {
-            *self.screen_element_stack.last_mut().unwrap() = element;
-        } else {
-            self.screen_element_stack.push(element);
+        loop {
+            let Some(&top) = self.screen_element_stack.last() else {
+                break;
+            };
+            let top_priority = self.menu_buffer(top).priority;
+            if priority == top_priority {
+                // = seg000:d345 jz loc_0d368 — equal priority REPLACES the top
+                // slot in place; the stack does not deepen. This is how a
+                // mid-dialogue verb-panel rebuild (setup_npc_dialogue_menu
+                // after the chief's troop rally) swaps the WORK FOR ME panel
+                // for the Fremen-2 one while one STOP TALKING still closes the
+                // dialogue, and how ui_draw_room_command_panel's tail
+                // re-insert of command_menu_buf repaints the room base in
+                // place. Port deviation for the 0xff class: a DIFFERENT 0xff
+                // element (the mirror overlay over the room base) deepens
+                // instead — the port keeps the room base on the stack and
+                // pops the mirror explicitly (see the 0x0eb9 handler) where
+                // DOS really does replace the room slot.
+                if priority != 0xff || top == element {
+                    *self.screen_element_stack.last_mut().unwrap() = element;
+                    self.redraw_active_command_menu();
+                    return;
+                }
+                break;
+            }
+            if priority < top_priority {
+                // = seg000:d347 jb loc_0d35b — the incoming element is more
+                // transient than the top: deepen (push above it).
+                break;
+            }
+            // = seg000:d349..d359 — the incoming element sorts BENEATH the
+            // top (its priority byte is higher): pop the more-transient top,
+            // calling its cleanup func (`ax = [si+2]; call ax`), and retry
+            // against the new top. This is what closes any transient overlays
+            // still stacked when the room panel redraw re-inserts
+            // command_menu_buf (0xff) in map/flight mode.
+            self.run_element_cleanup(top);
+            self.screen_element_stack.pop();
         }
+        self.screen_element_stack.push(element);
         self.redraw_active_command_menu();
+    }
+
+    // = the DOS cleanup funcs (`bx` at push time, stored in the stack slot's
+    // `[si+2]` and called whenever the element leaves the stack — from
+    // pop_and_cleanup (seg000:d2f8) or the insert's pops-beneath walk
+    // (seg000:d34f)), mapped from the element identity.
+    fn run_element_cleanup(&mut self, element: ScreenElement) {
+        match element {
+            // = loc_0a541 settings_ui_cleanup — the mixer panel's cleanup.
+            ScreenElement::MixerPanel => self.settings_ui_cleanup(),
+            // = seg000:97cf menu_npc_actions_cleanup — end the conversation.
+            // The fly-over submenus are staged with the same cleanup func
+            // (seg000:355f/3580 bx = menu_npc_actions_cleanup).
+            ScreenElement::NpcActionsMenu
+            | ScreenElement::GoTowardsThisPlace
+            | ScreenElement::ChangeDestinationIgnoreWarning => self.menu_npc_actions_cleanup(),
+            // = seg000:19fc loc_019fc — restore the room view the PALACE PLAN
+            //   overlay covered.
+            ScreenElement::PalacePlan => self.palace_plan_cleanup(),
+            // = seg000:4415 map_screen_cleanup — leave the map/globe view and
+            //   restore the room screen.
+            ScreenElement::MapScreen => self.map_screen_cleanup(),
+            // The room base and the remaining menus carry nullsub_00f66 /
+            // fn_0d917_noop — no-op cleanups.
+            _ => {}
+        }
     }
 
     // = seg000:90bd setup_npc_dialogue_menu — pick the dialogue verb panel's
