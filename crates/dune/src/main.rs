@@ -81,7 +81,7 @@ use crate::{
     input::{InputState, SharedInput, keycode_to_scancode},
     lipsync::Lipsync,
     locations::{Equipment, Location},
-    mouse::{CursorMode, CursorShapeId, SharedCursor, cursor_shape},
+    mouse::{CursorMode, CursorShapeId, MOUSE_START_X, MOUSE_START_Y, SharedCursor, cursor_shape},
     palette::Palette,
     point::Point,
     recorder::{RecordFormat, Recorder, RecorderTee},
@@ -566,7 +566,29 @@ struct App {
     system_cursor: bool,
     system_cursors: Option<SystemCursors>,
     system_cursor_applied: Option<(u32, bool)>,
+    // When the published cursor state was last sampled shown; None = never
+    // (the cursor starts hidden and stays so through the intro). Drives
+    // `debounced_cursor_hidden`.
+    cursor_last_shown: Option<std::time::Instant>,
+    // True while the OS pointer is anywhere inside the window (game area or
+    // letterbox bars). Gates the NSCursor force-hide: a globally hidden
+    // cursor must never outlive the pointer's presence in the window.
+    cursor_in_window: bool,
+    // Whether we currently hold one NSCursor.hide() (see
+    // `apply_ns_cursor_hidden`). AppKit refcounts hide/unhide, so toggle
+    // exactly once per transition.
+    ns_cursor_hidden: bool,
 }
+
+/// How long the game thread's published cursor-hidden state must persist
+/// before the present side applies it. The game brackets screen updates with
+/// hide/show pairs (`call_restore_cursor` / `draw_mouse`) whose only purpose
+/// in Baked mode is keeping the baked sprite out of the framebuffer — hides
+/// that live microseconds to one ~5 ms game pass. Mirrored raw into the OS or
+/// GPU cursor, those brackets sample as one-frame cursor dropouts (blinking)
+/// that DOS never showed on screen. Sustained hides (HNM playback, the intro,
+/// screen transitions) last far longer than this grace and still apply.
+const CURSOR_HIDE_GRACE: std::time::Duration = std::time::Duration::from_millis(50);
 
 impl Drop for App {
     fn drop(&mut self) {
@@ -609,12 +631,55 @@ impl App {
         }
     }
 
-    fn compute_cursor_overlay(&self) -> CursorOverlayDraw {
+    /// Force the OS cursor hidden/shown right now, bypassing the deferred
+    /// cursor-rect path. On macOS, winit implements `set_cursor` /
+    /// `set_cursor_visible` with AppKit cursor rects, which AppKit only
+    /// re-applies on the next pointer move — a visibility change while the
+    /// pointer rests (the game re-showing the cursor after a conversation
+    /// opens, or hiding it for a cutscene) would otherwise not take effect
+    /// until the user moves the mouse. `NSCursor::hide`/`unhide` apply
+    /// immediately; the cursor-rect state winit tracks stays authoritative
+    /// for subsequent pointer moves. No-op off macOS.
+    fn apply_ns_cursor_hidden(&mut self, hidden: bool) {
+        if self.ns_cursor_hidden == hidden {
+            return;
+        }
+        self.ns_cursor_hidden = hidden;
+        #[cfg(target_os = "macos")]
+        unsafe {
+            use objc2_app_kit::NSCursor;
+            if hidden {
+                NSCursor::hide();
+            } else {
+                NSCursor::unhide();
+            }
+        }
+        #[cfg(not(target_os = "macos"))]
+        let _ = hidden;
+    }
+
+    /// Sample the published cursor hide state, debounced by
+    /// [`CURSOR_HIDE_GRACE`]: a hide applies only once the state has not been
+    /// sampled shown for the grace period; a show applies immediately.
+    fn debounced_cursor_hidden(&mut self) -> bool {
+        if !self.shared_cursor.snapshot().hidden {
+            self.cursor_last_shown = Some(std::time::Instant::now());
+            return false;
+        }
+        match self.cursor_last_shown {
+            Some(t) => t.elapsed() >= CURSOR_HIDE_GRACE,
+            // Never sampled shown — hidden from startup (the intro).
+            None => true,
+        }
+    }
+
+    fn compute_cursor_overlay(&mut self) -> CursorOverlayDraw {
         // While recording the cursor is baked into the framebuffer, so the
         // present-side overlay stays hidden.
         if self.recorder.is_recording() {
             return CursorOverlayDraw::hidden();
         }
+        let hidden = self.debounced_cursor_hidden();
         let Some((_, pal)) = self.last_frame.as_ref() else {
             return CursorOverlayDraw::hidden();
         };
@@ -624,6 +689,7 @@ impl App {
             &self.input,
             pal,
             self.cursor_in_game_area,
+            hidden,
         )
     }
 
@@ -656,9 +722,15 @@ impl App {
             return;
         };
 
+        let hidden = self.debounced_cursor_hidden();
         let overlay = self.shared_cursor.snapshot();
-        let visible = !overlay.hidden && self.cursor_in_game_area;
+        let visible = !hidden && self.cursor_in_game_area;
         let shape_idx = cursor_shape_index(overlay.shape);
+
+        // Make the visibility change effective immediately even while the
+        // pointer rests (see apply_ns_cursor_hidden); the cursor-rect calls
+        // below keep winit's state correct for subsequent pointer moves.
+        self.apply_ns_cursor_hidden(!visible && self.cursor_in_window);
 
         if !visible {
             if self.system_cursor_applied != Some((shape_idx, false)) {
@@ -712,14 +784,14 @@ fn compute_cursor_overlay_inner(
     input: &SharedInput,
     palette: &Palette,
     in_game_area: bool,
+    hidden: bool,
 ) -> CursorOverlayDraw {
-    if mode != CursorMode::Overlay || !in_game_area {
+    // `hidden` is the caller's debounced sample of the published hide state
+    // (`debounced_cursor_hidden`), not the raw `CursorOverlay::hidden` bit.
+    if mode != CursorMode::Overlay || !in_game_area || hidden {
         return CursorOverlayDraw::hidden();
     }
     let overlay = shared_cursor.snapshot();
-    if overlay.hidden {
-        return CursorOverlayDraw::hidden();
-    }
     let (mx, my) = {
         let inp = input.lock().unwrap();
         (inp.mouse_x, inp.mouse_y)
@@ -948,6 +1020,33 @@ impl ApplicationHandler for App {
         // The game renders its own mouse cursor sprite, so hide the host one.
         window.set_cursor_visible(false);
 
+        // = seg000:e65c..e662 initialize_system warps the pointer to its
+        // startup position (237, 171) via warp_mouse_cursor -> set_mouse_pos
+        // (INT 33,4). The port's equivalent of the driver warp is moving the
+        // OS pointer to the same game pixel, so the cursor and the host
+        // pointer agree from the first frame (InputState::default already
+        // seeds the shared input with this position). Not every platform
+        // supports warping; on failure the cursor stays at the seeded
+        // position until the first real pointer move.
+        let size = window.inner_size();
+        let (sw, sh, ox, oy) = fit_rect(size.width, size.height);
+        let px = ox as f64 + (MOUSE_START_X as f64 + 0.5) * sw as f64 / 320.0;
+        let py = oy as f64 + (MOUSE_START_Y as f64 + 0.5) * sh as f64 / 200.0;
+        if window
+            .set_cursor_position(winit::dpi::PhysicalPosition::new(px, py))
+            .is_ok()
+        {
+            self.cursor_in_game_area = true;
+            self.cursor_in_window = true;
+            // The warp generates no pointer event, so the hidden-cursor rect
+            // set above stays un-applied until the first real move; in the
+            // GPU/software modes (OS cursor always hidden in-window) force it
+            // now. System mode is driven per-frame by update_system_cursor.
+            if !self.system_cursor {
+                self.apply_ns_cursor_hidden(true);
+            }
+        }
+
         self.gpu = Some(Gpu::new(window.clone()));
         self.window = Some(window);
 
@@ -992,6 +1091,7 @@ impl ApplicationHandler for App {
                 }
             }
             WindowEvent::CursorMoved { position, .. } => {
+                self.cursor_in_window = true;
                 if let Some(window) = &self.window {
                     let size = window.inner_size();
                     self.cursor_in_game_area =
@@ -1001,8 +1101,16 @@ impl ApplicationHandler for App {
                     self.input.lock().unwrap().on_mouse_move(gx, gy);
                 }
             }
+            WindowEvent::CursorEntered { .. } => {
+                self.cursor_in_window = true;
+            }
             WindowEvent::CursorLeft { .. } => {
+                self.cursor_in_window = false;
                 self.cursor_in_game_area = false;
+                // A global NSCursor hide must not follow the pointer out of
+                // the window; the in-window state is restored by the cursor
+                // rects (re-applied by the motion that took the pointer out).
+                self.apply_ns_cursor_hidden(false);
             }
             WindowEvent::MouseInput { state, button, .. } => {
                 let bit = match button {
@@ -1046,6 +1154,7 @@ impl ApplicationHandler for App {
                 let recording = self.recorder.is_recording();
                 let gpu_overlay =
                     self.cursor_mode == CursorMode::Overlay && !self.system_cursor && !recording;
+                let cursor_hidden = gpu_overlay && self.debounced_cursor_hidden();
                 let re_render = had_new || gpu_overlay;
                 if re_render
                     && let Some((fb, pal)) = self.last_frame.as_ref()
@@ -1062,6 +1171,7 @@ impl ApplicationHandler for App {
                             &self.input,
                             pal,
                             self.cursor_in_game_area,
+                            cursor_hidden,
                         )
                     } else {
                         CursorOverlayDraw::hidden()
@@ -1076,6 +1186,7 @@ impl ApplicationHandler for App {
                         if let Some(window) = &self.window {
                             window.set_cursor_visible(false);
                         }
+                        self.apply_ns_cursor_hidden(self.cursor_in_window);
                         self.system_cursor_applied = None;
                     } else {
                         self.update_system_cursor(event_loop);
@@ -1251,6 +1362,9 @@ fn main() {
         system_cursor,
         system_cursors: None,
         system_cursor_applied: None,
+        cursor_last_shown: None,
+        cursor_in_window: false,
+        ns_cursor_hidden: false,
     };
 
     event_loop.set_control_flow(ControlFlow::Poll);

@@ -438,11 +438,15 @@ impl GameState {
         // = seg000:8cb5 call copy_rect_fb2_to_fb1.
         gfx::vga_copy_rect(&mut self.framebuffer, &self.framebuffer_saved, rect);
         // = seg000:8cb8..8cc6 a live talking-head overlay (data_047c8) is
-        //   re-rendered over the restored area (loc_09bac). The port drops
-        //   the head's incremental-draw cache so its next idle tick repaints
-        //   the full frame over the restored backdrop.
-        if let Some(head) = self.talking_head.as_mut() {
-            head.prev_images.clear();
+        //   re-rendered over the restored area (loc_09bac) BEFORE the present
+        //   below. The restore wiped the head out of fb1 (the strip path
+        //   restores the whole game area); deferring the repaint to the head's
+        //   next idle tick would publish a head-less frame here — the head
+        //   visibly blinking out until that tick lands (~16 ticks later).
+        //   recomposite_head_over_backdrop also re-seeds the incremental-draw
+        //   baseline (prev_images).
+        if self.talking_head.is_some() {
+            self.recomposite_head_over_backdrop();
         }
         // = seg000:8cc9 call present_game_area.
         self.present_game_area();

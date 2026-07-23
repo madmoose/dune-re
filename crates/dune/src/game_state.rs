@@ -11,7 +11,7 @@ use crate::{
     locations::LOCATIONS,
     map_screen::MapLocationMarker,
     midi::{self, Midi},
-    mouse::SharedCursor,
+    mouse::{MOUSE_START_X, MOUSE_START_Y, SharedCursor},
     pcm_player::{self, PcmPlayer},
     recorder::Recorder,
     room_game_screen::{CommandMenuRecord, ROOM_PERSON_TABLE_INIT, RoomPerson, ScreenElement},
@@ -1278,6 +1278,11 @@ pub struct GameState {
     // redraw_mouse resets it to 0 each game-loop pass.
     pub(crate) cursor_hide_counter: i8,
 
+    // = seg001:dc47 _byte_2D0F7_mouse_cursor_restore_needed — negative while
+    // restore_mouse_if_rect_intersects has lifted the cursor off a dirty rect
+    // and draw_mouse_cursor_if_needed owes the balancing re-show.
+    pub(crate) mouse_cursor_restore_needed: i8,
+
     // = seg001:dce7 index_of_last_hovered_action_item — the verb slot
     // currently shown with the 0x8000 highlight, 0xff if none.
     // redraw_active_command_menu resets to 0xff at entry, then
@@ -1630,8 +1635,10 @@ impl GameState {
             hnm_header_size: 0,
             hnm_body_offset: 0,
             hnm_framebuffer: FbId::Fb1,
-            mouse_pos_x: 0,
-            mouse_pos_y: 0,
+            // = seg000:e65c..e662 initialize_system warps the pointer to its
+            // startup position (237, 171) via warp_mouse_cursor (seg000:db03).
+            mouse_pos_x: MOUSE_START_X,
+            mouse_pos_y: MOUSE_START_Y,
             mouse_prev_drag_x: 0,
             mouse_prev_drag_y: 0,
             drag_armed_element: None,
@@ -1639,7 +1646,11 @@ impl GameState {
             data_0ceba: 0,
             mouse_draw_pos_x: 0,
             mouse_draw_pos_y: 0,
-            cursor_hide_counter: 0,
+            // = seg000:e64a mov [cursor_hide_counter], 0ffh — the cursor starts
+            // hidden; the first redraw_mouse pass (game_loop) clears the counter
+            // and shows it.
+            cursor_hide_counter: -1,
+            mouse_cursor_restore_needed: 0,
             index_of_last_hovered_action_item: 0xff,
             cursor_save: Vec::new(),
             cursor_save_pos: 0,
@@ -2763,6 +2774,22 @@ impl GameState {
     /// (the frame-task driver emits frames on its own).
     pub fn send_frame_to_display(&self) {
         if self.headless {
+            return;
+        }
+
+        // Port-only presentation care: while a rect bracket has the software
+        // cursor lifted for a screen update (restore_mouse_if_rect_intersects
+        // left mouse_cursor_restore_needed negative and the balancing
+        // draw_mouse_cursor_if_needed has not run yet), the framebuffer is
+        // missing its baked cursor. Publishing now would flash a cursor-less
+        // frame that DOS never showed — its mid-bracket VGA writes were
+        // followed by the re-draw within microseconds. Skip the publish; the
+        // bracket close (or the next redraw_mouse pass, which consumes a
+        // bracket left open across passes) publishes the completed frame.
+        // Deliberate hides (cutscenes, transitions, the per-click hide) go
+        // through cursor_hide_counter alone and never set this flag, so their
+        // presents flow unhindered.
+        if self.cursor_mode == CursorMode::Baked && self.mouse_cursor_restore_needed < 0 {
             return;
         }
 

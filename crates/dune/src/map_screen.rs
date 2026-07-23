@@ -68,6 +68,10 @@ const TABLE_196D: [u8; 5] = [0x11, 0x10, 0x12, 0x13, 0x13];
 // into data_046e3_rect (map_view_rect) by travel_minimap_setup.
 const TRAVEL_MINIMAP_RECT: Rect = rect(0xcc, 4, 0x13c, 0x3c);
 
+// = seg001:14a4 map_caption_rect — the map caption strip (77, 33)-(245, 41),
+// the cursor-bracket rect of map_caption_frame_task (seg000:46c4).
+const MAP_CAPTION_RECT: Rect = rect(77, 33, 245, 41);
+
 // = seg001:1492 travel_minimap_restore_rect — the minimap + border rect
 // hnm_present_flight_frame copies from the back buffer over each flight frame.
 const TRAVEL_MINIMAP_RESTORE_RECT: Rect = rect(0xc8, 0, 0x140, 0x40);
@@ -805,10 +809,10 @@ impl GameState {
             }
             // = seg000:46c0 inc word ptr [data_0473f].
             self.map_caption_pos += 1;
-            // = seg000:46c4 si=data_014a4; call restore_mouse_if_rect_intersects
-            //   — lift the cursor off the caption strip before drawing. The
-            //   port's cursor save/restore bracket is game_loop-driven; TODO
-            //   with the live cursor-over-caption case.
+            // = seg000:46c4/46c7 si = map_caption_rect; call
+            //   restore_mouse_if_rect_intersects — lift the cursor off the
+            //   caption strip before the glyph draws under it.
+            self.restore_mouse_if_rect_intersects(MAP_CAPTION_RECT);
             // = seg000:46ca push [framebuffer_active_seg];
             //   call set_screen_as_active_framebuffer — draw to the front
             //   buffer.
@@ -829,8 +833,10 @@ impl GameState {
             self.map_caption_x = x;
             self.map_caption_y = y;
             // = seg000:46f7 pop [framebuffer_active_seg]; 46fb call
-            //   draw_mouse_cursor_if_needed (the cursor bracket, see above).
+            //   draw_mouse_cursor_if_needed — close the bracket before the
+            //   post-loop publish, so the presented frame keeps the cursor.
             self.active_fb = saved;
+            self.draw_mouse_cursor_if_needed();
             drew = true;
             // = seg000:46fe cmp al,20h; jz map_caption_frame_task — a space
             //   costs no firing: draw the next glyph immediately.
@@ -897,15 +903,16 @@ impl GameState {
         //   44b9 call load_icones_sprites.
         let clip = self.map_view_clip_rect();
         self.open_icones_spritesheet();
-        // = seg000:44bc..44bf restore_mouse_if_rect_intersects(marker rect) —
-        //   the cursor bracket; game_loop-driven in the port (see
-        //   tick_map_caption).
-        // = seg000:44c2..44ee clamp the marker rect to the map window and push
-        //   it fb1 -> screen (present_screen_rect_regs) — erases the previous
-        //   marker image with the clean map beneath.
+        // = seg000:44bc/44bf si = map_player_marker_rect; call
+        //   restore_mouse_if_rect_intersects — lift the cursor off the marker
+        //   rect before the restore below erases it from the screen.
         let m = self.map_player_marker_rect;
         let r = self.map_view_rect;
         let yoff = self.y_offset as i16;
+        self.restore_mouse_if_rect_intersects(rect(m.x0, m.y0 + yoff, m.x1, m.y1 + yoff));
+        // = seg000:44c2..44ee clamp the marker rect to the map window and push
+        //   it fb1 -> screen (present_screen_rect_regs) — erases the previous
+        //   marker image with the clean map beneath.
         self.present_screen_rect(rect(
             m.x0.max(r.x0),
             m.y0.max(r.y0) + yoff,
@@ -920,9 +927,12 @@ impl GameState {
                 s.draw_sprite_from_sheet_clipped(sheet, 0x4c, x0, y0, clip);
             });
         }
-        // = seg000:4507 pop [framebuffer_active_seg]; 450b jmp
-        //   draw_mouse_cursor_if_needed (the cursor bracket, see above).
+        // = seg000:4507 pop [framebuffer_active_seg].
         self.active_fb = saved;
+        // = seg000:450b jmp draw_mouse_cursor_if_needed — close the cursor
+        //   bracket before the publish below, so the frame the display gets
+        //   carries the re-drawn cursor.
+        self.draw_mouse_cursor_if_needed();
         // DOS draws straight to the visible A000 buffer; the port publishes
         // the touched screen (cf. tick_map_caption).
         if !self.front_buffer_is_fb1() {
@@ -2120,8 +2130,12 @@ impl GameState {
         if self.travel_minimap_state < 0 {
             return;
         }
-        // = seg000:4a21/4a24 restore_mouse_if_rect_intersects(travel_minimap_
-        //   rect) — the cursor bracket; game_loop-driven in the port.
+        // = seg000:4a21/4a24 si = travel_minimap_rect; call
+        //   restore_mouse_if_rect_intersects — lift the cursor off the
+        //   minimap. DOS has no balancing draw here: the recorded hide makes
+        //   the next redraw_mouse pass redraw (and, in the port, re-present)
+        //   the cursor.
+        self.restore_mouse_if_rect_intersects(TRAVEL_MINIMAP_RECT);
         // = seg000:4a27..4a3d the last written entry (cursor - 4 bytes,
         //   ring-wrapped).
         let idx = (self.travel_trail_cursor + crate::game_state::TRAVEL_TRAIL_LEN - 1)

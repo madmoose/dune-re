@@ -16,6 +16,12 @@ pollster = "1"
 bytemuck = { version = "1", features = ["derive"] }
 paste = "1.0.15"
 
+[target.'cfg(target_os = "macos")'.dependencies]
+# Already a winit dependency (same version); used for NSCursor::hide/unhide,
+# which apply cursor visibility immediately where winit's cursor-rect path
+# only takes effect on the next pointer move.
+objc2-app-kit = { version = "0.2.2", features = ["NSCursor"] }
+
 [lints]
 workspace = true
 

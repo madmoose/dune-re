@@ -12,7 +12,10 @@ use std::sync::{Arc, Mutex};
 
 use winit::keyboard::KeyCode;
 
-use crate::GameState;
+use crate::{
+    GameState,
+    mouse::{MOUSE_START_X, MOUSE_START_Y},
+};
 
 /// Shared input state: written by the host event loop, polled by the game.
 pub type SharedInput = Arc<Mutex<InputState>>;
@@ -67,8 +70,11 @@ impl Default for InputState {
             key_hit_scancode: 0,
             kb_esc_was_hit: 0,
             kb_keys: [0; KB_KEYS_LEN],
-            mouse_x: 0,
-            mouse_y: 0,
+            // = the driver position after initialize_system's startup warp
+            // (seg000:e662 warp_mouse_cursor -> set_mouse_pos, INT 33,4): the
+            // pointer starts at (237, 171), not (0, 0).
+            mouse_x: MOUSE_START_X,
+            mouse_y: MOUSE_START_Y,
             mouse_buttons: 0,
         }
     }

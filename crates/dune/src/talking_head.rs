@@ -412,6 +412,23 @@ impl GameState {
     pub fn setup_talking_head(&mut self, lip_sync_resource_id: u8, dx: i16) {
         // = character_id_to_sprite (seg000:9123) + open_talking_head_resource.
         let (head, facing) = self.character_id_to_sprite(lip_sync_resource_id);
+        // = seg000:91bb cmp ax,[talking_head_id]; jz open_talking_head_resource
+        // — the same head stays up untouched: DOS's per-line setup only
+        // re-opens the already-parsed sheet. No backdrop re-save (fb2 keeps the
+        // clean room the conversation started with), no anim / prev_images
+        // reset. Rebuilding here instead corrupted fb2 with a baked head copy
+        // and snapped the idle animation on every dialogue line. Restricted to
+        // dx == 0 (the dialogue path); the dx-shifted fly-over rects rebuild.
+        if dx == 0
+            && self.talking_head.as_ref().is_some_and(|h| {
+                h.talking_head_id == head as u16
+                    && h.lip_sync_resource_id == lip_sync_resource_id as u16
+            })
+        {
+            return;
+        }
+        // TODO: = seg000:91c1/91c2 a CHANGED head should first run
+        // tear_down_prior_talking_head_overlay; the port rebuilds in place.
         // = seg000:91ce..91da — patch the x0 of the three balloon descriptors
         // (seg001:2224/222c/2234) with this head's balloon x. DOS does it only
         // on a head change; the value is head-determined, so setting it every
@@ -638,10 +655,9 @@ impl GameState {
         //   it (the strip stays resident in the backbuffer).
         self.restamp_subtitle_strip(rect);
         // = seg000:9a10 si = 0d834h; 9a13 call restore_mouse_if_rect_intersects —
-        //   lift the software cursor when the rect overlaps it. The port hides it
-        //   unconditionally (call_restore_cursor, the same routine minus the
-        //   intersect early-out; a no-op for the overlay cursor).
-        self.call_restore_cursor();
+        //   lift the software cursor only when the dirty rect actually overlaps
+        //   its 16x16 image; elsewhere on screen the cursor is left untouched.
+        self.restore_mouse_if_rect_intersects(rect);
         // = seg000:9a16 call present_screen_rect
         //   (seg000:c4f0) — redraw the HUD head into fb1 when the rect overlaps
         //   its box (suppressed while data_0227d != 0, i.e. through the whole
@@ -649,8 +665,11 @@ impl GameState {
         //   (skipped while the front buffer is redirected to fb1 or the mixer
         //   panel owns the mouse handlers).
         self.present_screen_rect(rect);
-        // = seg000:9a19 jmp draw_mouse_cursor_if_needed — re-show the cursor.
-        self.draw_mouse();
+        // = seg000:9a19 jmp draw_mouse_cursor_if_needed — re-show the cursor
+        //   when the restore above lifted it, and re-publish the frame so the
+        //   re-drawn cursor reaches the display (present_screen_rect published
+        //   mid-bracket).
+        self.draw_mouse_cursor_if_needed_then_present();
     }
 
     // = seg000:9efd loc_09efd + load_voc_and_lipsync_data (a6e6) + loc_0a75c —

@@ -620,6 +620,7 @@ dependencies = [
  "cpal",
  "naga",
  "num",
+ "objc2-app-kit",
  "opl3-rs",
  "paste",
  "png",

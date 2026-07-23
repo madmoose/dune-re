@@ -907,19 +907,41 @@ impl GameState {
         } else {
             // = seg000:9825 loc_09825 — the non-zoom path (HUD-portrait dialogue).
             //   test [si+0fh],40h routes on the travelling flag.
+            // = seg000:981a..9824 — during the night attack, loc_09840 is pushed
+            //   as the return continuation: after the slot bookkeeping the head
+            //   overlay is torn down and the game area restored + presented from
+            //   fb2 (no room re-render over the scripted attack scene).
+            let night = self.night_attack_stage != 0;
             if self.room_persons[speaker].flags & 0x40 != 0 {
                 // = seg000:982b jmp npc_assign_companion_slot — a still-travelling
-                //   speaker keeps its slot (tail jump; no room re-render).
+                //   speaker keeps its slot (tail jump; no room re-render, and —
+                //   outside the night attack — no head teardown either). The
+                //   talking head deliberately STAYS on screen with its idle task
+                //   running: verified against the original, a companion-bar
+                //   dialogue (no standing anchor, so no zoom) ends with the head
+                //   lingering until some later action redraws the room. The
+                //   port matches that quirk.
                 self.npc_assign_companion_slot(speaker);
+                if night {
+                    // = the pushed loc_09840 continuation (seg000:9821/9824):
+                    //   during the night attack the head overlay is torn down
+                    //   and the game area restored + presented over the
+                    //   scripted attack scene.
+                    self.tear_down_prior_talking_head_overlay();
+                }
             } else {
                 // = seg000:982e call npc_remove_companion_slot — the speaker no
                 //   longer travels (STAY HERE ran npc_clear_travelling), so its
                 //   HUD portrait is removed as the dialogue closes.
                 self.npc_remove_companion_slot(speaker);
-                // = seg000:9838 test room_render_flags,1; 983d jz loc_09879 —
-                //   re-render the room + raise the HUD head unless bit 0 is set.
-                //   (The night_attack_stage gate at 9831/9836 is not modelled.)
-                if self.room_render_flags & 1 == 0 {
+                if night {
+                    // = seg000:9831/9836 jnz loc_0983f — the ret lands on the
+                    //   pushed loc_09840 continuation: drop the head overlay and
+                    //   restore the game area over the attack scene.
+                    self.tear_down_prior_talking_head_overlay();
+                } else if self.room_render_flags & 1 == 0 {
+                    // = seg000:9838 test room_render_flags,1; 983d jz loc_09879 —
+                    //   re-render the room + raise the HUD head unless bit 0 set.
                     self.menu_npc_actions_redraw_room();
                 }
             }
@@ -3748,6 +3770,12 @@ mod tests {
         game.set_headless();
         game.start(true);
         game.cursor_mode = crate::mouse::CursorMode::Overlay;
+
+        // One game-loop mouse pass first: the cursor starts hidden
+        // (= seg000:e64a, cursor_hide_counter -1) and redraw_mouse is what
+        // clears the counter and shows it — a click can only follow a pass.
+        game.get_mouse_pos_etc();
+        let _ = game.redraw_mouse();
 
         // call_restore_cursor (the game loop's per-click hide) publishes the
         // cursor as hidden; the balancing draw_mouse shows it again.

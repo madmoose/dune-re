@@ -11,6 +11,14 @@ use std::sync::{Arc, Mutex};
 
 use crate::{GameState, gfx};
 
+// = seg000:e65c/e65f — the startup pointer position. initialize_system warps
+// the mouse to (237, 171) via warp_mouse_cursor (seg000:e662 -> seg000:db03),
+// which stores mouse_pos_x/y and pushes the position into the INT 33 driver
+// (set_mouse_pos, seg000:dae3). The port seeds InputState and GameState with
+// the same position and warps the OS pointer to match at window creation.
+pub const MOUSE_START_X: u16 = 237;
+pub const MOUSE_START_Y: u16 = 171;
+
 /// Where the cursor sprite gets composited.
 ///
 /// * `Baked` mirrors DOS: `vga_draw_cursor` / `vga_restore_cursor` mutate the
@@ -344,6 +352,462 @@ pub const CURSOR_LEFT: CursorShape = CursorShape {
     ],
 };
 
+#[cfg(test)]
+mod tests {
+    use std::sync::mpsc;
+
+    use super::*;
+    use crate::{DatFile, InputState, recorder::Recorder};
+
+    // The game-thread cursor state must self-heal across a character-click
+    // conversation (the seg000:d8f4 click hide followed by common_dialogue's
+    // unbalanced hides): the pass after the click redraws and presents.
+    // Asset-gated: cargo test -p dune --bin dune -- --ignored cursor_
+    #[test]
+    #[ignore = "needs assets/DUNE.DAT"]
+    fn cursor_reappears_after_character_click_conversation() {
+        let dat_path = concat!(env!("CARGO_MANIFEST_DIR"), "/../../assets/DUNE.DAT");
+        let Ok(dat_file) = DatFile::open(dat_path) else {
+            eprintln!("skipping: {dat_path} not found");
+            return;
+        };
+        let (tx, _rx) = mpsc::sync_channel(64);
+        let input = InputState::shared();
+        let shared = SharedCursor::new();
+        let mut game = crate::GameState::new_with_input_and_cursor(
+            dat_file,
+            tx,
+            input.clone(),
+            CursorMode::Baked,
+            shared.clone(),
+            std::sync::Arc::new(Recorder::new()),
+        );
+        game.set_headless();
+        game.start(true);
+
+        // Pointer in the game area, over a character-ish spot.
+        input.lock().unwrap().on_mouse_move(160, 80);
+
+        // One game_loop cursor pass: cursor baked into the screen.
+        game.get_mouse_pos_etc();
+        let drew = game.redraw_mouse();
+        eprintln!(
+            "pass1: drew={drew} counter={} save_h={}",
+            game.cursor_hide_counter, game.cursor_save_h
+        );
+
+        // The click: seg000:d8f4 call_restore_cursor, then the person handler.
+        game.call_restore_cursor();
+        eprintln!("after click hide: counter={}", game.cursor_hide_counter);
+        game.common_dialogue(0);
+        eprintln!(
+            "after common_dialogue: counter={} save_h={} draw_pos=({}, {})",
+            game.cursor_hide_counter,
+            game.cursor_save_h,
+            game.mouse_draw_pos_x,
+            game.mouse_draw_pos_y
+        );
+
+        // Next game_loop pass without any pointer motion.
+        game.get_mouse_pos_etc();
+        let drew = game.redraw_mouse();
+        eprintln!(
+            "pass2: drew={drew} counter={} save_h={}",
+            game.cursor_hide_counter, game.cursor_save_h
+        );
+        assert!(
+            drew,
+            "redraw_mouse must redraw + present the cursor on the pass after the click"
+        );
+    }
+
+    // Clicking a dialogue-panel line must never publish a frame with the
+    // talking head missing or half-repainted. Guards two fixes:
+    // subtitle_restore_prior re-renders the head over the restored backdrop
+    // BEFORE presenting (= seg000:8cb8..8cc6, not deferred to the next idle
+    // tick), and setup_talking_head's same-head early-out (= seg000:91bb)
+    // keeps fb2 the clean head-less backdrop instead of re-saving a baked
+    // head copy every line. Strip-mode subtitles restore the whole game area,
+    // which is what exposed the blink.
+    #[test]
+    #[ignore = "needs assets/DUNE.DAT"]
+    fn head_does_not_blink_on_line_click() {
+        let dat_path = concat!(env!("CARGO_MANIFEST_DIR"), "/../../assets/DUNE.DAT");
+        let Ok(dat_file) = DatFile::open(dat_path) else {
+            eprintln!("skipping: {dat_path} not found");
+            return;
+        };
+        let (tx, rx) = mpsc::sync_channel(8192);
+        let input = InputState::shared();
+        let shared = SharedCursor::new();
+        let mut game = crate::GameState::new_with_input_and_cursor(
+            dat_file,
+            tx,
+            input.clone(),
+            CursorMode::Overlay,
+            shared.clone(),
+            std::sync::Arc::new(Recorder::new()),
+        );
+        game.cmd_args_memory |= 0x10;
+        game.start(true);
+        input.lock().unwrap().on_mouse_move(160, 165); // over the verb panel
+
+        // Text-mode strip subtitles (voice_subtitle_mode 0): its
+        // subtitle_restore_prior path restores the WHOLE game area — head
+        // included — from fb2, which is what exposed the blink.
+        game.voice_subtitle_mode = 0;
+
+        game.call_restore_cursor();
+        game.common_dialogue(0);
+
+        // The true head-less backdrop: fb2 as saved at conversation start.
+        let clean = game.framebuffer_saved.clone();
+
+        let one_pass = |game: &mut crate::GameState| {
+            game.ui_hud_companion_blink_task();
+            game.process_frame_tasks();
+            game.get_mouse_pos_etc();
+            let _ = game.redraw_mouse();
+            let handlers = game.active_mouse_handlers;
+            let _ = game.highlight_hovered_text_action_item();
+            (handlers.idle)(game);
+            let start = game.game_ticks();
+            game.sleep_ticks(start, 1);
+        };
+        for _ in 0..10 {
+            one_pass(&mut game);
+        }
+        while rx.try_recv().is_ok() {}
+
+        // Head-presence probe: pixels in the head rect differing from the
+        // conversation-start backdrop — which never contains the head.
+        let (hx0, hy0, hx1, hy1) = game.talking_head.as_ref().unwrap().rect;
+        let yoff = game.y_offset;
+        let head_present = move |fb: &crate::FrameBuffer, backdrop: &crate::FrameBuffer| {
+            let mut diff = 0u32;
+            for y in hy0 as u16..hy1 as u16 {
+                for x in hx0 as u16..hx1 as u16 {
+                    if fb.get(x, y + yoff) != backdrop.get(x, y + yoff) {
+                        diff += 1;
+                    }
+                }
+            }
+            diff
+        };
+
+        // The line click, through the real game-loop button branch: pointer
+        // over verb-panel slot 0 ("TALK TO ME", element rect (92,159)-(228,167)),
+        // LMB press edge (= seg000:d8f4 call_restore_cursor + the d8fe press
+        // dispatch), then the release edge next pass.
+        input.lock().unwrap().on_mouse_move(120, 162);
+        one_pass(&mut game);
+
+        input.lock().unwrap().on_mouse_button(1);
+        game.get_mouse_pos_etc();
+        let ax = game.mouse_stuff();
+        let _ = game.redraw_mouse();
+        assert_eq!(ax & 0x0f, 5, "press edge expected");
+        game.call_restore_cursor();
+        game.game_loop_dispatch_lmb_press();
+
+        input.lock().unwrap().on_mouse_button(0);
+        game.get_mouse_pos_etc();
+        let ax = game.mouse_stuff();
+        let _ = game.redraw_mouse();
+        assert_eq!(ax & 0x0f, 4, "release edge expected");
+        game.call_restore_cursor();
+        let handlers = game.active_mouse_handlers;
+        if let Some(armed) = game.drag_armed_element.take() {
+            game.dispatch_element_with_latch(armed);
+        } else {
+            (handlers.release)(&mut game);
+        }
+        // Run past the next idle-task tick (16-tick interval), where the
+        // pre-fix deferred repaint used to bring the head back.
+        for _ in 0..60 {
+            one_pass(&mut game);
+        }
+
+        let mut states = Vec::new();
+        while let Ok((fb, _pal)) = rx.try_recv() {
+            states.push(head_present(&fb, &clean));
+        }
+        eprintln!("head-area diff-vs-clean per published frame: {states:?}");
+        // The head was already up before the click (the warm-up drain consumed
+        // its build-up frames), so every frame published by the click must
+        // still carry it. The head differs from the head-less backdrop by
+        // thousands of pixels; a small diff means it is gone or half-repainted.
+        let missing = states.iter().filter(|&&d| d <= 5000).count();
+        assert!(states.len() > 1, "the click must publish frames");
+        assert!(
+            missing == 0,
+            "the head blinked out: {missing} head-less frame(s) published during the line click"
+        );
+    }
+
+    // STOP TALKING in a companion conversation (travelling speaker with no
+    // room anchor — the non-zoom cleanup branch, seg000:9825/982b) leaves the
+    // talking head on screen with its idle task running, matching the
+    // original: verified against DOS, a companion-bar dialogue ends with the
+    // head lingering until some later action redraws the room. Only the
+    // night attack tears it down there (the pushed loc_09840 continuation).
+    #[test]
+    #[ignore = "needs assets/DUNE.DAT"]
+    fn stop_talking_leaves_companion_talking_head_like_dos() {
+        let dat_path = concat!(env!("CARGO_MANIFEST_DIR"), "/../../assets/DUNE.DAT");
+        let Ok(dat_file) = DatFile::open(dat_path) else {
+            eprintln!("skipping: {dat_path} not found");
+            return;
+        };
+        let (tx, rx) = mpsc::sync_channel(8192);
+        let input = InputState::shared();
+        let shared = SharedCursor::new();
+        let mut game = crate::GameState::new_with_input_and_cursor(
+            dat_file,
+            tx,
+            input.clone(),
+            CursorMode::Overlay,
+            shared.clone(),
+            std::sync::Arc::new(Recorder::new()),
+        );
+        game.cmd_args_memory |= 0x10;
+        game.start(true);
+
+        // Companion-style speaker: travelling (flags 0x40) and not standing in
+        // the room (no zoom anchor), so the dialogue opens un-zoomed and the
+        // cleanup takes the non-zoom travelling branch.
+        game.room_persons[0].flags |= 0x40;
+        game.character_screen_pos[0] = (0xffff, 0xffff);
+
+        game.call_restore_cursor();
+        game.common_dialogue(0);
+        assert!(game.talking_head.is_some(), "the conversation shows a head");
+        let clean = game.framebuffer_saved.clone();
+        let (hx0, hy0, hx1, hy1) = game.talking_head.as_ref().unwrap().rect;
+        let yoff = game.y_offset;
+
+        let one_pass = |game: &mut crate::GameState| {
+            game.ui_hud_companion_blink_task();
+            game.process_frame_tasks();
+            game.get_mouse_pos_etc();
+            let _ = game.redraw_mouse();
+            let handlers = game.active_mouse_handlers;
+            let _ = game.highlight_hovered_text_action_item();
+            (handlers.idle)(game);
+            let start = game.game_ticks();
+            game.sleep_ticks(start, 1);
+        };
+        for _ in 0..10 {
+            one_pass(&mut game);
+        }
+        while rx.try_recv().is_ok() {}
+
+        // Click STOP TALKING (verb-panel slot 3, y 183..191) through the real
+        // game-loop button branch.
+        input.lock().unwrap().on_mouse_move(120, 186);
+        one_pass(&mut game);
+        input.lock().unwrap().on_mouse_button(1);
+        game.get_mouse_pos_etc();
+        let ax = game.mouse_stuff();
+        let _ = game.redraw_mouse();
+        assert_eq!(ax & 0x0f, 5, "press edge expected");
+        game.call_restore_cursor();
+        game.game_loop_dispatch_lmb_press();
+        input.lock().unwrap().on_mouse_button(0);
+        game.get_mouse_pos_etc();
+        let _ = game.mouse_stuff();
+        let _ = game.redraw_mouse();
+        game.call_restore_cursor();
+        let handlers = game.active_mouse_handlers;
+        (handlers.release)(&mut game);
+
+        // Run well past the next idle-task tick: nothing may erase the head.
+        for _ in 0..60 {
+            one_pass(&mut game);
+        }
+
+        // Port note: the flattened element stack rebuilds the room records on
+        // pop (build_persons_in_room_records, whose seg000:3090 head runs
+        // reset_scene_lip_sync_state), so the TalkingHead struct is dropped
+        // and the idle animation freezes — DOS keeps its records on the stack
+        // and leaves the idle task running. The DOS-visible part is the
+        // pixels: the head image must stay on screen until a later redraw.
+        let mut last = None;
+        while let Ok((fb, _pal)) = rx.try_recv() {
+            last = Some(fb);
+        }
+        let last = last.expect("STOP TALKING publishes frames");
+        let mut diff = 0u32;
+        for y in hy0 as u16..hy1 as u16 {
+            for x in hx0 as u16..hx1 as u16 {
+                if last.get(x, y + yoff) != clean.get(x, y + yoff) {
+                    diff += 1;
+                }
+            }
+        }
+        assert!(
+            diff > 5000,
+            "the head must still be on screen after STOP TALKING, only {diff} pixels differ"
+        );
+    }
+
+    // In Overlay mode the published cursor state must settle shown and stay
+    // shown across conversation passes (head idle + lip-sync tasks running) —
+    // redraw_mouse publishes shown every pass, mirroring DOS's unconditional
+    // draw at seg000:dc5e.
+    #[test]
+    #[ignore = "needs assets/DUNE.DAT"]
+    fn overlay_cursor_state_during_conversation() {
+        let dat_path = concat!(env!("CARGO_MANIFEST_DIR"), "/../../assets/DUNE.DAT");
+        let Ok(dat_file) = DatFile::open(dat_path) else {
+            eprintln!("skipping: {dat_path} not found");
+            return;
+        };
+        let (tx, _rx) = mpsc::sync_channel(64);
+        let input = InputState::shared();
+        let shared = SharedCursor::new();
+        let mut game = crate::GameState::new_with_input_and_cursor(
+            dat_file,
+            tx,
+            input.clone(),
+            CursorMode::Overlay,
+            shared.clone(),
+            std::sync::Arc::new(Recorder::new()),
+        );
+        game.set_headless();
+        game.start(true);
+        input.lock().unwrap().on_mouse_move(160, 80);
+
+        // Click + conversation start.
+        game.call_restore_cursor();
+        game.common_dialogue(0);
+
+        // Emulate full game_loop passes (idle path, no clicks): frame tasks
+        // (head idle + voice lip sync), then the mouse pass, then the active
+        // screen's idle handler. Track published hidden-state transitions.
+        let mut last = shared.snapshot().hidden;
+        let mut transitions = Vec::new();
+        for pass in 0..400 {
+            game.ui_hud_companion_blink_task();
+            game.process_frame_tasks();
+            game.get_mouse_pos_etc();
+            let _ = game.redraw_mouse();
+            let h1 = shared.snapshot().hidden;
+            let handlers = game.active_mouse_handlers;
+            let _ = game.highlight_hovered_text_action_item();
+            (handlers.idle)(&mut game);
+            let h2 = shared.snapshot().hidden;
+            for h in [h1, h2] {
+                if h != last {
+                    transitions.push((pass, h));
+                    last = h;
+                }
+            }
+            let start = game.game_ticks();
+            game.sleep_ticks(start, 1);
+        }
+        eprintln!("transitions (pass, hidden): {transitions:?}");
+        eprintln!("final hidden: {}", shared.snapshot().hidden);
+        assert!(
+            !shared.snapshot().hidden,
+            "published cursor state must settle shown during the conversation"
+        );
+    }
+
+    // In Baked mode the cursor pixels must be present in the screen buffer at
+    // the end of every conversation pass, even with the pointer overlapping
+    // the talking head (restore_mouse_if_rect_intersects + the bracket-close
+    // publish keep the erase/redraw balanced) — and every frame PUBLISHED
+    // during the steady conversation must carry the cursor too
+    // (send_frame_to_display skips publishing while a rect bracket has the
+    // cursor lifted).
+    #[test]
+    #[ignore = "needs assets/DUNE.DAT"]
+    fn baked_cursor_survives_conversation_passes() {
+        let dat_path = concat!(env!("CARGO_MANIFEST_DIR"), "/../../assets/DUNE.DAT");
+        let Ok(dat_file) = DatFile::open(dat_path) else {
+            eprintln!("skipping: {dat_path} not found");
+            return;
+        };
+        let (tx, rx) = mpsc::sync_channel(8192);
+        let input = InputState::shared();
+        let shared = SharedCursor::new();
+        let mut game = crate::GameState::new_with_input_and_cursor(
+            dat_file,
+            tx,
+            input.clone(),
+            CursorMode::Baked,
+            shared.clone(),
+            std::sync::Arc::new(Recorder::new()),
+        );
+        // Not headless: the frame sink must receive the real publish stream.
+        // Music off, like set_headless (the MUSIC OFF cmd_args_memory bit).
+        game.cmd_args_memory |= 0x10;
+        game.start(true);
+        input.lock().unwrap().on_mouse_move(160, 80);
+
+        game.call_restore_cursor();
+        game.common_dialogue(0);
+
+        // Park the pointer in the middle of the talking head so its idle and
+        // lip-sync dirty rects overlap the cursor and the rect bracket
+        // (restore_mouse_if_rect_intersects) actually fires.
+        let (hx0, hy0, hx1, hy1) = game.talking_head.as_ref().unwrap().rect;
+        let (cx, cy) = (((hx0 + hx1) / 2) as u16, ((hy0 + hy1) / 2) as u16);
+        input.lock().unwrap().on_mouse_move(cx, cy);
+
+        // The arrow at (cx,cy): or_mask row 1 bit 14 paints (cx+1,cy+1) = 0x0f.
+        let cursor_pixel =
+            move |fb: &crate::FrameBuffer, yoff: u16| fb.get(cx + 1, cy + 1 + yoff) == 0x0f;
+        let yoff = game.y_offset;
+
+        let one_pass = |game: &mut crate::GameState| {
+            game.ui_hud_companion_blink_task();
+            game.process_frame_tasks();
+            game.get_mouse_pos_etc();
+            let _ = game.redraw_mouse();
+            let handlers = game.active_mouse_handlers;
+            let _ = game.highlight_hovered_text_action_item();
+            (handlers.idle)(game);
+            let start = game.game_ticks();
+            game.sleep_ticks(start, 1);
+        };
+
+        // Two warm-up passes let redraw_mouse heal the click hide; frames
+        // published up to here (conversation setup, fold) may legitimately
+        // lack the cursor.
+        one_pass(&mut game);
+        one_pass(&mut game);
+        while rx.try_recv().is_ok() {}
+
+        let mut published = 0;
+        let mut published_missing = 0;
+        let mut screen_missing = 0;
+        for _pass in 0..400 {
+            one_pass(&mut game);
+            if !cursor_pixel(&game.screen, game.y_offset) {
+                screen_missing += 1;
+            }
+            while let Ok((fb, _pal)) = rx.try_recv() {
+                published += 1;
+                if !cursor_pixel(&fb, yoff) {
+                    published_missing += 1;
+                }
+            }
+        }
+        eprintln!("published={published} missing_in_published={published_missing}");
+        assert_eq!(
+            screen_missing, 0,
+            "the baked cursor must be in the screen buffer after every pass"
+        );
+        assert!(published > 0, "the conversation must publish frames");
+        assert_eq!(
+            published_missing, 0,
+            "no published frame during the steady conversation may lack the cursor"
+        );
+    }
+}
+
 pub fn cursor_shape(id: CursorShapeId) -> &'static CursorShape {
     match id {
         CursorShapeId::Arrow => &CURSOR_ARROW,
@@ -389,14 +853,26 @@ impl GameState {
         let old_image = self.cursor_image.replace(new_image);
         // = seg000:dc3a xchg al,[cursor_hide_counter] — read it, then clear to 0.
         let hide = std::mem::take(&mut self.cursor_hide_counter);
+        // Port-only: consume a rect bracket left open across passes (DOS's
+        // travel_trail_stamp_last lifts without a balancing draw) — the
+        // unconditional draw below satisfies the owed re-show. DOS instead
+        // lets the next draw_mouse_cursor_if_needed anywhere burn the flag on
+        // an over-show; the port must clear it here because a negative flag
+        // also suppresses send_frame_to_display.
+        if self.mouse_cursor_restore_needed < 0 {
+            self.mouse_cursor_restore_needed = 0;
+        }
 
         if self.cursor_mode == CursorMode::Overlay {
-            // Tell the present thread what shape to draw and whether it's
-            // hidden; the freshest position is sampled there from
-            // `SharedInput` instead of being routed through the game tick.
+            // Tell the present thread what shape to draw; the freshest position
+            // is sampled there from `SharedInput` instead of being routed
+            // through the game tick. Published shown unconditionally: DOS
+            // always ends this routine with vga_draw_cursor (seg000:dc5e) — a
+            // negative hide counter (seg000:dc40 js) only skips the restore,
+            // never the draw — so after every pass the cursor is visible.
             self.shared_cursor.publish(CursorOverlay {
                 shape: new_image,
-                hidden: hide < 0,
+                hidden: false,
             });
             // Track the "drawn" position as if we had drawn it so any other
             // consumer of mouse_draw_pos_* sees consistent state.
@@ -465,7 +941,7 @@ impl GameState {
 
     // = seg000:dbec draw_mouse — show the cursor one nesting level, restoring it
     // once the counter returns to 0. The mirror of call_restore_cursor. Baked
-    // composites the cursor into the framebuffer; Overlay/System re-publishes
+    // composites the cursor into the framebuffer; Overlay re-publishes
     // the (now shown) state. No-op while composing offscreen.
     pub(crate) fn draw_mouse(&mut self) {
         if self.front_buffer_is_fb1() {
@@ -502,11 +978,65 @@ impl GameState {
         gfx::vga_draw_cursor(self, image, x, y);
     }
 
+    // = seg000:db74 restore_mouse_if_rect_intersects — lift the cursor only
+    // when `rect` overlaps the 16x16 cursor image as last drawn (mouse_draw_pos
+    // minus the shape's hotspot). An already-hidden cursor is left alone. On
+    // overlap, mouse_cursor_restore_needed goes negative so
+    // draw_mouse_cursor_if_needed knows a re-show is owed, and the hide falls
+    // through into call_restore_cursor (seg000:dbb2).
+    pub(crate) fn restore_mouse_if_rect_intersects(&mut self, rect: crate::Rect) {
+        // = seg000:db74 cmp [cursor_hide_counter],0; js ret.
+        if self.cursor_hide_counter < 0 {
+            return;
+        }
+        // = seg000:db7d..db8c the drawn cursor's top-left corner:
+        // mouse_draw_pos minus the hotspot of the current shape.
+        let shape = cursor_shape(self.cursor_image.unwrap_or(CursorShapeId::Arrow));
+        let x = self.mouse_draw_pos_x.wrapping_sub(shape.hotspot_x) as i16;
+        let y = self.mouse_draw_pos_y.wrapping_sub(shape.hotspot_y) as i16;
+        // = seg000:db90..dba7 the 16x16 overlap test against (x0,y0,x1,y1).
+        if x >= rect.x1 || y >= rect.y1 || x + 16 <= rect.x0 || y + 16 <= rect.y0 {
+            return;
+        }
+        // = seg000:dbae dec [mouse_cursor_restore_needed] — flag the pending
+        // re-show, then fall through into call_restore_cursor.
+        self.mouse_cursor_restore_needed = self.mouse_cursor_restore_needed.wrapping_sub(1);
+        self.call_restore_cursor();
+    }
+
+    // = seg000:db67 draw_mouse_cursor_if_needed — re-show the cursor only when
+    // restore_mouse_if_rect_intersects lifted it (the flag is negative);
+    // otherwise do nothing at all — no draw_mouse, no counter change.
+    pub(crate) fn draw_mouse_cursor_if_needed(&mut self) {
+        // = seg000:db67 cmp [mouse_cursor_restore_needed],0; jns ret.
+        if self.mouse_cursor_restore_needed >= 0 {
+            return;
+        }
+        // = seg000:db6e inc [mouse_cursor_restore_needed]; db72 jmp draw_mouse.
+        self.mouse_cursor_restore_needed += 1;
+        self.draw_mouse();
+    }
+
+    // = seg000:db67 draw_mouse_cursor_if_needed closing a bracket that
+    // presented mid-bracket. Port-only presentation care: DOS's re-draw lands
+    // straight on VGA and is instantly visible, but the port's present inside
+    // the bracket already published the frame with the cursor erased — so when
+    // the cursor really was lifted (Baked mode, cursor pixels live in the
+    // framebuffer), publish once more so the visible frame carries the
+    // re-drawn cursor instead of staying cursor-less until the next present.
+    pub(crate) fn draw_mouse_cursor_if_needed_then_present(&mut self) {
+        let lifted = self.mouse_cursor_restore_needed < 0;
+        self.draw_mouse_cursor_if_needed();
+        if lifted && self.cursor_mode == CursorMode::Baked && !self.front_buffer_is_fb1() {
+            self.send_frame_to_display();
+        }
+    }
+
     // Publish the overlay cursor's current shape and hidden state to the
     // present thread. call_restore_cursor / draw_mouse call it so a hide (or
     // re-show) driven by an interaction reaches the compositor at once, without
     // waiting for the next redraw_mouse — the present thread samples the live
-    // pointer position itself. Overlay/System only.
+    // pointer position itself. Overlay only.
     fn publish_overlay_cursor(&mut self) {
         let shape = self
             .cursor_image
