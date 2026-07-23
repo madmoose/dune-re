@@ -37,6 +37,22 @@ pub(crate) const fn rec(text_id: u16, handler: u16) -> CommandMenuRecord {
     CommandMenuRecord { text_id, handler }
 }
 
+/// = a seg001 command-menu record buffer as DOS lays it out: a leading
+/// priority word (low byte = the z-priority `screen_element_stack_insert`
+/// sorts on and `dismiss_stacked_overlays` drains by; high byte = the header
+/// skip byte, 0 for every menu) followed by the records and a trailing 0-word
+/// fence. The port stores the priority byte and the records; the skip byte
+/// and the fence are implicit in the Vec bounds. GameState owns one mutable
+/// buffer per menu, initialized from the static templates and patched in
+/// place exactly like DOS's compiled-in seg001 buffers.
+pub(crate) struct MenuBuffer {
+    /// = `[buf+0]` — the buffer's z-priority byte. Static in practice (DOS
+    /// never rewrites it), carried as data to match the DOS layout.
+    pub(crate) priority: u8,
+    /// = the records from `[buf+2]` up to the 0-word fence.
+    pub(crate) records: Vec<CommandMenuRecord>,
+}
+
 // = the seg001 command-record templates (seg001:21dc..221c), each a 4-byte
 // [text_id:u16, handler_ofs:u16]. build_room_command_records copies these into
 // the verb list, sometimes OR-ing a 0x4000 "greyed" bit into the text_id.
@@ -126,7 +142,7 @@ pub(crate) const fn grey_if(r: CommandMenuRecord, disabled: bool) -> CommandMenu
 /// a trailing 0-word terminator that the flat port models implicitly. Each row
 /// is the COMMAND.BIN string the text_id resolves to and its menu handler.
 #[rustfmt::skip]
-const MENU_PALACE_MIRROR_ROOM: [CommandMenuRecord; 5] = [
+pub(crate) const MENU_PALACE_MIRROR_ROOM: [CommandMenuRecord; 5] = [
     rec(0x00ba, 0x0e47), // RESTART GAME              menu_callback_choice_multiple_restart_game
     rec(0x00b4, 0xb29e), // LOAD GAME                 menu_callback_choice_mirror_room_load_game
     rec(0x00b3, 0xb28c), // SAVE GAME                 menu_callback_choice_mirror_room_save_game
@@ -185,6 +201,19 @@ pub(crate) const MENU_DONE: [CommandMenuRecord; 1] = [
     rec(0x00a1, 0xd2e2), // " Done"                  menu_callback_choice_exit_menu
 ];
 
+/// = seg001:1f7e menu_NPC_actions' compiled-in records (the EXE bytes at
+/// seg001:1f80..1f90): TALK TO ME (text 0x90, the value set_talk_to_me_verb_
+/// text later patches), the static COME WITH ME default in slot 1 (spliced
+/// per NPC by setup_npc_dialogue_menu before every use), " WHAT ? " and STOP
+/// TALKING.
+#[rustfmt::skip]
+pub(crate) const MENU_NPC_ACTIONS_INIT: [CommandMenuRecord; 4] = [
+    rec(0x0090, 0x9472), // TALK TO ME     menu_callback_choice_talk_to_me
+    rec(0x0091, 0x95e2), // COME WITH ME   menu_callback_choice_come_with_me
+    rec(0x0095, 0x9ed5), // " WHAT ? "     menu_callback_choice_what
+    rec(0x0094, 0xd2e2), // STOP TALKING   menu_callback_choice_exit_menu
+];
+
 /// = seg001:1f92 menu_go_towards_this_place — the fly-over divert menu
 /// install_pending_room_action_menu (loc_03551) stages when a passed location
 /// armed pending_room_action 3. DOS's leading priority word (0x00fc, the
@@ -192,7 +221,7 @@ pub(crate) const MENU_DONE: [CommandMenuRecord; 1] = [
 /// THIS PLACE just closes the menu (the divert travel is pre-armed in
 /// travel_scan_nearby_location); WHAT ? replays the companion's line.
 #[rustfmt::skip]
-const MENU_GO_TOWARDS_THIS_PLACE: [CommandMenuRecord; 2] = [
+pub(crate) const MENU_GO_TOWARDS_THIS_PLACE: [CommandMenuRecord; 2] = [
     rec(0x00ad, 0xd2e2), // GO TOWARDS THIS PLACE    menu_callback_choice_exit_menu
     rec(0x0095, 0x9ed5), // " WHAT ? "               menu_callback_choice_what
 ];
@@ -204,7 +233,7 @@ const MENU_GO_TOWARDS_THIS_PLACE: [CommandMenuRecord; 2] = [
 /// IGNORE WARNING closes the menu (the flight continues); WHAT ? replays the
 /// line.
 #[rustfmt::skip]
-const MENU_CHANGE_DESTINATION_IGNORE_WARNING: [CommandMenuRecord; 3] = [
+pub(crate) const MENU_CHANGE_DESTINATION_IGNORE_WARNING: [CommandMenuRecord; 3] = [
     rec(0x0058, 0x497a), // CHANGE DESTINATION       menu_callback_choice_change_destination
     rec(0x00ae, 0xd2e2), // IGNORE WARNING           menu_callback_choice_exit_menu
     rec(0x0095, 0x9ed5), // " WHAT ? "               menu_callback_choice_what
@@ -299,12 +328,15 @@ pub(crate) const ROOM_PERSON_TABLE_INIT: [RoomPerson; 16] = [
     rp(0x0202, 0x0080, 0x937e, 0x0f, 0x80),
 ];
 
-// = the active screen-element identities the ported click dispatch needs to
-// tell apart. DOS keeps a z-ordered stack of [record_buf_ptr, render_func] slots
-// (seg001:21da screen_element_stack_ptr / data_021da, room at the bottom, menus
-// and overlays on top) and get_active_screen_element (seg000:d41b) returns the
-// top buffer pointer; loc_0941d compares it against 0x20c2. The port models only
-// the two identities that path distinguishes.
+// = the screen-element identities, one per DOS menu record buffer. DOS keeps a
+// z-ordered stack of [record_buf_ptr, cleanup_func] slots (seg001:21be..21d6,
+// screen_element_stack_ptr, room at the bottom, menus and overlays on top);
+// get_active_screen_element (seg000:d41b) returns the top buffer pointer and
+// callers compare it against buffer addresses (e.g. loc_0941d against 0x20c2).
+// The port's enum value IS that pointer: GameState::menu_buffer resolves it to
+// the owned MenuBuffer, and the identity `==` compares mirror DOS's `cmp bp`.
+// The cleanup funcs are mapped from the identity by
+// screen_element_stack_pop_and_cleanup.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub(crate) enum ScreenElement {
     // = command_menu_buf (seg001:1f0e) — the room verb menu, the stack bottom.
@@ -339,30 +371,90 @@ pub(crate) enum ScreenElement {
     // main view (map_screen_open, seg000:430b) with its single Cancel verb.
     // Its cleanup func is map_screen_cleanup (seg000:4415).
     MapScreen,
+    // = menu_go_towards_this_place (seg001:1f92, priority byte 0xfc) — the
+    // fly-over divert menu install_pending_room_action_menu stages for
+    // pending_room_action 3. Staged with cleanup func menu_npc_actions_cleanup
+    // (seg000:355f).
+    GoTowardsThisPlace,
+    // = menu_change_destination_ignore_warning (seg001:1f9e, priority byte
+    // 0xf8) — the fly-over hostile-zone warning menu for pending_room_action 4.
+    // Staged with cleanup func menu_npc_actions_cleanup (seg000:3580).
+    ChangeDestinationIgnoreWarning,
 }
 
 impl ScreenElement {
-    // = the leading priority byte of each element's menu/overlay record buffer
-    // (`[buf]`, the z-stack key screen_element_stack_insert sorts on and
-    // dismiss_stacked_overlays reads to decide what to drain): command_menu_buf
-    // (seg001:1f0e) 0xff, menu_NPC_actions (1f7e) 0xfc, menu_mixer_panel (201a)
-    // 0xf8, menu_done (2012) 0xf8, menu_exit_game_confirmation (20b6) 0xf6,
-    // menu_globe_music (206a) 0xf6, menu_palace_mirror_room (20c2) 0xff. A low
-    // nibble of 0 or a value of 0xff marks a base/locked entry that the
-    // transient-overlay drain stops at.
-    pub(crate) fn priority_byte(self) -> u8 {
+    // = the leading priority byte each menu's static buffer is compiled with:
+    // command_menu_buf (seg001:1f0e) 0xff, menu_NPC_actions (1f7e) 0xfc,
+    // menu_go_towards_this_place (1f92) 0xfc, menu_change_destination_ignore_
+    // warning (1f9e) 0xf8, menu_mixer_panel (201a) 0xf8, menu_done (2012) 0xf8,
+    // menu_exit_game_confirmation (20b6) 0xf6, menu_globe_music (206a) 0xf6,
+    // menu_palace_mirror_room (20c2) 0xff, menu_multiple_cancel (212e) 0xf8.
+    // Used only to initialize the GameState MenuBuffers — at runtime the byte
+    // is read from the buffer, like DOS reads `[buf]`. A low nibble of 0 or a
+    // value of 0xff marks a base/locked entry the transient-overlay drain
+    // (dismiss_stacked_overlays) stops at.
+    pub(crate) const fn initial_priority(self) -> u8 {
         match self {
             ScreenElement::RoomCommandMenu | ScreenElement::LookAwayFromMirror => 0xff,
-            ScreenElement::NpcActionsMenu => 0xfc,
-            ScreenElement::MixerPanel | ScreenElement::PalacePlan | ScreenElement::MapScreen => {
-                0xf8
-            }
+            ScreenElement::NpcActionsMenu | ScreenElement::GoTowardsThisPlace => 0xfc,
+            ScreenElement::MixerPanel
+            | ScreenElement::PalacePlan
+            | ScreenElement::MapScreen
+            | ScreenElement::ChangeDestinationIgnoreWarning => 0xf8,
             ScreenElement::ExitGameConfirmation | ScreenElement::MusicCdOrderMenu => 0xf6,
         }
     }
 }
 
 impl GameState {
+    // = the port's `bp` dereference: resolve a screen-element identity to its
+    // owned menu record buffer (the seg001 buffer DOS points at).
+    pub(crate) fn menu_buffer(&self, e: ScreenElement) -> &MenuBuffer {
+        match e {
+            ScreenElement::RoomCommandMenu => &self.command_menu_buf,
+            ScreenElement::LookAwayFromMirror => &self.menu_palace_mirror_room,
+            ScreenElement::MixerPanel => &self.menu_mixer_panel,
+            ScreenElement::NpcActionsMenu => &self.menu_npc_actions,
+            ScreenElement::ExitGameConfirmation => &self.menu_exit_game_confirmation,
+            ScreenElement::MusicCdOrderMenu => &self.menu_globe_music,
+            ScreenElement::PalacePlan => &self.menu_done,
+            ScreenElement::MapScreen => &self.menu_multiple_cancel,
+            ScreenElement::GoTowardsThisPlace => &self.menu_go_towards_this_place,
+            ScreenElement::ChangeDestinationIgnoreWarning => {
+                &self.menu_change_destination_ignore_warning
+            }
+        }
+    }
+
+    pub(crate) fn menu_buffer_mut(&mut self, e: ScreenElement) -> &mut MenuBuffer {
+        match e {
+            ScreenElement::RoomCommandMenu => &mut self.command_menu_buf,
+            ScreenElement::LookAwayFromMirror => &mut self.menu_palace_mirror_room,
+            ScreenElement::MixerPanel => &mut self.menu_mixer_panel,
+            ScreenElement::NpcActionsMenu => &mut self.menu_npc_actions,
+            ScreenElement::ExitGameConfirmation => &mut self.menu_exit_game_confirmation,
+            ScreenElement::MusicCdOrderMenu => &mut self.menu_globe_music,
+            ScreenElement::PalacePlan => &mut self.menu_done,
+            ScreenElement::MapScreen => &mut self.menu_multiple_cancel,
+            ScreenElement::GoTowardsThisPlace => &mut self.menu_go_towards_this_place,
+            ScreenElement::ChangeDestinationIgnoreWarning => {
+                &mut self.menu_change_destination_ignore_warning
+            }
+        }
+    }
+
+    // = the stack top's record buffer — what DOS reads through the active bp
+    // (get_active_screen_element, seg000:d41b). The verb strip draws, the
+    // hover highlight and the slot dispatch all read the panel through this.
+    pub(crate) fn active_menu_records(&self) -> &[CommandMenuRecord] {
+        &self.menu_buffer(self.get_active_screen_element()).records
+    }
+
+    pub(crate) fn active_menu_records_mut(&mut self) -> &mut Vec<CommandMenuRecord> {
+        let e = self.get_active_screen_element();
+        &mut self.menu_buffer_mut(e).records
+    }
+
     // = seg000:2db1 draw_room_game_screen — present the full in-game room screen.
     // Entered from ui_present_room_screen (when pending_room_screen_request != 0)
     // and from several scene-change sites (seg000:0ecd/13de/1bcf/037aa/9450/b424).
@@ -546,11 +638,11 @@ impl GameState {
     // greyed, dispatch it (DOS `jmp bx`).
     pub(crate) fn dispatch_command_menu_slot(&mut self, slot: usize) {
         // = seg000:d454 read_command_menu_record_for_slot — the active screen
-        // element's record buffer = command_menu_records[slot]: the room verbs
-        // normally, or the mirror menu (MENU_PALACE_MIRROR_ROOM) while the LOOK
-        // AT MIRROR still is up. The "Look away from the mirror" row (slot 4,
-        // handler 0x0eb9) dispatches through dispatch_command_handler below.
-        let Some(rec) = self.command_menu_records.get(slot).copied() else {
+        // element's record buffer = the active buffer's [slot]: the room verbs
+        // normally, or menu_palace_mirror_room while the LOOK AT MIRROR still
+        // is up. The "Look away from the mirror" row (slot 4, handler 0x0eb9)
+        // dispatches through dispatch_command_handler below.
+        let Some(rec) = self.active_menu_records().get(slot).copied() else {
             return;
         };
         // = seg000:d448 or bx,bx; jz — no handler.
@@ -748,12 +840,10 @@ impl GameState {
         //   so the submenu repaint stages into fb1 for the fold.
         self.screen_overlay_request_transition();
         // = seg000:d326 call screen_element_stack_push — install the confirmation
-        //   submenu (bp) and repaint it (cl = 0xff, no slot pre-highlighted). Its
-        //   nullsub_00f66 cleanup is modelled by the ExitGameConfirmation identity.
-        self.screen_element_stack_push(
-            ScreenElement::ExitGameConfirmation,
-            MENU_EXIT_GAME_CONFIRMATION.to_vec(),
-        );
+        //   submenu (bp = its static buffer) and repaint it (cl = 0xff, no slot
+        //   pre-highlighted). Its nullsub_00f66 cleanup is modelled by the
+        //   ExitGameConfirmation identity.
+        self.screen_element_stack_push(ScreenElement::ExitGameConfirmation);
         // = seg000:d329 call play_pending_panel_fold — fold the submenu onto screen.
         self.play_pending_panel_fold();
         // = seg000:d32c jmp loc_0d410 -> highlight_hovered_text_action_item — light
@@ -781,7 +871,11 @@ impl GameState {
             // = loc_0a541 settings_ui_cleanup — the mixer panel's cleanup.
             ScreenElement::MixerPanel => self.settings_ui_cleanup(),
             // = seg000:97cf menu_npc_actions_cleanup — end the conversation.
-            ScreenElement::NpcActionsMenu => self.menu_npc_actions_cleanup(),
+            // The fly-over submenus are staged with the same cleanup func
+            // (seg000:355f/3580 bx = menu_npc_actions_cleanup).
+            ScreenElement::NpcActionsMenu
+            | ScreenElement::GoTowardsThisPlace
+            | ScreenElement::ChangeDestinationIgnoreWarning => self.menu_npc_actions_cleanup(),
             // = seg000:19fc loc_019fc — restore the room view the PALACE PLAN
             //   overlay covered.
             ScreenElement::PalacePlan => self.palace_plan_cleanup(),
@@ -799,29 +893,12 @@ impl GameState {
         }
         self.screen_element_stack.pop();
 
-        // = seg000:d30e bp = [si]; cl = 0xff; call draw_command_menu — repaint the
-        //   now-active menu. DOS keeps each element's record buffer on its stack;
-        //   the flattened port dropped the revealed element's records on push, so
-        //   rebuild them from its identity. With in_transition armed above,
-        //   redraw_active_command_menu paints into fb1 for the fold.
-        match self.get_active_screen_element() {
-            ScreenElement::RoomCommandMenu => {
-                self.build_room_command_records();
-                if self.game_screen_mode_flags == 0 {
-                    self.build_persons_in_room_records();
-                }
-            }
-            // The mixer panel's command strip is its music menu; rebuild it (with
-            // the per-music-state greying) when an EXIT GAME confirmation pops back.
-            ScreenElement::MixerPanel => self.settings_ui_update_music_playlist_flags(),
-            // The mirror still's verb menu is the fixed mirror record set.
-            ScreenElement::LookAwayFromMirror => {
-                self.command_menu_records = MENU_PALACE_MIRROR_ROOM.to_vec();
-            }
-            // TODO: revealing NpcActionsMenu (a dialogue with an overlay popped off
-            //   it) needs the speaker context to rebuild its verbs; not modelled.
-            _ => {}
-        }
+        // = seg000:d30e bp = [si]; cl = 0xff; call draw_command_menu — repaint
+        //   the now-active menu straight from its still-intact record buffer.
+        //   A pop is a pure reveal: nothing is rebuilt (DOS keeps every menu's
+        //   records alive in its static seg001 buffer; the port's owned
+        //   MenuBuffers give the same guarantee). With in_transition armed
+        //   above, redraw_active_command_menu paints into fb1 for the fold.
         self.redraw_active_command_menu();
     }
 
@@ -957,6 +1034,14 @@ impl GameState {
     // screen_element_stack_pop_and_cleanup after the cleanup returns and pops back
     // to RoomCommandMenu, so they are not duplicated here.
     fn menu_npc_actions_redraw_room(&mut self) {
+        // = seg000:9879 call build_room_command_records; 987c..9883 call
+        //   build_persons_in_room_records unless a map/book mode is up — the
+        //   room verb list reflects the post-conversation state (a joined or
+        //   dismissed companion changes the person verbs).
+        self.build_room_command_records();
+        if self.game_screen_mode_flags == 0 {
+            self.build_persons_in_room_records();
+        }
         // = seg000:9886 call draw_room_scene.
         self.draw_room_scene();
         // = seg000:9889 call copy_active_framebuffer_to_framebuffer_2.
@@ -1052,10 +1137,7 @@ impl GameState {
         //   look-away cleanup func, modelled here by the ScreenElement identity.
         //   look_away_from_mirror -> draw_room_game_screen rebuilds the room
         //   verbs when the still is dismissed.
-        self.screen_element_stack_push(
-            ScreenElement::LookAwayFromMirror,
-            MENU_PALACE_MIRROR_ROOM.to_vec(),
-        );
+        self.screen_element_stack_push(ScreenElement::LookAwayFromMirror);
     }
 
     // = seg000:941d room_game_area_click — the game-area hotspot (ui_elements[20])
@@ -1273,7 +1355,7 @@ impl GameState {
     fn set_command_menu_origin(&mut self) {}
 
     // = seg000:2efb build_room_command_records — assemble the verb-menu record
-    // list for the current room into command_menu_records (= the seg001:1f0e
+    // list for the current room into command_menu_buf (the seg001:1f0e
     // buffer, whose leading skip byte the port models implicitly as empty). The
     // records come from the seg001 command-record templates (21dc..221c), gated
     // by the room type (location_appearance low byte 0x80 = special room),
@@ -1381,7 +1463,9 @@ impl GameState {
             recs.push(CMD_MIXER_PANEL);
         }
 
-        self.command_menu_records = recs;
+        // = the seg000:2efd..2ff9 stores land in command_menu_buf (seg001:1f0e)
+        // regardless of what is stacked above it.
+        self.command_menu_buf.records = recs;
     }
 
     // = seg000:1ae0 get_ingame_time_of_day — the time-of-day phase, game_time & 0xf.
@@ -1467,34 +1551,33 @@ impl GameState {
     // (cf. get_active_screen_element and lib.rs): it pushes the element identity,
     // swaps in its records, and repaints. cl=0xff (no slot pre-highlighted) is
     // implicit in redraw_active_command_menu starting from "nothing hovered".
-    pub(crate) fn screen_element_stack_push(
-        &mut self,
-        element: ScreenElement,
-        records: Vec<CommandMenuRecord>,
-    ) {
-        // = seg000:d343 `cmp al,[di]; jz loc_0d368` — an element whose priority
-        // byte equals the current top's REPLACES the top slot in place instead
-        // of deepening the stack. This is how a mid-dialogue verb-panel rebuild
-        // (setup_npc_dialogue_menu after the chief's troop rally) swaps the
-        // WORK FOR ME panel for the Fremen-2 one without stacking a second
-        // NpcActionsMenu — one STOP TALKING still closes the dialogue. The
-        // 0xff base/locked class (room menu, mirror overlay) is excluded: the
-        // flattened port keeps the room base on the stack and pops the mirror
-        // overlay explicitly (see the 0x0eb9 handler) where DOS really does
-        // replace its room slot. (The d349 branch that pops stacked
-        // lower-z entries before inserting is not modelled; no port flow
-        // reaches it.)
-        let replace = element.priority_byte() != 0xff
+    pub(crate) fn screen_element_stack_push(&mut self, element: ScreenElement) {
+        // The caller has already staged `element`'s record buffer (DOS builds
+        // or patches the static buffer, then inserts its pointer).
+        //
+        // = seg000:d343 `cmp al,[di]; jz loc_0d368` — an element whose buffer's
+        // priority byte (`[buf]`) equals the current top's REPLACES the top
+        // slot in place instead of deepening the stack. This is how a
+        // mid-dialogue verb-panel rebuild (setup_npc_dialogue_menu after the
+        // chief's troop rally) swaps the WORK FOR ME panel for the Fremen-2
+        // one without stacking a second NpcActionsMenu — one STOP TALKING
+        // still closes the dialogue. The 0xff base/locked class (room menu,
+        // mirror overlay) is excluded: the flattened port keeps the room base
+        // on the stack and pops the mirror overlay explicitly (see the 0x0eb9
+        // handler) where DOS really does replace its room slot. (The d349
+        // branch that pops stacked lower-z entries before inserting is not
+        // modelled; no port flow reaches it.)
+        let priority = self.menu_buffer(element).priority;
+        let replace = priority != 0xff
             && self
                 .screen_element_stack
                 .last()
-                .is_some_and(|top| top.priority_byte() == element.priority_byte());
+                .is_some_and(|&top| self.menu_buffer(top).priority == priority);
         if replace {
             *self.screen_element_stack.last_mut().unwrap() = element;
         } else {
             self.screen_element_stack.push(element);
         }
-        self.command_menu_records = records;
         self.redraw_active_command_menu();
     }
 
@@ -1547,22 +1630,12 @@ impl GameState {
                 rec(0x91, 0x95e2)
             }
         };
-        // = seg000:9111 menu_NPC_actions (seg001:1f7e) with the dynamic verb
-        // spliced into slot 1 (DOS overwrites [bp+6]/[bp+8] of the static menu).
-        // Its leading flags word 0xfc is the priority byte the flattened
-        // screen-element stack drops.
-        let records = vec![
-            // = seg001:1f80 TALK TO ME (menu_callback_choice_talk_to_me). The
-            // text id is the template value set_talk_to_me_verb_text patches:
-            // 0x90 ('>>>> TALK TO ME <<<<') while a voice plays, 0x9f
-            // ('" TALK TO ME "') once it stops.
-            rec(self.menu_npc_actions_talk_text_id, 0x9472),
-            dynamic,
-            // = seg001:1f88 " WHAT ? " (text 0x95, handler menu_callback_choice_what).
-            rec(0x95, 0x9ed5),
-            // = seg001:1f8c "STOP TALKING" (text 0x94, menu_callback_choice_exit_menu).
-            rec(0x94, 0xd2e2),
-        ];
+        // = seg000:9111..9118 splice the dynamic verb into menu_NPC_actions
+        // slot 1 (DOS overwrites [bp+6]/[bp+8] of the static buffer). The other
+        // records keep their buffer values: record 0's TALK TO ME text is
+        // whatever set_talk_to_me_verb_text last patched (seg001:1f80), and
+        // " WHAT ? " / STOP TALKING are the compiled-in entries.
+        self.menu_npc_actions.records[1] = dynamic;
         // = seg000:911a call screen_overlay_request_transition — arm the in-transition flag so the verbs
         // stage in fb1 (draw_command_menu_item routes there when in_transition > 0).
         // The pending fold (play_pending_panel_fold / play_pending_panel_fold) then reveals the
@@ -1571,7 +1644,7 @@ impl GameState {
         // = seg000:911d bx = menu_npc_actions_cleanup (the menu's render/cleanup func); 9120 jmp
         // screen_element_stack_push. With in_transition armed, redraw_active_command_
         // menu paints the verbs into fb1, not the visible screen.
-        self.screen_element_stack_push(ScreenElement::NpcActionsMenu, records);
+        self.screen_element_stack_push(ScreenElement::NpcActionsMenu);
     }
 
     // = seg000:d316 screen_overlay_request_transition — when no HNM movie is playing, set the in-transition
@@ -1583,7 +1656,7 @@ impl GameState {
     }
 
     // = seg000:d397 redraw_active_command_menu — paint the active verb menu
-    // (command_menu_records) into HUD rows 7..11. Up to five slots are drawn; a
+    // (the active element's record buffer) into HUD rows 7..11. Up to five slots are drawn; a
     // sixth-or-later verb collapses into the 0xa0 "more" arrow in slot 4, and any
     // slots past the last record are filled blank (clearing stale verbs). Falls
     // into highlight_hovered_text_action_item (loc_0d410) so the slot under the
@@ -1593,7 +1666,11 @@ impl GameState {
         // discard any prior hover so the highlight repaint that follows runs
         // against a fresh "nothing highlighted" baseline.
         self.index_of_last_hovered_action_item = 0xff;
-        let n = self.command_menu_records.len();
+        // Snapshot the active buffer's records: the per-slot draw below needs
+        // `&mut self`, so the walk reads a local copy (a handful of 4-byte
+        // records).
+        let recs = self.active_menu_records().to_vec();
+        let n = recs.len();
         // = seg000:d3b5 walk the records, one per slot (cl = 0..4).
         for slot in 0..5u8 {
             let i = slot as usize;
@@ -1606,7 +1683,7 @@ impl GameState {
             } else if slot == 4 && n > 5 {
                 0xa0
             } else {
-                self.command_menu_records[i].text_id
+                recs[i].text_id
             };
             self.draw_command_menu_item(slot, text_id);
         }
@@ -1636,7 +1713,7 @@ impl GameState {
         // = seg000:d3ac data_0dce8 = the slot count painted by the preceding
         // redraw — at most five record slots, plus one for the "more" arrow
         // when n > 5 (slot 4 already holds it; the count stays at five).
-        let n = self.command_menu_records.len();
+        let n = self.active_menu_records().len();
         let slot_count = n.min(5) as u8;
         if slot_count == 0 {
             return false;
@@ -1699,13 +1776,14 @@ impl GameState {
     // originally held (including the 0xa0 "more" arrow at slot 4).
     fn slot_text_id(&self, slot: u8) -> u16 {
         let i = slot as usize;
-        let n = self.command_menu_records.len();
+        let recs = self.active_menu_records();
+        let n = recs.len();
         if i >= n {
             0
         } else if slot == 4 && n > 5 {
             0xa0
         } else {
-            self.command_menu_records[i].text_id
+            recs[i].text_id
         }
     }
 
@@ -1749,32 +1827,21 @@ impl GameState {
     // lip_sync_stop seg000:a7b1). When the id changed and the NPC menu is the
     // active screen element, redraw verb slot 0 in place.
     pub(crate) fn set_talk_to_me_verb_text(&mut self, text_id: u16) {
-        // = seg000:d62a cmp [si+2],ax; mov [si+2],ax — patch the menu template
-        // (DOS patches the static record the active stack entry points at; the
-        // flattened port keeps the template value in menu_npc_actions_talk_
-        // text_id and the active element's live copy in command_menu_records).
-        let changed = self.menu_npc_actions_talk_text_id != text_id;
-        self.menu_npc_actions_talk_text_id = text_id;
+        // = seg000:d62a cmp [si+2],ax; mov [si+2],ax — patch menu_NPC_actions
+        // record 0's text id in place (seg001:1f80). The buffer is the single
+        // source of truth: the next setup_npc_dialogue_menu reuses whatever
+        // was last patched, exactly like DOS's static buffer.
+        let changed = self.menu_npc_actions.records[0].text_id != text_id;
+        self.menu_npc_actions.records[0].text_id = text_id;
         // = seg000:d630 jz — unchanged; d632 cmp bp,si; jnz — repaint the live
         // slot 0 only when the active command menu is specifically
-        // menu_NPC_actions (the dialogue verb panel whose slot 0 is TALK TO ME).
-        // DOS compares the active buffer pointer against menu_NPC_actions; the
-        // fly-over submenus (menu_go_towards_this_place /
-        // menu_change_destination_ignore_warning) share its NpcActionsMenu
-        // priority class but stage a different slot-0 verb (handler !=
-        // menu_callback_choice_talk_to_me 0x9472), so DOS's bp != si skips them
-        // and their "GO TOWARDS THIS PLACE" text survives.
-        let is_npc_dialogue_menu = self.get_active_screen_element()
-            == ScreenElement::NpcActionsMenu
-            && self
-                .command_menu_records
-                .first()
-                .is_some_and(|rec0| rec0.handler == 0x9472);
+        // menu_NPC_actions. The fly-over submenus (menu_go_towards_this_place /
+        // menu_change_destination_ignore_warning) are separate buffers and
+        // identities, so DOS's bp != si is the identity compare.
+        let is_npc_dialogue_menu =
+            self.get_active_screen_element() == ScreenElement::NpcActionsMenu;
         if !changed || !is_npc_dialogue_menu {
             return;
-        }
-        if let Some(rec0) = self.command_menu_records.first_mut() {
-            rec0.text_id = text_id;
         }
         // = seg000:d636 call call_restore_cursor — erase the software cursor
         // before repainting the slot under it.
@@ -1973,7 +2040,7 @@ impl GameState {
     // twice: first pass picks up entries with flags bit 0x40 clear (template
     // loc_030b9), second pass the ones with it set (template loc_03120). The
     // DOS routine advances di past the existing list before appending; the port
-    // keeps command_menu_records as a Vec and appends.
+    // keeps command_menu_buf.records as a Vec and appends.
     //
     pub(crate) fn build_persons_in_room_records(&mut self) {
         // = seg000:3090 call reset_scene_lip_sync_state.
@@ -1989,7 +2056,7 @@ impl GameState {
         // = seg000:3093 call init_room_persons.
         self.init_room_persons();
         // = seg000:3096..30a0 find the terminator of the existing command list.
-        // The port's command_menu_records is a Vec, so appending past the end
+        // The port's command_menu_buf.records is a Vec, so appending past the end
         // is implicit.
         // = seg000:30a1 persons_in_room = 0.
         self.persons_in_room = 0;
@@ -2096,7 +2163,7 @@ impl GameState {
             3 => {
                 // = seg000:355c bp = menu_go_towards_this_place; 355f bx =
                 //   menu_npc_actions_cleanup; 3562 call loc_0d323.
-                self.stage_command_submenu(MENU_GO_TOWARDS_THIS_PLACE.to_vec());
+                self.stage_command_submenu(ScreenElement::GoTowardsThisPlace);
                 // = seg000:3565/356b ui_hud_elements[18]/[19].flags = 0 — drop the
                 //   HUD head-ornament and balloon elements (the port handles those
                 //   HUD elements structurally; no flags field to write).
@@ -2107,10 +2174,10 @@ impl GameState {
             4 => {
                 // = seg000:357c and byte [menu_change_destination_ignore_warning
                 //   + 0bh], 0bfh — clear the greyed (0x4000) bit on the WHAT ?
-                //   entry's text id. The port stages a fresh (never-greyed) copy
-                //   of the record set, so this is a no-op here.
+                //   entry's text id in the buffer.
+                self.menu_change_destination_ignore_warning.records[2].text_id &= !CMD_GREY;
                 // = seg000:3580 bx = menu_npc_actions_cleanup; 3583 call loc_0d323.
-                self.stage_command_submenu(MENU_CHANGE_DESTINATION_IGNORE_WARNING.to_vec());
+                self.stage_command_submenu(ScreenElement::ChangeDestinationIgnoreWarning);
                 // = seg000:3586/358c ui_hud_elements[18]/[19].flags = 0 (as above).
                 // = seg000:3592 jmp rebuild_and_draw_room_nav_panel — rebuild the
                 //   bottom-right nav/compass HUD for the warning menu context.
@@ -2142,18 +2209,17 @@ impl GameState {
         }
     }
 
-    // = seg000:d323 loc_0d323 — stage a submenu (DOS bp = record buffer) with its
-    // render/cleanup func (DOS bx) and reveal it with the panel fold: arm the fb1
-    // transition, push the element, fold it in, then light the slot under the
-    // cursor. Both fly-over menus carry the menu_npc_actions_cleanup cleanup, so
-    // they push as NpcActionsMenu (menu_go_towards_this_place shares its 0xfc
-    // priority; menu_change_destination_ignore_warning's DOS 0xf8 priority only
-    // matters to the unmodelled deep-stack replace/pop, so it is folded in here).
-    fn stage_command_submenu(&mut self, records: Vec<CommandMenuRecord>) {
+    // = seg000:d323 loc_0d323 — stage a submenu (DOS bp = record buffer, here
+    // the element identity resolving to its owned buffer) with its
+    // render/cleanup func (DOS bx, mapped from the identity by
+    // screen_element_stack_pop_and_cleanup) and reveal it with the panel fold:
+    // arm the fb1 transition, push the element, fold it in, then light the
+    // slot under the cursor.
+    fn stage_command_submenu(&mut self, element: ScreenElement) {
         // = seg000:d323 call screen_overlay_request_transition — stage into fb1.
         self.screen_overlay_request_transition();
         // = seg000:d326 call screen_element_stack_push (bp menu, bx cleanup).
-        self.screen_element_stack_push(ScreenElement::NpcActionsMenu, records);
+        self.screen_element_stack_push(element);
         // = seg000:d329 call play_pending_panel_fold — reveal with the fold.
         self.play_pending_panel_fold();
         // = seg000:d32c jmp loc_0d410 -> highlight_hovered_text_action_item —
@@ -2212,7 +2278,7 @@ impl GameState {
         // = seg000:30d5..30da persons_in_room |= 1 << cl.
         self.persons_in_room |= 1u16 << cl;
         // = seg000:30de..30e1 ax = [si+4] (= entry.handler); stosw.
-        self.command_menu_records.push(CommandMenuRecord {
+        self.command_menu_buf.records.push(CommandMenuRecord {
             text_id,
             handler: entry.handler,
         });
@@ -2231,7 +2297,7 @@ impl GameState {
         //   text_ids 0x88, 0x89, …; each shares entry.handler.
         let base_handler = entry.handler;
         for k in 0..chained {
-            self.command_menu_records.push(CommandMenuRecord {
+            self.command_menu_buf.records.push(CommandMenuRecord {
                 text_id: 0x88 + k as u16,
                 handler: base_handler,
             });
@@ -2249,7 +2315,7 @@ impl GameState {
         //   di was at the end of the just-pushed run, so this lands on a
         //   record's text_id slot some signed number of 4-byte records away.
         //   Within the body's run of `data_0476a` records (indices
-        //   base..base+data_0476a-1 in command_menu_records), DOS lands on
+        //   base..base+data_0476a-1 in command_menu_buf.records), DOS lands on
         //   index base + (data_0476b - 1). Skip if that falls outside the run
         //   — DOS would silently corrupt adjacent memory.
         let run_len = self.data_0476a as usize;
@@ -2257,9 +2323,9 @@ impl GameState {
         if target_within_run >= run_len {
             return;
         }
-        let base = self.command_menu_records.len() - run_len;
+        let base = self.command_menu_buf.records.len() - run_len;
         // = seg000:311a mov word ptr [di], 0x8f — patch the text_id.
-        self.command_menu_records[base + target_within_run].text_id = 0x8f;
+        self.command_menu_buf.records[base + target_within_run].text_id = 0x8f;
     }
 
     // = seg000:3127 init_room_persons — reset the scene's dynamic person slots
@@ -2815,15 +2881,15 @@ mod tests {
     // the transient overlays (0xfc/0xf8/0xf6) are torn down. Pure (no assets).
     #[test]
     fn screen_element_priority_bytes_gate_the_drain() {
-        assert_eq!(ScreenElement::RoomCommandMenu.priority_byte(), 0xff);
-        assert_eq!(ScreenElement::LookAwayFromMirror.priority_byte(), 0xff);
-        assert_eq!(ScreenElement::NpcActionsMenu.priority_byte(), 0xfc);
-        assert_eq!(ScreenElement::MixerPanel.priority_byte(), 0xf8);
-        assert_eq!(ScreenElement::PalacePlan.priority_byte(), 0xf8);
-        assert_eq!(ScreenElement::ExitGameConfirmation.priority_byte(), 0xf6);
+        assert_eq!(ScreenElement::RoomCommandMenu.initial_priority(), 0xff);
+        assert_eq!(ScreenElement::LookAwayFromMirror.initial_priority(), 0xff);
+        assert_eq!(ScreenElement::NpcActionsMenu.initial_priority(), 0xfc);
+        assert_eq!(ScreenElement::MixerPanel.initial_priority(), 0xf8);
+        assert_eq!(ScreenElement::PalacePlan.initial_priority(), 0xf8);
+        assert_eq!(ScreenElement::ExitGameConfirmation.initial_priority(), 0xf6);
 
         let drained = |e: ScreenElement| {
-            let p = e.priority_byte();
+            let p = e.initial_priority();
             p != 0xff && p & 0x0f != 0
         };
         // Stops the drain (base / locked).
@@ -2871,7 +2937,7 @@ mod tests {
 
         // His verb (text_id = 0x78 + person index 0) is in the command menu.
         let slot = game
-            .command_menu_records
+            .active_menu_records()
             .iter()
             .position(|r| r.text_id == 0x78)
             .expect("Duke Leto verb (text_id 0x78) not in the command menu");
@@ -3374,7 +3440,7 @@ mod tests {
             "dialogue verb panel should be on top of the screen-element stack"
         );
         let verbs: Vec<u16> = game
-            .command_menu_records
+            .active_menu_records()
             .iter()
             .map(|r| r.text_id)
             .collect();
@@ -3424,8 +3490,8 @@ mod tests {
         game.start(true);
 
         game.common_dialogue(0x0); // Duke Leto; slot 1 offers COME WITH ME.
-        assert_eq!(game.command_menu_records[1].text_id, 0x91);
-        assert_eq!(game.command_menu_records[1].handler, 0x95e2);
+        assert_eq!(game.active_menu_records()[1].text_id, 0x91);
+        assert_eq!(game.active_menu_records()[1].handler, 0x95e2);
 
         // Click COME WITH ME. Leto's topic-5 record selects his refusal line:
         // condition 32 `(byte[1b] == 0) |. (rand_bits & 4)` holds on the first
@@ -3444,7 +3510,11 @@ mod tests {
             "the refusal drops the gate"
         );
         assert_eq!(game.persons_travelling_with & 1, 0, "Leto must not join");
-        assert_eq!(game.command_menu_records[1].text_id, 0x91, "verb unchanged");
+        assert_eq!(
+            game.active_menu_records()[1].text_id,
+            0x91,
+            "verb unchanged"
+        );
 
         // Lady Jessica (person 1) accepts in game phases 6..8 (her topic-5
         // condition 96, `(game_phase == 0x51) |. (game_phase - 6 < 3)` — the
@@ -3544,8 +3614,8 @@ mod tests {
         // The next dialogue menu build offers STAY HERE in slot 1
         // (setup_npc_dialogue_menu, seg000:9108..910e).
         game.setup_npc_dialogue_menu(1);
-        assert_eq!(game.command_menu_records[1].text_id, 0x92);
-        assert_eq!(game.command_menu_records[1].handler, 0x9533);
+        assert_eq!(game.active_menu_records()[1].text_id, 0x92);
+        assert_eq!(game.active_menu_records()[1].handler, 0x9533);
 
         // Click STAY HERE: the travelling state is cleared again.
         // time_dismissed stays 0: the debounce reads time_joined (= game_time),
@@ -3561,7 +3631,7 @@ mod tests {
 
         // ...and the verb is COME WITH ME once more.
         game.setup_npc_dialogue_menu(1);
-        assert_eq!(game.command_menu_records[1].text_id, 0x91);
+        assert_eq!(game.active_menu_records()[1].text_id, 0x91);
 
         // Closing the dialogue after STAY HERE vacates the HUD slot: the
         // portrait dialogue never zoomed (room_render_flags bit 7 clear), so the
@@ -3832,13 +3902,15 @@ mod tests {
         game.travel_no_location_dest = 0;
         game.game_phase = 0;
         game.build_room_command_records();
-        assert_eq!(game.command_menu_records.len(), 2);
+        assert_eq!(game.active_menu_records().len(), 2);
         assert_eq!(
-            game.command_menu_records[0].handler, 0x4ffb,
+            game.active_menu_records()[0].handler,
+            0x4ffb,
             "SKIP TO DESTINATION"
         );
         assert_eq!(
-            game.command_menu_records[1].handler, 0x497a,
+            game.active_menu_records()[1].handler,
+            0x497a,
             "CHANGE DESTINATION"
         );
 
@@ -3848,16 +3920,18 @@ mod tests {
         game.game_phase = 0x20;
         game.build_room_command_records();
         assert_eq!(
-            game.command_menu_records.len(),
+            game.active_menu_records().len(),
             2,
             "no TOWARDS NEAREST PLACE yet"
         );
         assert_eq!(
-            game.command_menu_records[0].handler, 0x50a5,
+            game.active_menu_records()[0].handler,
+            0x50a5,
             "BACK TO STARTING POINT"
         );
         assert_eq!(
-            game.command_menu_records[1].handler, 0x497a,
+            game.active_menu_records()[1].handler,
+            0x497a,
             "CHANGE DESTINATION"
         );
 
@@ -3865,17 +3939,20 @@ mod tests {
         // NEAREST PLACE, then CHANGE DESTINATION.
         game.game_phase = 0x32;
         game.build_room_command_records();
-        assert_eq!(game.command_menu_records.len(), 3);
+        assert_eq!(game.active_menu_records().len(), 3);
         assert_eq!(
-            game.command_menu_records[0].handler, 0x50a5,
+            game.active_menu_records()[0].handler,
+            0x50a5,
             "BACK TO STARTING POINT"
         );
         assert_eq!(
-            game.command_menu_records[1].handler, 0x50c4,
+            game.active_menu_records()[1].handler,
+            0x50c4,
             "TOWARDS NEAREST PLACE"
         );
         assert_eq!(
-            game.command_menu_records[2].handler, 0x497a,
+            game.active_menu_records()[2].handler,
+            0x497a,
             "CHANGE DESTINATION"
         );
     }
@@ -4096,7 +4173,7 @@ mod tests {
         assert_ne!(game.persons_in_room & (1 << 14), 0, "chief in the room");
         assert_ne!(game.persons_in_room & (1 << 4), 0, "Gurney in the room");
         let chief = game
-            .command_menu_records
+            .active_menu_records()
             .iter()
             .find(|r| r.text_id == 0x78 + 14)
             .expect("the chief's &Person verb");
@@ -4114,8 +4191,8 @@ mod tests {
         assert!(game.talking_head.is_some(), "the chief's talking head");
         // The dialogue verb panel's dynamic slot is the chief's COME WITH ME
         // (person 0x0e: text 0x96, handler seg000:95c1).
-        assert_eq!(game.command_menu_records[1].text_id, 0x96);
-        assert_eq!(game.command_menu_records[1].handler, 0x95c1);
+        assert_eq!(game.active_menu_records()[1].text_id, 0x96);
+        assert_eq!(game.active_menu_records()[1].handler, 0x95c1);
 
         // COME WITH ME: the charisma check passes and the troop is rallied —
         // occupation becomes "rallied, awaiting orders" (2), the rally count
@@ -4186,7 +4263,7 @@ mod tests {
 
         // Talk to him: FRM1 with the variant-2 expression.
         let chief = game
-            .command_menu_records
+            .active_menu_records()
             .iter()
             .find(|r| r.text_id == 0x78 + 14)
             .expect("the chief's &Person verb");
@@ -4534,7 +4611,8 @@ we might make in the deep desert of Arrakis where the great worms roam";
         );
         // = seg000:a757 mark_talk_to_me_verb_talking ran as the voice started.
         assert_eq!(
-            game.command_menu_records[0].text_id, 0x90,
+            game.active_menu_records()[0].text_id,
+            0x90,
             "the talking variant while the voice plays"
         );
 
@@ -4544,13 +4622,15 @@ we might make in the deep desert of Arrakis where the great worms roam";
         game.tick_talking_head_voc();
         assert!(!game.talking_head.as_ref().unwrap().speaking);
 
-        // = seg000:d61d..d646 — slot 0 flipped in place, and the template
-        // (seg001:1f80) carries the idle text for the next panel build.
+        // = seg000:d61d..d646 — slot 0 flipped in place in the menu_NPC_actions
+        // buffer (seg001:1f80), which also carries the idle text into the next
+        // conversation's panel.
         assert_eq!(
-            game.command_menu_records[0].text_id, 0x9f,
+            game.active_menu_records()[0].text_id,
+            0x9f,
             "the quoted idle variant once the voice ends"
         );
-        assert_eq!(game.menu_npc_actions_talk_text_id, 0x9f);
+        assert_eq!(game.menu_npc_actions.records[0].text_id, 0x9f);
 
         // = seg000:9ed5 menu_callback_choice_what — the " WHAT ? " verb (slot
         // 2, text 0x95) replays the drained line: current_subtitle_id is
@@ -4565,7 +4645,8 @@ we might make in the deep desert of Arrakis where the great worms roam";
             "the voice restarted"
         );
         assert_eq!(
-            game.command_menu_records[0].text_id, 0x90,
+            game.active_menu_records()[0].text_id,
+            0x90,
             "the talking variant while the replay plays"
         );
     }

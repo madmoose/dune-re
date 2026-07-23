@@ -527,8 +527,8 @@ impl GameState {
             // = seg000:d2c1 in_transition = 0x80.
             self.in_transition = 0x80;
             // = seg000:d2c6 si = [screen_element_stack_ptr]; si = [si]; al = [si] —
-            //   the top screen element's leading priority byte.
-            let lead = self.get_active_screen_element().priority_byte();
+            //   the top screen element's buffer leading priority byte.
+            let lead = self.menu_buffer(self.get_active_screen_element()).priority;
             // = seg000:d2cd cmp al,0ffh; jz — a 0xff-locked base/overlay stops here.
             if lead == 0xff {
                 break;

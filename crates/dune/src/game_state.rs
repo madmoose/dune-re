@@ -14,7 +14,11 @@ use crate::{
     mouse::{MOUSE_START_X, MOUSE_START_Y, SharedCursor},
     pcm_player::{self, PcmPlayer},
     recorder::Recorder,
-    room_game_screen::{CommandMenuRecord, ROOM_PERSON_TABLE_INIT, RoomPerson, ScreenElement},
+    room_game_screen::{
+        MENU_CHANGE_DESTINATION_IGNORE_WARNING, MENU_DONE, MENU_EXIT_GAME_CONFIRMATION,
+        MENU_GLOBE_MUSIC, MENU_GO_TOWARDS_THIS_PLACE, MENU_MIXER_PANEL, MENU_NPC_ACTIONS_INIT,
+        MENU_PALACE_MIRROR_ROOM, MenuBuffer, ROOM_PERSON_TABLE_INIT, RoomPerson, ScreenElement,
+    },
     settings_ui::{SETTINGS_RECORDS_INIT, SettingsRecord},
     sprite::Sprite,
     sprite_bank::Banks,
@@ -608,18 +612,40 @@ pub struct GameState {
     // = seg001:1ae4 _word_20F94_ui_elements — the in-game HUD element table.
     pub(crate) ui_elements: [UiElement; 24],
 
-    // = seg001:1f0e command_menu_buf record list, flattened. Each entry is a
-    // 4-byte [text_id, handler] verb record; build_room_command_records fills it
-    // and redraw_active_command_menu paints it into ui_elements rows 7..11.
-    pub(crate) command_menu_records: Vec<CommandMenuRecord>,
-
-    // = seg001:1f80's text id field (menu_NPC_actions record 0) — the TALK TO
-    // ME verb's text: 0x90 ('   >>>>  TALK TO ME  <<<<') while a voice line
-    // plays, 0x9f ('" TALK TO ME "') once it stops. DOS patches the static menu
-    // template in place (set_talk_to_me_verb_text, seg000:d621); the flattened
-    // port keeps the template value here and the live copy in
-    // command_menu_records.
-    pub(crate) menu_npc_actions_talk_text_id: u16,
+    // = the seg001 command-menu record buffers, one owned mutable MenuBuffer
+    // per menu exactly as DOS compiles them in and patches them in place. The
+    // ScreenElement identity on the screen_element_stack is the port's `bp`;
+    // GameState::menu_buffer resolves it to the buffer. A stack pop reveals
+    // the buffer as-it-is — nothing is rebuilt (= seg000:d30e).
+    //
+    // = seg001:1f0e command_menu_buf — the room (and map-mode) verb list
+    // build_room_command_records assembles.
+    pub(crate) command_menu_buf: MenuBuffer,
+    // = seg001:1f7e menu_NPC_actions — the dialogue verb panel. Record 0's
+    // text id is the TALK TO ME verb set_talk_to_me_verb_text patches in
+    // place (seg000:d621): 0x90 while a voice line plays, 0x9f once it stops.
+    // setup_npc_dialogue_menu splices only slot 1 (the per-NPC verb).
+    pub(crate) menu_npc_actions: MenuBuffer,
+    // = seg001:1f92 menu_go_towards_this_place — the fly-over divert menu.
+    pub(crate) menu_go_towards_this_place: MenuBuffer,
+    // = seg001:1f9e menu_change_destination_ignore_warning — the fly-over
+    // hostile-zone warning menu.
+    pub(crate) menu_change_destination_ignore_warning: MenuBuffer,
+    // = seg001:2012 menu_done — the PALACE PLAN's single " Done" strip.
+    pub(crate) menu_done: MenuBuffer,
+    // = seg001:201a menu_mixer_panel — the mixer's music menu strip;
+    // settings_ui_update_music_playlist_flags greys its MUSIC entries in
+    // place.
+    pub(crate) menu_mixer_panel: MenuBuffer,
+    // = seg001:206a menu_globe_music — the CD-order submenu.
+    pub(crate) menu_globe_music: MenuBuffer,
+    // = seg001:20b6 menu_exit_game_confirmation — the EXIT GAME submenu.
+    pub(crate) menu_exit_game_confirmation: MenuBuffer,
+    // = seg001:20c2 menu_palace_mirror_room — the LOOK AT MIRROR menu.
+    pub(crate) menu_palace_mirror_room: MenuBuffer,
+    // = seg001:212e menu_multiple_cancel — the map/globe main view's Cancel
+    // strip (map_screen_open installs the caller's record set here).
+    pub(crate) menu_multiple_cancel: MenuBuffer,
 
     // = seg001:21fd data_021fd — the SKIP TO DESTINATION command template's
     // flags byte (the seg001:21fc record's text-id high byte; 0x40 = greyed).
@@ -1506,8 +1532,49 @@ impl GameState {
             zoomed_globe_longitude: 0,
             zoomed_globe_latitude: 0,
             ui_elements: UI_ELEMENTS_INIT,
-            command_menu_records: Vec::new(),
-            menu_npc_actions_talk_text_id: 0x90,
+            // = the static seg001 menu buffers, initialized to their compiled-in
+            // contents (priority byte + records; command_menu_buf and
+            // menu_multiple_cancel start empty and are filled by their builders).
+            command_menu_buf: MenuBuffer {
+                priority: ScreenElement::RoomCommandMenu.initial_priority(),
+                records: Vec::new(),
+            },
+            menu_npc_actions: MenuBuffer {
+                priority: ScreenElement::NpcActionsMenu.initial_priority(),
+                records: MENU_NPC_ACTIONS_INIT.to_vec(),
+            },
+            menu_go_towards_this_place: MenuBuffer {
+                priority: ScreenElement::GoTowardsThisPlace.initial_priority(),
+                records: MENU_GO_TOWARDS_THIS_PLACE.to_vec(),
+            },
+            menu_change_destination_ignore_warning: MenuBuffer {
+                priority: ScreenElement::ChangeDestinationIgnoreWarning.initial_priority(),
+                records: MENU_CHANGE_DESTINATION_IGNORE_WARNING.to_vec(),
+            },
+            menu_done: MenuBuffer {
+                priority: ScreenElement::PalacePlan.initial_priority(),
+                records: MENU_DONE.to_vec(),
+            },
+            menu_mixer_panel: MenuBuffer {
+                priority: ScreenElement::MixerPanel.initial_priority(),
+                records: MENU_MIXER_PANEL.to_vec(),
+            },
+            menu_globe_music: MenuBuffer {
+                priority: ScreenElement::MusicCdOrderMenu.initial_priority(),
+                records: MENU_GLOBE_MUSIC.to_vec(),
+            },
+            menu_exit_game_confirmation: MenuBuffer {
+                priority: ScreenElement::ExitGameConfirmation.initial_priority(),
+                records: MENU_EXIT_GAME_CONFIRMATION.to_vec(),
+            },
+            menu_palace_mirror_room: MenuBuffer {
+                priority: ScreenElement::LookAwayFromMirror.initial_priority(),
+                records: MENU_PALACE_MIRROR_ROOM.to_vec(),
+            },
+            menu_multiple_cancel: MenuBuffer {
+                priority: ScreenElement::MapScreen.initial_priority(),
+                records: Vec::new(),
+            },
             cmd_skip_to_destination_flags: 0,
             screen_element_stack: vec![ScreenElement::RoomCommandMenu],
             data_0227d: 1,

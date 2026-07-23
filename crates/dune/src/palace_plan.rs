@@ -10,11 +10,7 @@
 //! closes it again.
 
 use crate::{
-    GameState, Rect,
-    game_ui::MouseHandlers,
-    gfx,
-    room_game_screen::{MENU_DONE, ScreenElement},
-    sprite_bank,
+    GameState, Rect, game_ui::MouseHandlers, gfx, room_game_screen::ScreenElement, sprite_bank,
 };
 
 // = seg001:120b _stru_206BB_icon_list — the PALPLAN.HSQ icon list drawn by
@@ -125,7 +121,7 @@ impl GameState {
         //   overlay as the active screen element (cleanup = palace_plan_cleanup),
         //   fold the " Done" command strip on, then highlight the cursor's slot.
         self.screen_overlay_request_transition();
-        self.screen_element_stack_push(ScreenElement::PalacePlan, MENU_DONE.to_vec());
+        self.screen_element_stack_push(ScreenElement::PalacePlan);
         self.play_pending_panel_fold();
         self.highlight_hovered_text_action_item();
     }

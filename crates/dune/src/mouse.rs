@@ -626,12 +626,14 @@ mod tests {
             one_pass(&mut game);
         }
 
-        // Port note: the flattened element stack rebuilds the room records on
-        // pop (build_persons_in_room_records, whose seg000:3090 head runs
-        // reset_scene_lip_sync_state), so the TalkingHead struct is dropped
-        // and the idle animation freezes — DOS keeps its records on the stack
-        // and leaves the idle task running. The DOS-visible part is the
-        // pixels: the head image must stay on screen until a later redraw.
+        // Full DOS parity: a stack pop is a pure reveal (no record rebuild, so
+        // no reset_scene_lip_sync_state) — the lingering head keeps its
+        // TalkingHead state and idle task running, exactly like the original,
+        // and its image stays on screen until a later redraw.
+        assert!(
+            game.talking_head.is_some(),
+            "the lingering head keeps its state and idle task (= DOS)"
+        );
         let mut last = None;
         while let Ok((fb, _pal)) = rx.try_recv() {
             last = Some(fb);

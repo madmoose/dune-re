@@ -720,7 +720,7 @@ impl GameState {
     // menu's 0x40 flag bytes ([bp+3]/[bp+7]/[bp+0bh]) in place and leaves
     // bp = menu_mixer_panel so the following screen_element_stack_insert (the
     // `jmp loc_0d32f` tail of settings_ui_draw) installs it; the flattened port
-    // builds the record set into command_menu_records instead, which the tail's
+    // rebuilds menu_mixer_panel.records from the template instead, which the tail's
     // redraw_active_command_menu then paints (staged to fb1 for the panel fold).
     //
     // It also computes the `cl` pre-highlight DOS passes to draw_command_menu
@@ -736,7 +736,10 @@ impl GameState {
         //   it again.
         let music_enabled = self.settings_music_enabled();
         let disabled = !music_enabled;
-        self.command_menu_records = vec![
+        // = ac3d..ac58 toggle the 0x40 grey bit on the three MUSIC entries of
+        //   menu_mixer_panel in place (the static buffer, seg001:201a); the
+        //   highlight bits are re-derived below, so rebuild from the template.
+        self.menu_mixer_panel.records = vec![
             grey_if(MENU_MIXER_PANEL[0], disabled),
             grey_if(MENU_MIXER_PANEL[1], disabled),
             grey_if(MENU_MIXER_PANEL[2], disabled),
@@ -759,7 +762,7 @@ impl GameState {
             };
             // = loc_0d393 or byte ptr [bx+si+3], 80h — set the highlight bit on
             //   entry `cl`'s text_id (cl is 0..2 here, always < 5).
-            self.command_menu_records[cl].text_id |= CMD_HIGHLIGHT;
+            self.menu_mixer_panel.records[cl].text_id |= CMD_HIGHLIGHT;
         }
     }
 
@@ -805,14 +808,17 @@ impl GameState {
         //   no-op cleanup, modelled by the MusicCdOrderMenu identity);
         //   ac84..ac8b cl = (music_playlist_flags & 2) >> 1 — the slot to
         //   pre-highlight: 0 STANDARD ORDER, 1 SHUFFLE.
+        // Stage menu_globe_music from its template with the pre-highlight
+        // applied (clearing any highlight a previous open left behind).
         let mut records = MENU_GLOBE_MUSIC.to_vec();
         let cl = ((self.music_playlist_flags & 2) >> 1) as usize;
         // = loc_0d393 or [bx+si+3],80h — the pre-highlight bit on the record.
         records[cl].text_id |= CMD_HIGHLIGHT;
+        self.menu_globe_music.records = records;
         // = seg000:ac8d jmp loc_0d32f — request the panel transition, insert
         //   the submenu element, and fold it onto the screen.
         self.screen_overlay_request_transition();
-        self.screen_element_stack_push(ScreenElement::MusicCdOrderMenu, records);
+        self.screen_element_stack_push(ScreenElement::MusicCdOrderMenu);
         self.play_pending_panel_fold();
     }
 
@@ -943,8 +949,8 @@ mod tests {
             game.get_active_screen_element(),
             ScreenElement::MusicCdOrderMenu
         );
-        assert_eq!(game.command_menu_records.len(), 3);
-        assert_ne!(game.command_menu_records[0].text_id & CMD_HIGHLIGHT, 0);
+        assert_eq!(game.active_menu_records().len(), 3);
+        assert_ne!(game.active_menu_records()[0].text_id & CMD_HIGHLIGHT, 0);
 
         // STANDARD ORDER: CD mode, the pristine order, both menus closed, the
         // off bit cleared, and the first song (9) playing with the cursor past it.
@@ -998,7 +1004,7 @@ mod tests {
         // closes both menus and changes nothing.
         game.open_mixer_panel();
         game.menu_callback_choice_music_on_cd_style();
-        assert_ne!(game.command_menu_records[1].text_id & CMD_HIGHLIGHT, 0);
+        assert_ne!(game.active_menu_records()[1].text_id & CMD_HIGHLIGHT, 0);
         let flags = game.music_playlist_flags;
         let song = game.midi.current_song();
         game.menu_callback_choice_music_cd_order_cancel();

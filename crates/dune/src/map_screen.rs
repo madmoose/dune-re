@@ -214,7 +214,11 @@ impl GameState {
         //   map_screen_cleanup by the MapScreen identity), fold the menu in,
         //   then refresh the hover highlight.
         self.screen_overlay_request_transition();
-        self.screen_element_stack_push(ScreenElement::MapScreen, records);
+        // = the caller's record buffer (bp) — installed into menu_multiple_
+        //   cancel (seg001:212e) before the push, like DOS building the buffer
+        //   it is about to insert.
+        self.menu_multiple_cancel.records = records;
+        self.screen_element_stack_push(ScreenElement::MapScreen);
         self.play_pending_panel_fold();
         self.highlight_hovered_text_action_item();
         // = seg000:4311 ax=mouse_handlers_01ac8; call set_active_mouse_handlers.
@@ -1327,10 +1331,10 @@ impl GameState {
         // = seg000:41cc mov [data_021fd], al — the template byte (the port
         //   applies it when build_room_command_records copies the template).
         self.cmd_skip_to_destination_flags = flags;
-        // = seg000:41cf..41d7 cmp [data_01f12], 4ffbh — the live buffer's
-        //   first record; patch its flags byte (data_01f11) when it is the
-        //   SKIP TO DESTINATION verb.
-        if let Some(rec0) = self.command_menu_records.first_mut() {
+        // = seg000:41cf..41d7 cmp [data_01f12], 4ffbh — command_menu_buf's
+        //   first record (seg001:1f12 is its handler word); patch its flags
+        //   byte (data_01f11) when it is the SKIP TO DESTINATION verb.
+        if let Some(rec0) = self.command_menu_buf.records.first_mut() {
             if rec0.handler == 0x4ffb {
                 rec0.text_id = (rec0.text_id & 0x00ff) | ((flags as u16) << 8);
             }
@@ -3704,7 +3708,7 @@ mod tests {
         // holds a live (un-greyed) TAKE AN ORNITHOPTER.
         assert_ne!(game.orni_hotspot_x, 0, "orni hotspot not recorded");
         let slot = game
-            .command_menu_records
+            .active_menu_records()
             .iter()
             .position(|r| r.text_id == 0x00a7)
             .expect("TAKE AN ORNITHOPTER verb missing or greyed") as u8;
