@@ -4,7 +4,7 @@ use std::{
     rc::Rc,
     sync::{
         Arc, Mutex,
-        atomic::{AtomicU8, AtomicU16, Ordering},
+        atomic::{AtomicBool, AtomicU8, AtomicU16, Ordering},
         mpsc,
     },
     thread,
@@ -52,6 +52,11 @@ struct MidiShared {
     status: AtomicU8,
     measure: AtomicU16,
     tick: AtomicU16,
+    // Port-only: the MIDI "card" is present. false models the original game not
+    // finding a MIDI device — the audio thread keeps synthesising and advancing
+    // the song position (so midi_wait_until timing is unchanged, e.g. the intro's
+    // music-synced stage waits) but zeroes the output, so nothing is heard.
+    enabled: AtomicBool,
 }
 
 impl Midi {
@@ -60,6 +65,7 @@ impl Midi {
             status: AtomicU8::new(0),
             measure: AtomicU16::new(0),
             tick: AtomicU16::new(0x60),
+            enabled: AtomicBool::new(true),
         });
         let (cmd_tx, cmd_rx) = mpsc::channel::<MidiCommand>();
         let shared_audio = Arc::clone(&shared);
@@ -74,6 +80,15 @@ impl Midi {
             initialized: false,
             current_song: None,
         }
+    }
+
+    // Port-only: model the presence/absence of a MIDI sound card. `false`
+    // silences the audio output (the original game with no MIDI device) while
+    // keeping the song-position timing that midi_wait_until reads, so intro
+    // pacing is identical whether or not a card is present. Wired to `--music
+    // off` and to set_headless.
+    pub fn set_enabled(&self, enabled: bool) {
+        self.shared.enabled.store(enabled, Ordering::Relaxed);
     }
 
     // = seg000:aeb7 midi_reset — stop the current song.
@@ -354,8 +369,14 @@ fn audio_thread_main(
             .unwrap();
 
         // OPL3 emits interleaved stereo (even = left, odd = right); scale each
-        // channel by the balance gain as it is converted to f32.
-        let (left_gain, right_gain) = balance_to_gains(balance);
+        // channel by the balance gain as it is converted to f32. When the MIDI
+        // "card" is absent (set_enabled(false)) the output is silenced, but the
+        // synth and tick_handler below still run so song timing is unaffected.
+        let (left_gain, right_gain) = if shared.enabled.load(Ordering::Relaxed) {
+            balance_to_gains(balance)
+        } else {
+            (0.0, 0.0)
+        };
         for i in 0..n_total_samples {
             let gain = if i % 2 == 0 { left_gain } else { right_gain };
             out_buf[i] = (sample_buf[i] as f32 / i16::MAX as f32) * gain;

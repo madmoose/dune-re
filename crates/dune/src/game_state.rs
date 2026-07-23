@@ -1752,6 +1752,19 @@ impl GameState {
         // check_music_enabled gates every music path; a MUSIC ON verb can still
         // clear it.
         self.cmd_args_memory |= 0x10;
+        // Likewise default digital sound (PCM / voices) off — clear
+        // settings_flags bit 0x1, the flag check_pcm_enabled reads. The headless
+        // rigs have no audio drain, so a started narration clip would otherwise
+        // spin out its 1000-tick timeout (duck_music_and_start_narration_voice_
+        // clip / wait_for_narration_voice_clip both gate on check_pcm_enabled). A
+        // caller that wants PCM can re-enable it with set_pcm_enabled(true).
+        self.settings_flags &= !0x1;
+        // Silence the audio backends outright (no card): PCM playback is refused
+        // so voice waits skip up front, and the MIDI output is muted (song timing
+        // still advances). This covers the intro/direct-call paths that bypass
+        // the game-logic gates above.
+        self.pcm_player.set_enabled(false);
+        self.midi.set_enabled(false);
     }
 
     // = seg000:0000 start (the startup sequence after parse_command_line /
@@ -1955,20 +1968,11 @@ impl GameState {
                 // = seg000:1b0d loc_01b0d -> run_events_for_current_time_period
                 // (seg000:1b23). DOS gates the call on is_voc_pcm_playing /
                 // game_suspend_count / [2a] < 0xc8; the port checks
-                // game_suspend_count (the rest is unported state). When the game
-                // clock has flagged a new time period (new_time_period_pending),
-                // consume the flag and refresh the date/time indicator.
+                // game_suspend_count (the rest is unported state). The routine
+                // itself consumes new_time_period_pending, so the flag pre-check
+                // here just skips the call when nothing is pending.
                 if self.new_time_period_pending != 0 && self.game_suspend_count == 0 {
-                    // = seg000:1b2a mov byte ptr [46dd], 0 — consume the flag.
-                    self.new_time_period_pending = 0;
-                    // = seg000:1b40 call loc_01a0f — repaint the indicator.
-                    self.ui_redraw_date_and_time_indicator();
-                    // = seg000:1b43 call loc_038e1 — cross-fade the sky to the
-                    // new time-of-day sub-palette if it changed.
-                    self.loc_038e1_sky_refresh();
-                    // TODO: port the rest of run_events_for_current_time_period
-                    //   (the day-change hook loc_01c46, map_func_qq, and the
-                    //   scheduled time-period events).
+                    self.run_events_for_current_time_period();
                 }
             }
 
@@ -2195,6 +2199,80 @@ impl GameState {
             self.game_time = self.game_time.wrapping_add(1);
             // = seg000:ef9b inc byte ptr [46ddh] — flag a new time period.
             self.new_time_period_pending = 1;
+        }
+    }
+
+    // = seg000:0fd9 run_events_for_n_time_periods — advance the game clock by
+    // `count` time periods, firing one period of scheduled events per step. Used
+    // by the WAIT verbs (seg000:0f95) and the travel step clock (seg000:4b4a).
+    // DOS marks the pump active with [46da]=1 for the duration; that guard is
+    // only read by run_events_for_current_time_period (seg000:1bbf/1bdc), which
+    // is not yet ported, so it is not modelled here.
+    pub(crate) fn run_events_for_n_time_periods(&mut self, count: i16) {
+        // = seg000:0fde call reset_game_suspend — the pump runs the clock.
+        self.reset_game_suspend();
+        // = seg000:0fe1 or cx,cx; jle — nothing to do for a non-positive count.
+        if count <= 0 {
+            return;
+        }
+        for _ in 0..count {
+            // = seg000:0fe6 reload the clock divider so the free-running PIT
+            //   clock does not also bump game_time mid-pump (data_0146e = 12000).
+            self.data_046db = 12000;
+            // = seg000:0fec cmp [new_hour_flag],0; jz — a period was already
+            //   pending from the live clock, so run its events before the next.
+            if self.new_time_period_pending != 0 {
+                self.run_events_for_current_time_period();
+            }
+            // = seg000:0ff6 inc [game_time]; new_hour_flag = 1; run the events
+            //   for the newly-entered period.
+            self.game_time = self.game_time.wrapping_add(1);
+            self.new_time_period_pending = 1;
+            self.run_events_for_current_time_period();
+        }
+    }
+
+    // = seg000:1b23 run_events_for_current_time_period — fire the scheduled
+    // events for the current game_time (the per-time-of-day action tables, the
+    // new-day iteration over locations, the Chani-in-room check, ...). Consuming
+    // new_time_period_pending is modelled; the event dispatch itself is the game's
+    // core scheduler and is not yet ported.
+    pub(crate) fn run_events_for_current_time_period(&mut self) {
+        // = seg000:1b23 cmp [new_hour_flag],0; jz loc_01b0c — only refresh on a
+        //   newly-entered time period; the loc_01b0c path (no new period) is the
+        //   unported event-poll branch.
+        if self.new_time_period_pending == 0 {
+            return;
+        }
+        // = seg000:1b2a new_hour_flag = 0 — consume the flag.
+        self.new_time_period_pending = 0;
+        // = seg000:1b40 call loc_01a0f — repaint the date/time indicator for the
+        //   new time-of-day.
+        self.ui_redraw_date_and_time_indicator();
+        // = seg000:1b43 call loc_038e1 — cross-fade the sky to the new
+        //   time-of-day sub-palette if it changed. This arms the SkyFade frame
+        //   task (it does not step the palette here); the fade then runs in the
+        //   game loop *after* the caller's present. On a WAIT FOR EVENING/MORNING
+        //   skip this is the sky palette fade that follows the spiral transition:
+        //   run_events_for_n_time_periods advances game_time to evening (re-aiming
+        //   the fade target each period), the spiral reveals the room in the old
+        //   palette, then the SkyFade task morphs the sky to the new time-of-day.
+        self.loc_038e1_sky_refresh();
+        // TODO: the rest of run_events_for_current_time_period (seg000:1b46..1c45)
+        // — the new-day hook (loc_01c46), the time-of-day action tables at
+        // data_01db3, and prepare_location_data_for_condit — is not ported.
+    }
+
+    // = seg000:390a drain_sky_fade — drain an in-flight sky cross-fade to completion,
+    // running its frame task (loc_03916) back-to-back until the countdown hits 0.
+    // Called before a time skip so the fade does not bleed into the new scene.
+    pub(crate) fn drain_sky_fade(&mut self) {
+        // = seg000:390a cmp [sky_fade_countdown],0; jz — nothing to drain.
+        // = seg000:3911 call frame_task_callback_03916; jmp drain_sky_fade — loop.
+        //   tick_sky_fade zeroes the countdown itself once the fade is disarmed,
+        //   so the loop always terminates.
+        while self.sky_fade_countdown != 0 {
+            self.tick_sky_fade();
         }
     }
 
@@ -2759,7 +2837,7 @@ impl GameState {
     // = seg000:c32f draw_sprite_list — like draw_icons_list_at_si, but each
     // sprite is clipped to the rect at [0d834h]. The intro guard list runs after
     // copy_game_area_rect_to_clip_rect (seg000:089f), so the clip is the game
-    // area (_word_20920_game_area_rect = 0,0,0x140,0x98); without it the tall
+    // area (_word_20920_game_area_rect = 0,0,320,152); without it the tall
     // guard sprites run past the game-area bottom (below Feyd). DOS clips in
     // fb_base_ofs-relative space then adds fb_base_ofs in calc_fb_offset; the
     // port carries fb_base_ofs in the draw position, so the clip rect gets it
@@ -2773,8 +2851,8 @@ impl GameState {
         let clip = Rect {
             x0: 0,
             y0: yoff,
-            x1: 0x140,
-            y1: 0x98 + yoff,
+            x1: 320,
+            y1: 152 + yoff,
         };
         for &(idx, x, y) in list {
             let flip_x = idx & 0x4000 != 0;
@@ -2808,9 +2886,9 @@ impl GameState {
     }
 
     // = seg000:c432 clear_game_area — clear the game-area rect
-    // (_word_20920_game_area_rect = {0,0,0x140,0x98}, offset by fb_base_ofs) of
+    // (_word_20920_game_area_rect = {0,0,320,152}, offset by fb_base_ofs) of
     // the active framebuffer to colour 0 (segvga vga_clear_rect). The rect spans
-    // the full 320px width across rows fb_base_ofs..fb_base_ofs+0x98 (the in-game
+    // the full 320px width across rows fb_base_ofs..fb_base_ofs+152 (the in-game
     // viewport), so it is a contiguous row band. draw_SAL (loc_037b5) calls this
     // before drawing a room, so a scene's unpainted/dithered pixels show black
     // rather than the previous stage's leftover framebuffer.
@@ -2819,7 +2897,7 @@ impl GameState {
         let fb = self.active_fb_mut();
         let w = fb.w() as usize;
         let h = fb.h() as usize;
-        let y1 = (y0 + 0x98).min(h);
+        let y1 = (y0 + 152).min(h);
         let start = (y0 * w).min(fb.pixels().len());
         let end = (y1 * w).min(fb.pixels().len());
         fb.pixels_mut()[start..end].fill(0);
@@ -2933,7 +3011,7 @@ impl GameState {
         // (label, value) rows. The value column is placed at a fixed pixel x
         // past the widest label, so the values line up even though the glyph
         // font is proportional (space-padding would not align them).
-        let rows: [(&str, String); 3] = [
+        let rows: [(&str, String); 4] = [
             (
                 "PHASE",
                 // format!("{:#04x} ({})", self.game_phase, self.game_phase),
@@ -2951,6 +3029,7 @@ impl GameState {
             // ("MET", format!("{:#06x}", self.persons_met)),
             // ("TRAVEL", format!("{:#06x}", self.persons_travelling_with)),
             // ("IN ROOM", format!("{:#06x}", self.persons_in_room)),
+            ("DESERT WALK", format!("{}", self.desert_walk_counter)),
         ];
 
         let pad = 2u16;

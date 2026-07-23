@@ -802,6 +802,12 @@ impl GameState {
             0x497a => self.menu_callback_choice_change_destination(),
             0x50a5 => self.menu_callback_choice_back_to_starting_point(),
             0x50c4 => self.menu_callback_choice_towards_nearest_place(),
+            // = seg000:0f48 menu_callback_choice_wait_for_evening — the plain-room
+            // "WAIT FOR EVENING" time-skip verb (CMD_WAIT_FOR_EVENING).
+            0x0f48 => self.menu_callback_choice_wait_for_evening(),
+            // = seg000:0f67 menu_callback_choice_wait_for_morning — the plain-room
+            // "WAIT FOR MORNING" time-skip verb (CMD_WAIT_FOR_MORNING).
+            0x0f67 => self.menu_callback_choice_wait_for_morning(),
             // TODO: the other mirror-menu verbs (RESTART 0x0e47, LOAD 0xb29e,
             // SAVE 0xb28c) and the room verbs (SEE DUNE MAP 0x186b, CALL A
             // WORM 0x42d1, ...) are not ported.
@@ -828,6 +834,102 @@ impl GameState {
         // = seg000:d2e8 jmp play_pending_panel_fold — reveal the staged panel with
         //   the 17-frame accordion fold.
         self.play_pending_panel_fold();
+    }
+
+    // = seg000:0f48 menu_callback_choice_wait_for_evening — the plain-room "WAIT
+    // FOR EVENING" verb. game_time's low nibble is the time-of-day phase (0..15);
+    // the verb fast-forwards the game clock to phase 0x0c (evening), running the
+    // scheduled events for each skipped period. When it is still pre-dawn (phase
+    // < 2) the sky is first brightened one step toward phase+2 so the jump does
+    // not snap straight from night to dusk.
+    pub(crate) fn menu_callback_choice_wait_for_evening(&mut self) {
+        // = seg000:0f48 ax = game_time; bx = ax; al &= 0x0f — the phase nibble.
+        let game_time = self.game_time;
+        let phase = (game_time & 0x0f) as u8;
+        // = seg000:0f4f cmp al,0ch; jnb nullsub_00f66 — already evening or later,
+        //   nothing to wait for.
+        if phase >= 0x0c {
+            return;
+        }
+        // = seg000:0f54 cmp al,2; jnb loc_00f5f — before phase 2 (deep pre-dawn)
+        //   fade the sky one step toward phase+2 first (set_sky_palette_for_time).
+        if phase < 2 {
+            // = seg000:0f5a add al,2 — only the low byte is bumped.
+            self.wait_step_sky_palette(game_time.wrapping_add(2));
+        }
+        // = seg000:0f60 al &= 0xf0; al |= 0x0c — the target game_time: same day,
+        //   phase forced to 0x0c.
+        let target = (game_time & 0xfff0) | 0x0c;
+        // = seg000:0f64 jmp wait_verb_advance_to_target_time — commit the target and run the events.
+        self.wait_advance_to_target_time(target);
+    }
+
+    // = seg000:0f67 menu_callback_choice_wait_for_morning — the plain-room "WAIT
+    // FOR MORNING" verb. Fast-forwards the game clock past midnight to phase 0 of
+    // the next day (morning), running the scheduled events for each skipped
+    // period. When it is still dusk (phase 0x0b or 0x0c) the sky is first darkened
+    // one step toward phase+2 so the jump does not snap straight to dawn.
+    pub(crate) fn menu_callback_choice_wait_for_morning(&mut self) {
+        // = seg000:0f67 ax = game_time; bx = ax; al &= 0x0f — the phase nibble.
+        let game_time = self.game_time;
+        let phase = (game_time & 0x0f) as u8;
+        // = seg000:0f6e cmp al,0bh; jb nullsub_00f66 — before late evening (phase
+        //   0x0b) it is not worth skipping to morning; WAIT FOR EVENING covers
+        //   that range instead.
+        if phase < 0x0b {
+            return;
+        }
+        // = seg000:0f73 cmp al,0dh; jnb loc_00f7e — only at dusk (phase 0x0b/0x0c)
+        //   fade the sky one step toward phase+2 first (set_sky_palette_for_time);
+        //   deeper into the night there is nothing to fade.
+        if phase < 0x0d {
+            // = seg000:0f79 add al,2 — only the low byte is bumped.
+            self.wait_step_sky_palette(game_time.wrapping_add(2));
+        }
+        // = seg000:0f7f al &= 0xf0; add ax,10h — the target game_time: next day
+        //   (the day counter bumped), phase forced to 0 (morning).
+        let target = (game_time & 0xfff0).wrapping_add(0x10);
+        // = seg000:0f81 falls into wait_verb_advance_to_target_time — commit the
+        //   target and run the events.
+        self.wait_advance_to_target_time(target);
+    }
+
+    // = seg000:0f84 wait_verb_advance_to_target_time — the shared commit tail of the WAIT FOR
+    // EVENING/MORNING verbs. Advances the clock to `target` running the skipped
+    // periods' events (wait_verb_run_events_and_present); during the intro cutscene game_phase 0x14
+    // (Tuono Tabr) it then rewinds game_clock_tick_base by 1000 so the room
+    // re-entry timestamp is not thrown off by the skip.
+    fn wait_advance_to_target_time(&mut self, target: u16) {
+        // = seg000:0f8b/0f89 call wait_verb_run_events_and_present either way.
+        self.wait_run_events_and_present(target);
+        // = seg000:0f84 cmp [game_phase],14h; jnz — only the 0x14 phase rewinds
+        //   game_clock_tick_base (seg000:0f8e sub [game_clock_tick_base],3e8h).
+        if self.game_phase == 0x14 {
+            self.game_clock_tick_base = self.game_clock_tick_base.wrapping_sub(0x3e8);
+        }
+    }
+
+    // = seg000:0f95 wait_verb_run_events_and_present — advance the clock to `target`, running one time
+    // period of events per skipped step, then repaint the room screen.
+    fn wait_run_events_and_present(&mut self, target: u16) {
+        // = seg000:0f96 call drain_sky_fade — drain any in-flight sky cross-fade to
+        //   completion before the skip.
+        self.drain_sky_fade();
+        // = seg000:0f99 call loc_04d00 — remove the command-panel overlay frame
+        //   task (frame_task_callback_04bb9). The port never arms it, so this is
+        //   a no-op (matching map_confirm_travel_and_close's loc_04d00 call).
+        // = seg000:0f9c call reset_game_suspend — resume the game clock/idle anims.
+        self.reset_game_suspend();
+        // = seg000:0fa0 cx = target - game_time — the number of time periods to
+        //   advance (always positive: target's phase > the current one).
+        let periods = target.wrapping_sub(self.game_time) as i16;
+        // = seg000:0fa4 call run_events_for_n_time_periods.
+        self.run_events_for_n_time_periods(periods);
+        // = seg000:0fa7 loc_00fa7: restore the cursor-covered pixels, present the
+        //   room screen (al = 0x2a), then redraw the companion HUD heads.
+        self.call_restore_cursor();
+        self.ui_present_room_screen(0x2a);
+        self.ui_hud_draw_companions();
     }
 
     // = seg000:0e3e menu_callback_choice_exit_game — the EXIT GAME verb (shared by
@@ -1189,10 +1291,10 @@ impl GameState {
             //   game area of a location's outdoor arrival view (current_room ==
             //   1) walks inside through its UP exit. This is how clicking on the
             //   sietch / palace / fortress in the entry scene enters it. Gated
-            //   out for a click below the game area (mouse_y >= 0x98), the
+            //   out for a click below the game area (mouse_y >= 152), the
             //   smuggler den (current_scene == 0x21), and the night attack.
             if self.current_room == 1
-                && self.mouse_pos_y < 0x98
+                && self.mouse_pos_y < 152
                 && self.data_00008 != 0x21
                 && self.night_attack_stage == 0
             {
@@ -1821,7 +1923,7 @@ impl GameState {
     fn verb_strip_hovered_slot(&self, slot_count: u8) -> u8 {
         let x = self.mouse_pos_x;
         let y = self.mouse_pos_y;
-        if y < 0x98 {
+        if y < 152 {
             return 0xff;
         }
         // = seg000:d5bc..d5c3 x is tested once against ui_elements[7] (all
@@ -1905,7 +2007,7 @@ impl GameState {
     // returning the 0x2f ornithopter pseudo-person; else None. The person marker
     // is each person's draw anchor (top-left); the test is a fixed person-sized
     // box below-and-right of it — mouse_x 1..=32 px right of the anchor and
-    // mouse_y 1..=80 px below it. Gated on mouse_pos_y < 0x98 (the room scene
+    // mouse_y 1..=80 px below it. Gated on mouse_pos_y < 152 (the room scene
     // area).
     pub(crate) fn person_hit_test(&self) -> Option<u8> {
         let mouse_x = self.mouse_pos_x;
@@ -1913,7 +2015,7 @@ impl GameState {
         // = seg000:9285 cmp bx,98h; jnb companion_slot_hit_test — a cursor below the game
         // area tests the companion HUD portrait slots instead of the person
         // markers.
-        if mouse_y >= 0x98 {
+        if mouse_y >= 152 {
             return self.companion_slot_hit_test();
         }
         // = seg000:928e cx = 0x17 person slots, indexed by person id.
@@ -2867,7 +2969,6 @@ mod tests {
         let mut game = GameState::new(dat_file, tx);
         game.set_headless();
         game.start(true);
-        game.settings_flags &= !0x1; // no PCM, like the travel_flight test
 
         // The state an orni arrival at a sietch leaves for the scene reload:
         // the flight HNM open on the sand loop and the arrival bit armed.
@@ -3730,7 +3831,7 @@ mod tests {
         );
 
         // No Fremen stands in the outdoor entrance, so a game-area click hits
-        // no person. Click inside the game area (mouse_y < 0x98).
+        // no person. Click inside the game area (mouse_y < 152).
         game.mouse_pos_x = 160;
         game.mouse_pos_y = 60;
         assert_eq!(game.person_hit_test(), None, "no person in the entrance");
@@ -3743,7 +3844,7 @@ mod tests {
         );
         assert_eq!(game.current_room, 3);
 
-        // A click that misses the game area (mouse_y >= 0x98, over the command
+        // A click that misses the game area (mouse_y >= 152, over the command
         // panel) does not enter — return to the entrance and confirm.
         game.location_and_room = 0x0a01;
         game.location_appearance = 0x3480;

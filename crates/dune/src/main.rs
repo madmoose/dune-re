@@ -1234,6 +1234,34 @@ impl From<RecordFmt> for RecordFormat {
     }
 }
 
+/// Music playback mode selected at launch — the persistent state the mixer
+/// panel's MUSIC verbs leave behind (settings_ui.rs).
+#[derive(Copy, Clone, Debug, PartialEq, Eq, ValueEnum)]
+enum MusicMode {
+    /// Music off (MUSIC OFF).
+    Off,
+    /// Situation-driven jukebox: the song follows the on-screen state (MUSIC
+    /// ON, GAME RELATIVE — the game default).
+    GameRelative,
+    /// CD-style playlist in the fixed standard track order (STANDARD ORDER).
+    CdStandard,
+    /// CD-style playlist, reshuffled on each restart (SHUFFLE).
+    CdShuffle,
+}
+
+/// A simple on/off switch for an audio device.
+#[derive(Copy, Clone, Debug, PartialEq, Eq, ValueEnum)]
+enum Toggle {
+    On,
+    Off,
+}
+
+impl Toggle {
+    fn is_on(self) -> bool {
+        self == Toggle::On
+    }
+}
+
 #[derive(Parser, Debug)]
 #[command(name = "dune", about = "Dune reimplemented")]
 struct Args {
@@ -1266,6 +1294,14 @@ struct Args {
     /// `--record` path.
     #[arg(long, value_enum, default_value_t = RecordFmt::Mp4)]
     record_format: RecordFmt,
+
+    /// Music playback mode at launch.
+    #[arg(long, value_enum, default_value_t = MusicMode::GameRelative)]
+    music: MusicMode,
+
+    /// Digital sound effects and voices (PCM). Pass `--pcm off` to run silent.
+    #[arg(long, value_enum, default_value_t = Toggle::On)]
+    pcm: Toggle,
 
     /// The DUNE.DAT data file.
     dat_file: PathBuf,
@@ -1337,8 +1373,17 @@ fn main() {
         );
         game.log_condit = args.log_condit;
         game.log_subtitle = args.log_subtitle;
+        // Audio "card present" state — apply BEFORE start() so the intro honours
+        // it too (--pcm off / --music off are the equivalent of the original game
+        // not detecting a PCM / MIDI card). These gate both the game logic and the
+        // actual audio backends, which the intro drives directly.
+        game.set_pcm_enabled(args.pcm.is_on());
+        game.set_music_enabled(args.music != MusicMode::Off);
 
         game.start(skip_intro);
+        // --music playlist mode: start() resets music_playlist_flags to 0
+        // (seg000:0019), so the starting in-game mode is applied *after* it.
+        game.set_music_mode(args.music);
         // = seg000:0037 call game_loop — run the in-game loop after start's setup
         // (the port hoists this call out of start() so headless renders can reuse
         // start without entering the loop).

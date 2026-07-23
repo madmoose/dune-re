@@ -50,6 +50,7 @@ pub fn vga_transition(state: &mut GameState, code: u16, dl: u8) {
     match idx {
         0x04 => transition_vertical_fold(state, dl),
         0x10 => transition_dotted_columns(state),
+        0x2a => transition_spiral(state),
         0x34 => transition_dotted_columns_tall(state),
         0x30 => transition_instant_swap(state),
         0x36 => transition_fade_in_from_black(state),
@@ -604,7 +605,7 @@ const DOTTED_COLUMNS_OFFSETS: [usize; 16] = [
 // 200-row screen) at segvga:2dc0. Both are halved twice at segvga:2dc9 to give
 // the dot-row group count, so the lattice touches `cx` rows (every 4th row, in
 // 4-row groups).
-const DOTTED_ROWS: usize = 0x98;
+const DOTTED_ROWS: usize = 152;
 const DOTTED_ROWS_TALL: usize = 0xc8;
 // = segvga:2ddf `mov dx, 50h` — 80 dots written across each row.
 const DOTTED_COLS: usize = 0x50;
@@ -656,7 +657,7 @@ fn run_dotted_pass(state: &mut GameState, fb_base: usize, row_groups: usize, rev
 // `screen_pal` (the displayed palette) and restoring the live `palette` before
 // pass 2.
 fn transition_dotted_columns(state: &mut GameState) {
-    // = segvga:2604 cx = 0x98 — the 152-row game area.
+    // = segvga:2604 cx = 152 — the 152-row game area.
     dotted_columns_reveal(state, DOTTED_ROWS >> 2);
 }
 
@@ -711,6 +712,103 @@ fn dotted_columns_reveal(state: &mut GameState, row_groups: usize) {
     // = segvga:2e01 second pass — copy the source framebuffer through the
     // same dot lattice to reveal the new image in the new palette.
     run_dotted_pass(state, fb_base, row_groups, true);
+}
+
+// = segvga:2e66 spiral_offset_table — the 65 framebuffer offsets that drive the
+// spiral order, one per (col_phase, row_phase) cell of an 8×8 block. Each offset
+// names the block-relative start pixel (`ofs % 320` = column phase 0..7,
+// `ofs / 320` = row phase 0..7); walking every 8th column and every 8th row from
+// it touches that one cell of every 8×8 block. The 64 cells are ordered as an
+// inward spiral — the outer ring of the block first (bottom edge L→R, right edge
+// bottom→top, top edge R→L, left edge top→bottom), then the next ring in, down
+// to the centre — so all blocks fill in lockstep and the screen reads as a
+// spiral dissolve. In DOS the table is terminated by a 0xffff sentinel (the
+// forward walk's `js` exit); here the array length stands in for it. Entry 0x0140
+// appears twice, so that cell is stamped twice (harmlessly) — 65 entries cover
+// the 64-cell block.
+const SPIRAL_OFFSETS: [usize; 65] = [
+    0x08c0, 0x08c1, 0x08c2, 0x08c3, 0x08c4, 0x08c5, 0x08c6, 0x08c7, 0x0787, 0x0647, 0x0507, 0x03c7,
+    0x0287, 0x0147, 0x0007, 0x0006, 0x0005, 0x0004, 0x0003, 0x0002, 0x0001, 0x0000, 0x0140, 0x0140,
+    0x0280, 0x03c0, 0x0500, 0x0640, 0x0780, 0x0781, 0x0782, 0x0783, 0x0784, 0x0785, 0x0786, 0x0646,
+    0x0506, 0x03c6, 0x0286, 0x0146, 0x0145, 0x0144, 0x0143, 0x0142, 0x0141, 0x0281, 0x03c1, 0x0501,
+    0x0641, 0x0642, 0x0643, 0x0644, 0x0645, 0x0505, 0x03c5, 0x0285, 0x0284, 0x0283, 0x0282, 0x03c2,
+    0x0502, 0x0503, 0x0504, 0x03c4, 0x03c3,
+];
+
+// = segvga:2ef0 `shr cx,1` ×3 — the 152-row game area (cx = 0x98) in 8-row
+// groups (152 / 8 = 19). The spiral touches every 8th row in 8-row groups.
+const SPIRAL_ROW_GROUPS: usize = 152 >> 3;
+// = segvga:2f0d `mov dx,28h` — 40 dots written across each row.
+const SPIRAL_COLS: usize = 0x28;
+// = segvga:2f11 `add di,7` after the stosb — stride 8, one dot per 8-wide block
+// column (40 dots × 8 = a full 320-pixel row).
+const SPIRAL_COL_STRIDE: usize = 8;
+// = segvga:2f18 `add di,0a00h` — advance 8 screen rows (8 × 320) between dot
+// rows, so each table entry touches only every 8th row.
+const SPIRAL_ROW_STRIDE: usize = 0xa00;
+
+// One pass of the spiral. For every table entry, stamp the
+// `SPIRAL_ROW_GROUPS × SPIRAL_COLS` dot grid anchored at `fb_base + ofs`, then
+// wait one frame (= the segvga:2f1e / segvga:2f4b vsync wait `call
+// loc_segvga_02572`) so the partially-filled screen is emitted. `reveal ==
+// false` blacks the pixel out (the black-out pass's `xor ax,ax; stosb`);
+// `reveal == true` copies the source-framebuffer pixel (the reveal pass's `mov
+// di,si; movsb` from `ds`). The black-out pass walks the table backward
+// (segvga:2ef6 `sub si,2`, so it spirals outward from the centre) and the reveal
+// forward (segvga:2f28 `lodsw`, spiralling inward); each pass stamps every cell.
+fn run_spiral_pass(state: &mut GameState, fb_base: usize, reveal: bool) {
+    let n = SPIRAL_OFFSETS.len();
+    for i in 0..n {
+        let ofs = if reveal {
+            SPIRAL_OFFSETS[i]
+        } else {
+            SPIRAL_OFFSETS[n - 1 - i]
+        };
+        let base = fb_base + ofs;
+        for group in 0..SPIRAL_ROW_GROUPS {
+            let mut di = base + group * SPIRAL_ROW_STRIDE;
+            for _ in 0..SPIRAL_COLS {
+                let value = if reveal {
+                    state.framebuffer.pixels()[di]
+                } else {
+                    0
+                };
+                state.screen.pixels_mut()[di] = value;
+                di += SPIRAL_COL_STRIDE;
+            }
+        }
+        state.present_transition_frame();
+    }
+}
+
+// = segvga:2eea transition_spiral (transition_dispatch_table entry 21) — code
+// 0x2a: dissolve the visible old image to black through a per-8×8-block inward
+// spiral, flip the palette at the all-black midpoint, then reveal the new image
+// (composed in `framebuffer`) through the same spiral. ui_present_room_screen
+// (0x2a) uses it for the WAIT FOR EVENING/MORNING re-present (seg000:0fac),
+// dissolving the 152-row room view from the old time-of-day palette/scene to the
+// new one; the HUD/panel below the game area is left to the trailing
+// whole-framebuffer copy in `transition`.
+//
+// Mirrors transition_dotted_columns: the new palette is in `palette` on entry
+// while the screen still shows the old palette, so pass 1 presents with the
+// displayed `screen_pal` and palette_flush uploads the new one at the all-black
+// midpoint before pass 2.
+fn transition_spiral(state: &mut GameState) {
+    // = fb_base_ofs — the game-area blit offset. The room game screen composes
+    // from row 0 (y_offset = 0, as transition_dotted_columns_tall also assumes),
+    // so the 152-row lattice (+ the offsets' 8-row reach) stays inside the 200-row
+    // screen buffer.
+    let fb_base = state.y_offset as usize * state.screen.w() as usize;
+    // = segvga:2ef6 the black-out pass dissolves the OLD image to black using the
+    // palette already on screen (the DAC).
+    run_spiral_pass(state, fb_base, false);
+    // = segvga:2f25 push cs; call palette_flush — make the new palette live now
+    // that the game area is all-black (color 0, unaffected by the swap).
+    palette_flush(state);
+    // = segvga:2f28 the reveal pass copies the source framebuffer through the same
+    // spiral to reveal the new image in the new palette.
+    run_spiral_pass(state, fb_base, true);
 }
 
 const DUMP_FRAMES: bool = false;
@@ -1152,7 +1250,7 @@ pub fn vga_copy_rect(dst: &mut FrameBuffer, src: &FrameBuffer, rect: Rect) {
 // = segvga:1c46 vga_grab_rect (gfx_vtable_vga_grab_rect). Copy the half-open
 // rect `[x0,x1) × [y0,y1)` out of `src` into a freshly packed row-major buffer
 // (destination stride = rect width, source stride = src width). DOS reads the
-// framebuffer at stride 0x140 and writes the buffer tightly; the buffer is sized
+// framebuffer at stride 320 and writes the buffer tightly; the buffer is sized
 // width × height so vga_put_rect lays it back down at the same coordinates.
 pub fn vga_grab_rect(src: &FrameBuffer, rect: Rect) -> Vec<u8> {
     let x0 = rect.x0 as usize;
@@ -1605,6 +1703,49 @@ mod tests {
                 assert_eq!(c, 0, "pixel {i} (row {row}) covered {c} times, want 0");
             }
         }
+    }
+
+    #[test]
+    fn spiral_tiles_game_area_exactly() {
+        // The 64 unique offsets each stamp a 19-group × 40-dot grid; together
+        // they tile the 152-row × 320-col game area (fb_base = 0) exactly once —
+        // 64 × 19 × 40 == 152 × 320 == 48640. The 65th table entry duplicates
+        // 0x0140, so that one 760-pixel cell set is stamped a second time.
+        const W: usize = 320;
+        let mut coverage = vec![0u32; W * 200];
+
+        for &ofs in &SPIRAL_OFFSETS {
+            for group in 0..SPIRAL_ROW_GROUPS {
+                let mut di = ofs + group * SPIRAL_ROW_STRIDE;
+                for _ in 0..SPIRAL_COLS {
+                    coverage[di] += 1;
+                    di += SPIRAL_COL_STRIDE;
+                }
+            }
+        }
+
+        // Every pixel of the 152-row game area is covered; nothing below it is.
+        for (i, &c) in coverage.iter().enumerate() {
+            let row = i / W;
+            if row < 152 {
+                assert!(c >= 1, "pixel {i} (row {row}) not covered");
+            } else {
+                assert_eq!(c, 0, "pixel {i} (row {row}) covered {c} times, want 0");
+            }
+        }
+        let covered = coverage.iter().filter(|&&c| c != 0).count();
+        assert_eq!(covered, 152 * W, "spiral didn't cover 152 full rows");
+        // The lone duplicate entry double-stamps exactly one 760-pixel cell set.
+        let twice = coverage.iter().filter(|&&c| c == 2).count();
+        assert_eq!(
+            twice,
+            SPIRAL_COLS * SPIRAL_ROW_GROUPS,
+            "expected exactly one duplicated cell set"
+        );
+        assert!(
+            coverage.iter().all(|&c| c <= 2),
+            "no pixel should be stamped more than twice"
+        );
     }
 
     #[test]

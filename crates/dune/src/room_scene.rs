@@ -930,8 +930,8 @@ impl GameState {
             let clip = Rect {
                 x0: 0,
                 y0: yoff,
-                x1: 0x140,
-                y1: 0x98 + yoff,
+                x1: 320,
+                y1: 152 + yoff,
             };
             // = seg000:3aa9 sprite 0 at (x, y).
             g.draw_sprite_from_sheet_clipped(sheet, 0, x, y + yoff, clip);
@@ -1225,6 +1225,38 @@ impl GameState {
         }
     }
 
+    // = seg000:0fb2 set_sky_palette_for_time — apply the sky sub-palette for an explicit
+    // time-of-day value `al` rather than the current game_time. The WAIT verbs
+    // pass game_time+2 to brighten the pre-dawn sky one step before the skip.
+    // Unlike set_sky_palette it takes the time as an argument and always writes
+    // (no sky_fade_active latch, no "already fading to this sub" short-circuit).
+    pub(crate) fn wait_step_sky_palette(&mut self, al: u16) {
+        // = seg000:395f call loc_0395f — sub-palette id for al (same hour-of-day
+        //   table as sky_palette_id_from_game_time).
+        let sub = sky_palette_id_from_game_time(al);
+        // = open_sky_or_skydn_palette_al_sub_bl — resource + byte range from
+        //   sky_skydn_selector, shared with set_sky_palette.
+        let (resource, dest_start, count) = if self.sky_skydn_selector != 0 {
+            ("SKYDN.HSQ", 73, 151)
+        } else {
+            ("SKY.HSQ", 128, 80)
+        };
+        // = seg000:0fb8 cmp [sky_fade_countdown],0; jz loc_00fc2 (write live)
+        //   else jmp loc_039b9 (write the fade target so the running fade re-aims).
+        if self.sky_fade_countdown != 0 {
+            self.load_sky_palette_to_fade_target(resource, sub, 0, count, dest_start);
+            // = the secondary 240..255 span when [227dh]==0.
+            if self.data_0227d == 0 {
+                self.load_sky_palette_to_fade_target(resource, sub, count, 16, 240);
+            }
+        } else {
+            self.open_sky_palette(resource, sub, 0, count, dest_start);
+            if self.data_0227d == 0 {
+                self.open_sky_palette(resource, sub, count, 16, 240);
+            }
+        }
+    }
+
     // = seg000:38b4 draw_sky — tile SKY.HSQ as a 4-row × 8-column grid, one
     // sprite id per row (rows use sprite 0..3) at stride (dx=0x28, bp=0x14).
     // DOS first calls set_sky_palette (seg000:388d) to install the sky-gradient
@@ -1242,7 +1274,7 @@ impl GameState {
             for row in 0..4 {
                 let y = yoff + (row as i16) * 0x14;
                 let mut x: i16 = 0;
-                while x < 0x140 {
+                while x < 320 {
                     if let Some(sprite) = sheet.get_sprite(row) {
                         let fb = s.active_fb_mut();
                         let _ = blit::Blitter::new(sprite.data(), fb)

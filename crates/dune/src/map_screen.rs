@@ -74,7 +74,7 @@ const MAP_CAPTION_RECT: Rect = rect(77, 33, 245, 41);
 
 // = seg001:1492 travel_minimap_restore_rect — the minimap + border rect
 // hnm_present_flight_frame copies from the back buffer over each flight frame.
-const TRAVEL_MINIMAP_RESTORE_RECT: Rect = rect(0xc8, 0, 0x140, 0x40);
+const TRAVEL_MINIMAP_RESTORE_RECT: Rect = rect(0xc8, 0, 320, 0x40);
 
 // = seg000:514e compass_angle_from_delta — the octant-interpolated compass
 // angle of a signed screen delta (dx right, dy down): 0 due north, growing
@@ -1380,8 +1380,8 @@ impl GameState {
         self.travel_step_counter = self.travel_step_counter.wrapping_add(1);
         if self.travel_step_counter & 0x0f == 0 {
             // = seg000:4b47/4b4a cx=1; call run_events_for_n_time_periods
-            //   (seg000:0fd9). TODO: the event pump is not ported.
-            println!("travel_advance_step: run_events_for_n_time_periods not ported");
+            //   (seg000:0fd9) — advance one time period of events.
+            self.run_events_for_n_time_periods(1);
         }
         // = seg000:4b4d call get_map_position; 4b50 call travel_step_position
         //   — advance the position one step along travel_heading.
@@ -3058,11 +3058,10 @@ mod tests {
         let mut game = GameState::new(dat_file, tx);
         game.set_headless();
         game.start(true);
-        // Disable PCM so the destination click's narration (check_pcm_enabled
-        // gates both duck_music_and_start_narration_voice_clip and
-        // wait_for_narration_voice_clip) exits up front — the test rig has no
-        // audio drain, so a started clip would spin out the 1000-tick timeout.
-        game.settings_flags &= !0x1;
+        // set_headless defaults PCM off, so the destination click's narration
+        // (check_pcm_enabled gates duck_music_and_start_narration_voice_clip /
+        // wait_for_narration_voice_clip) exits up front instead of spinning out
+        // its 1000-tick timeout against the test rig's absent audio drain.
 
         // Depart from the palace entrance (room 1, the outdoor landing-pad
         // view with the parked orni) — the real TAKE AN ORNITHOPTER context,
@@ -3474,7 +3473,6 @@ mod tests {
         let mut game = GameState::new(dat_file, tx);
         game.set_headless();
         game.start(true);
-        game.settings_flags &= !0x1; // no PCM: the click narration exits up front
         game.location_and_room = 0x2001;
         game.location_appearance = 0x180;
         game.draw_room_game_screen();
@@ -3598,7 +3596,6 @@ mod tests {
         let mut game = GameState::new(dat_file, tx);
         game.set_headless();
         game.start(true);
-        game.settings_flags &= !0x1; // no PCM: the click narration exits up front
         game.location_and_room = 0x2001;
         game.location_appearance = 0x180;
         game.draw_room_game_screen();
@@ -3715,7 +3712,6 @@ mod tests {
         let mut game = GameState::new(dat_file, tx);
         game.set_headless();
         game.start(true);
-        game.settings_flags &= !0x1; // no PCM: the click narration exits up front
 
         // Fly from the palace pad to a sietch and land there.
         game.location_and_room = 0x2001;

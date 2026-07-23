@@ -29,7 +29,10 @@
 //! [`PcmPlayer::end_loop`]/[`PcmPlayer::break_loop`] (seg001:010c/010f)
 //! [`PcmPlayer::queue_next`] (seg001:0112) and the host-readable marker (seg001:022c).
 
-use std::sync::{Arc, Mutex};
+use std::sync::{
+    Arc, Mutex,
+    atomic::{AtomicBool, Ordering},
+};
 
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 
@@ -527,6 +530,11 @@ pub(crate) fn balance_to_gains(balance: u8) -> (f32, f32) {
 pub struct PcmPlayer {
     shared: Arc<Mutex<Engine>>,
     _stream: Option<cpal::Stream>,
+    // Port-only: the PCM "card" is present. false models the original game not
+    // finding a digital-sound device — the same steady state check_pcm_enabled
+    // reports: playback is refused and nothing ever reports as playing, so the
+    // voice/narration paths (and their wait loops) skip up front.
+    enabled: AtomicBool,
 }
 
 impl PcmPlayer {
@@ -539,12 +547,24 @@ impl PcmPlayer {
         Self {
             shared,
             _stream: stream,
+            enabled: AtomicBool::new(true),
         }
     }
 
+    // Port-only: model the presence/absence of a digital-sound (PCM) card.
+    // `false` refuses playback and reports idle, mirroring the DOS `check_pcm_
+    // enabled` == false steady state (the voice paths return up front). Wired to
+    // `--pcm false` and to set_headless.
+    pub fn set_enabled(&self, enabled: bool) {
+        self.enabled.store(enabled, Ordering::Relaxed);
+    }
+
     /// = dnsdb_start_playback (seg001:0106). Returns false if refused because a
-    /// voice is already playing (no preemption).
+    /// voice is already playing (no preemption), or when no PCM card is present.
     pub fn start_playback(&self, voc: &[u8], loop_flags: u8) -> bool {
+        if !self.enabled.load(Ordering::Relaxed) {
+            return false;
+        }
         self.shared.lock().unwrap().start_playback(voc, loop_flags)
     }
 
@@ -570,6 +590,9 @@ impl PcmPlayer {
 
     /// = dnsdb_queue_next (seg001:0112).
     pub fn queue_next(&self, voc: &[u8], loop_flags: u8) {
+        if !self.enabled.load(Ordering::Relaxed) {
+            return;
+        }
         self.shared.lock().unwrap().queue_next(voc, loop_flags);
     }
 
@@ -590,14 +613,15 @@ impl PcmPlayer {
     }
 
     /// True while a voice is playing (= playing_flag, seg001:023b). Stays true
-    /// while paused.
+    /// while paused. Always false when no PCM card is present.
     pub fn is_playing(&self) -> bool {
-        self.shared.lock().unwrap().playing
+        self.enabled.load(Ordering::Relaxed) && self.shared.lock().unwrap().playing
     }
 
-    /// True when stopped/idle (= idle_flag, seg001:02a7).
+    /// True when stopped/idle (= idle_flag, seg001:02a7). Always idle when no PCM
+    /// card is present.
     pub fn is_idle(&self) -> bool {
-        self.shared.lock().unwrap().idle
+        !self.enabled.load(Ordering::Relaxed) || self.shared.lock().unwrap().idle
     }
 
     /// = dnsdb_set_volume (seg001:0115), the `al` (level) half. The DOS entry

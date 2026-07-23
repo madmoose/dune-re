@@ -610,6 +610,60 @@ impl GameState {
         self.settings_flags & 0x1 != 0
     }
 
+    // Port-only (no DOS equivalent): model the presence of a digital-sound (PCM)
+    // card. Sets both the game-logic gate (settings_flags bit 0x1, read by
+    // check_pcm_enabled) and the actual PCM output — the intro and some game
+    // paths call the pcm player directly, bypassing check_pcm_enabled, so
+    // disabling the player is what makes "no PCM card" fully silent. Wired to the
+    // --pcm CLI arg; set_headless defaults it off.
+    pub fn set_pcm_enabled(&mut self, enabled: bool) {
+        if enabled {
+            self.settings_flags |= 0x1;
+        } else {
+            self.settings_flags &= !0x1;
+        }
+        self.pcm_player.set_enabled(enabled);
+    }
+
+    // Port-only (no DOS equivalent): model the presence of a MIDI card. Sets both
+    // the game-logic gate (settings_flags bit 0x100, read by
+    // music_service_enabled) and the MIDI output — the intro plays its songs
+    // directly, bypassing the gate, so silencing the player (which still advances
+    // song timing) is what makes "no MIDI card" quiet through the intro too.
+    // Wired to `--music off` (the equivalent of no MIDI hardware).
+    pub fn set_music_enabled(&mut self, enabled: bool) {
+        if enabled {
+            self.settings_flags |= 0x100;
+        } else {
+            self.settings_flags &= !0x100;
+        }
+        self.midi.set_enabled(enabled);
+    }
+
+    // Port-only (no DOS equivalent): apply a startup music-playlist mode (the
+    // non-off --music selections), leaving the same music_playlist_flags the
+    // mixer panel's MUSIC verbs do, without their UI side effects (panel pop,
+    // submenu push, update_room_music). Applied AFTER start(), which resets
+    // music_playlist_flags at seg000:0019. The on/off decision is
+    // set_music_enabled's job; Off is a no-op here.
+    pub fn set_music_mode(&mut self, mode: crate::MusicMode) {
+        match mode {
+            // Music is already disabled by set_music_enabled(false).
+            crate::MusicMode::Off => {}
+            // = seg000:ac6e GAME RELATIVE — playlist = 0.
+            crate::MusicMode::GameRelative => self.music_playlist_flags = 0,
+            // = seg000:ac97 STANDARD ORDER — CD-style (bit 0), no shuffle, with
+            //   the pristine order recopied over the working playlist.
+            crate::MusicMode::CdStandard => {
+                self.music_playlist_flags = 1;
+                self.music_cd_playlist = crate::music::MUSIC_CD_STANDARD_ORDER;
+            }
+            // = seg000:ac90 SHUFFLE — CD-style + shuffle (bits 0 and 1); the
+            //   service reshuffles the playlist when it starts the next song.
+            crate::MusicMode::CdShuffle => self.music_playlist_flags = 3,
+        }
+    }
+
     // = seg000:ae28 loc_0ae28 — music (MIDI) present. Stubbed to its steady
     // state via settings_flags bit 0x100.
     fn settings_music_enabled(&self) -> bool {
