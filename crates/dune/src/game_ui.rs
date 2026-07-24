@@ -551,10 +551,14 @@ impl GameState {
     // TODO: port; no-op stub.
     fn reset_room_scene_state(&mut self) {}
 
-    // = seg000:b930 remove_globe_frame_tasks — stop the globe/map animation frame
-    // tasks.
-    // TODO: port; no-op stub.
-    fn remove_globe_frame_tasks(&mut self) {}
+    // = seg000:b930 remove_globe_frame_tasks — stop the globe/map animation
+    // frame tasks: data_0dd03 = 0 (no port field yet), remove the globe
+    // rotation task (frame_task_callback_0b9ae), then fall through into
+    // removing the side-decoration slide task (frame_task_callback_0be57 —
+    // not ported).
+    fn remove_globe_frame_tasks(&mut self) {
+        self.remove_frame_task(crate::TaskId::GlobeRotation);
+    }
 
     // = seg000:d75a ui_set_and_draw_frieze_sides_closed_book — draw the in-game
     // HUD's left panel: the frieze sides (room view = closed-book template), the

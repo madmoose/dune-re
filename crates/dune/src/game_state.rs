@@ -6,6 +6,7 @@ use crate::{
     frame_slot::FrameSink,
     game_ui::{MouseHandlers, ROOM_MOUSE_HANDLERS, UI_ELEMENTS_INIT, UiElement},
     gfx::{self, palette_flush},
+    globe_renderer::GlobeRenderer,
     hnm::hnm_id_by_name,
     input::SharedInput,
     locations::LOCATIONS,
@@ -81,6 +82,10 @@ pub(crate) enum TaskId {
     // = seg000:044ab map_player_marker_blink_task — the blinking "you are
     // here" marker on the map view (interval 0x12c).
     MapPlayerMarker,
+    // = seg000:0b9ae frame_task_callback_0b9ae — the globe rotation task
+    // (interval 1): one outline row into fb1 per tick, present + one phase
+    // step per finished pass.
+    GlobeRotation,
 }
 
 pub(crate) struct FrameTask {
@@ -608,6 +613,23 @@ pub struct GameState {
     // not ported).
     pub(crate) zoomed_globe_longitude: u16,
     pub(crate) zoomed_globe_latitude: i16,
+
+    // = the RESOURCE_GLOBDATA / RESOURCE_TABLAT / res_map_ofs buffers as one
+    // owned renderer, built by setup_globe_draw (seg000:b8a7). None until the
+    // first globe draw.
+    pub(crate) globe_renderer: Option<GlobeRenderer>,
+    // = seg001:494c _dword_23DFC (the TABLAT entry-0 fp field) — the globe
+    // rotation phase in 1/398ths of a revolution (0..397): the integer word
+    // of the DOS 16.16 seed. set_globe_tilt_and_rotation derives it from the
+    // longitude (hi word of 398 * lng); globe_rotation_increment steps and
+    // wraps it (the rotation frame task adds 1 per finished draw pass).
+    pub(crate) globe_rotation: u16,
+    // = seg001:2460 _word_21910_globe_tilt — the globe view tilt in map
+    // latitude rows, carrying the map-row sign (negative = north, like
+    // zoomed_globe_latitude); magnitude clamped to >= 0x20 by
+    // set_globe_tilt_and_rotation and to <= 98 by globe_increment_tilt
+    // (seg000:ba15, not ported).
+    pub(crate) globe_tilt: i16,
 
     // = seg001:1ae4 _word_20F94_ui_elements — the in-game HUD element table.
     pub(crate) ui_elements: [UiElement; 24],
@@ -1541,8 +1563,14 @@ impl GameState {
             data_0196a: 0,
             data_0196c: 0,
             location_visibility_distance: 1,
-            zoomed_globe_longitude: 0,
-            zoomed_globe_latitude: 0,
+            // = the seg001:197c/197e compiled-in statics (0x1964, -4) — the
+            // orientation the intro2 globe scene renders before anything
+            // re-seeds the view centre.
+            zoomed_globe_longitude: 0x1964,
+            zoomed_globe_latitude: -4,
+            globe_renderer: None,
+            globe_rotation: 0,
+            globe_tilt: 0,
             ui_elements: UI_ELEMENTS_INIT,
             // = the static seg001 menu buffers, initialized to their compiled-in
             // contents (priority byte + records; command_menu_buf and
@@ -2436,6 +2464,9 @@ impl GameState {
                 }
                 TaskId::MapPlayerMarker => {
                     self.tick_map_player_marker();
+                }
+                TaskId::GlobeRotation => {
+                    self.tick_globe_rotation();
                 }
             }
         }

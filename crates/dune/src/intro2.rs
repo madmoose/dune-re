@@ -259,13 +259,20 @@ impl GameState {
     fn intro2_scene_globe(&mut self) {
         // = seg000:02e6 mov cx,0x20; call draw_stars — the parallax-panned stars.
         self.draw_stars(0x20);
-        // = seg000:02e9 setup_globe_draw; 02ec draw_globe_with_atmosphere — globe
-        // rendering deliberately omitted; the scene shows the starfield backdrop
-        // only.
+        // = seg000:02e9 setup_globe_draw — load GLOBDATA, seed the globe
+        // rotation/tilt from the zoomed-globe centre statics, open FRESK.
+        self.setup_globe_draw();
+        // = seg000:02ec draw_globe_with_atmosphere — the FRESK atmosphere ring
+        // with the globe pixels rendered inside it.
+        self.draw_globe_with_atmosphere();
         // = seg000:02ef ax=0x2c; open_spritesheet — re-applies STARS.HSQ
         // (and its palette), so the 0x3a transition fades to it.
         self.open_sprite_bank(sprite_bank::STARS);
-        // = seg000:02f5 jmp loc_0b8ea — a no-op tail (just returns).
+        // = seg000:02f5 jmp add_globe_rotation_frame_task — the interval-1
+        // task that keeps the globe creeping (one 1/398-revolution step per
+        // redraw pass) through the scene hold. The seg000:0251
+        // remove_all_frame_tasks after each scene's wait tears it down.
+        self.add_globe_rotation_frame_task();
     }
 
     // = seg000:094a intro2_scene_sky — scene 3: the desert sky behind a low

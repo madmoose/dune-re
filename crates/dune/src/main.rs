@@ -18,6 +18,7 @@ mod game_phase;
 mod game_state;
 mod game_ui;
 mod gfx;
+mod globe_renderer;
 mod herad;
 mod hnm;
 mod hsq;
