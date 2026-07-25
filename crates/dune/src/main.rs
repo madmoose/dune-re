@@ -6,6 +6,7 @@ mod attack;
 mod avi;
 mod blit;
 mod color;
+mod command_strings;
 mod condit;
 mod container;
 mod dat_file;

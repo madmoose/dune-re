@@ -113,7 +113,7 @@ const CMD_FIGHT_FOR_A_WHOLE_DAY: CommandMenuRecord = rec(0x009b, 0x0fc5);
 /// The greyed/disabled flag the builder ORs into a verb's text_id when its
 /// precondition is unmet (= the `and ah,40h` writes; loc_0d48a draws it in the
 /// 0xf5 "disabled" colour). The low 0x3fff still selects the string.
-const CMD_GREY: u16 = 0x4000;
+pub(crate) const CMD_GREY: u16 = 0x4000;
 
 /// The highlight flag in a verb's text_id (= the bit draw_command_menu_item's
 /// loc_0d4d6 swaps fg/bg for). Set transiently on the hovered slot, and

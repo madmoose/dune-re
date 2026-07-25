@@ -1794,10 +1794,19 @@ impl GameState {
         self.location_condit.unused_equipment = 0;
     }
 
+    // = seg000:3310 get_command_string_index_from_troop_skill — the skill
+    // caption's COMMAND id: the skill's high nibble picks one of "On trial",
+    // "Novice", "Average", "Efficient", "Skilled", "Expert" (0xd1..0xd6).
+    pub(crate) fn get_command_string_index_from_troop_skill(skill: u8) -> u16 {
+        // = seg000:3310..331a xor ah,ah; shr ax,1 x4; add ax,0d1h.
+        (skill >> 4) as u16 + 0xd1
+    }
+
     // = seg000:31f6 troop_prepare_troop_data_for_condit — stage the troop's
     // CONDIT block (ds:2c..4b) before a troop-person conversation, then the
-    // troop's location block. The subst_id_* writes (the name placeholders in
-    // dialogue text) are not ported (text engine).
+    // troop's location block. It also stages the string_subst_id_table entries
+    // 3..8 and 0xa — the ids the 0x83..0x8a placeholders in the troop's
+    // dialogue and info-panel strings expand to.
     pub(crate) fn troop_prepare_troop_data_for_condit(&mut self, ti: usize) {
         let t = self.troops[ti];
         // = seg000:31f9..320e the direct copies.
@@ -1805,13 +1814,37 @@ impl GameState {
         self.troop_condit.troop_id = t.troop_id;
         self.troop_condit.occupation = t.occupation;
         self.troop_condit.occupation_low = t.occupation & 0x0f;
-        // = seg000:3214 subst_id_04 = (occupation & 0xf) + 0x18. TODO: subst.
+        // = seg000:3211/3214 subst_id_04 = (occupation & 0xf) + 0x18 — the
+        //   placeholder 0x84 occupation caption (COMMAND 0x18.. "Spice
+        //   Mining", ".."; map_draw_troop_info_panel_content bumps it by 0xc
+        //   to the 0x24.. panel wording at seg000:78f7).
+        self.string_subst_id_table[4] = (t.occupation & 0x0f) as u16 + 0x18;
         // = seg000:3217 call sub_032c7 — the ralliement clocks.
         // = seg000:32c7..32d6 ds:42 = game_time - time_period_of_ralliement;
-        //   ds:41 = ds:42 >> 4. (The 32d9.. tail computes a subst id; TODO.)
+        //   ds:41 = ds:42 >> 4.
         let periods = self.game_time.wrapping_sub(t.time_period_of_ralliement);
         self.troop_condit.time_periods_since_ralliement = periods;
         self.troop_condit.game_days_since_ralliement = (periods >> 4) as u8;
+        // = seg000:32d9..330c subst_id_05 — the placeholder 0x85 duration
+        //   phrase: "but our job is finished" (0x74) for occupation bit 4,
+        //   else keyed on the periods since ralliement — "for a very short
+        //   time" (< 3), "for a few hours" (< 0x10), "for 1 day" (< 0x20),
+        //   else "for 12 days" (0x73) with the day count patched over its
+        //   digits in the resource.
+        self.string_subst_id_table[5] = if t.occupation & 0x10 != 0 {
+            0x74
+        } else if periods < 3 {
+            0x70
+        } else if periods < 0x10 {
+            0x71
+        } else if periods < 0x20 {
+            0x72
+        } else {
+            // = seg000:32f7..330a get_phrase_or_command_string_si + the
+            //   number replacement on the string itself.
+            self.command_string_replace_number(0x73, periods >> 4);
+            0x73
+        };
         // = seg000:321a/321d ds:48 = sub_0329d (the idle-troop harvest
         //   estimate; it may clear bitfield_10 bits 2..3 and update field_c).
         self.troop_condit.ds_48 = self.troop_condit_harvest_estimate(ti);
@@ -1820,17 +1853,29 @@ impl GameState {
         self.troop_condit.bitfield_10 = t.bitfield_10;
         self.troop_condit.dissatisfaction_and_speech = t.dissatisfaction_and_speech;
         self.troop_condit.dissatisfaction_low = t.dissatisfaction_and_speech as u8 & 0x0f;
-        // = seg000:3235 subst_id_0a. TODO: subst.
+        // = seg000:3232/3235 subst_id_0a = the dissatisfaction low nibble —
+        //   the placeholder 0x8a phrase.
+        self.string_subst_id_table[0xa] = t.dissatisfaction_and_speech & 0x0f;
         // = seg000:3238/323b ds:36 = troop_compute_motivation_modifier.
         self.troop_condit.motivation_modifier = self.troop_compute_motivation_modifier(ti);
-        // = seg000:323e..325f the three skills (each also feeds a subst id).
+        // = seg000:323e..325f the three skills; each also feeds its skill-
+        //   caption placeholder through get_command_string_index_from_troop_
+        //   skill — 0x86 spice, 0x87 army, 0x88 ecology.
         self.troop_condit.spice_skill = t.spice_skill;
+        self.string_subst_id_table[6] =
+            Self::get_command_string_index_from_troop_skill(t.spice_skill);
         self.troop_condit.army_skill = t.army_skill;
+        self.string_subst_id_table[7] =
+            Self::get_command_string_index_from_troop_skill(t.army_skill);
         self.troop_condit.ecology_skill = t.ecology_skill;
+        self.string_subst_id_table[8] =
+            Self::get_command_string_index_from_troop_skill(t.ecology_skill);
         // = seg000:3262..3273 field_C / field_E (field_C after sub_0329d's
-        //   update) + subst_id_03 (TODO).
+        //   update); subst_id_03 = field_E's low byte + 0xe8 — the placeholder
+        //   0x83 equipment name (COMMAND 0xe8.. "a spice-harvester"..).
         self.troop_condit.field_c = t.field_c;
         self.troop_condit.field_e = t.field_e;
+        self.string_subst_id_table[3] = (t.field_e & 0xff) + 0xe8;
         // = seg000:3276..327e ds:37 = the skill for the current occupation:
         //   [si + ((occupation & 0xf) >> 2) + 0x16] — spice/army/ecology (an
         //   occupation-bits value of 3 reads the equipment byte, as DOS does).

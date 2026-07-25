@@ -25,6 +25,41 @@ impl GameState {
         container::entry(&self.command_bin, index)
     }
 
+    // = seg000:d03c find_last_numeric_digit_in_str_at_es_si + seg000:e2e3
+    // string_replace_number_ending_at_es_si as DOS chains them (seg000:32fb..
+    // 3307, seg000:5bc6): patch `value` in decimal over the three characters
+    // ending at the COMMAND string's first run of digits, in place in the
+    // resource buffer, so every later expansion of that id reads the new
+    // number.
+    pub(crate) fn command_string_replace_number(&mut self, id: u16, value: u16) {
+        let (ofs, end) = container::entry_byte_range(&self.command_bin, id - 1);
+        let s = &mut self.command_bin[ofs as usize..end as usize];
+        // = seg000:d03c..d04d si = one past the first digit run.
+        let Some(first) = s.iter().position(u8::is_ascii_digit) else {
+            return;
+        };
+        let si = s[first..]
+            .iter()
+            .position(|c| !c.is_ascii_digit())
+            .map_or(s.len(), |n| first + n);
+        if si < 3 {
+            return;
+        }
+        // = seg000:e2ea..e315 the fixed 3-digit field at [si-3..si], clamped to
+        //   999, with the leading zeros written as spaces.
+        let value = value.min(999);
+        let digits = [value / 100, value / 10 % 10, value % 10];
+        let mut leading = true;
+        for (i, d) in digits.iter().enumerate() {
+            leading &= *d == 0;
+            s[si - 3 + i] = if leading && i < 2 {
+                b' '
+            } else {
+                b'0' + *d as u8
+            };
+        }
+    }
+
     // = seg000:cf88..cf8f the [_word_23C64_phrases_bin_last_entry] load — the
     // PHRASE bank's LAST entry is the phrase-token dictionary
     // expand_phrase_tokens indexes.

@@ -19,12 +19,12 @@
 //! spice-density overlay (data_046eb bit 0x40).
 
 use crate::{
-    GameState, Rect,
+    GameState, Rect, command_strings as cmd,
     game_ui::{MouseHandlers, NAV_PANEL_ALT},
     gfx,
     locations::location_index_from_ptr,
     rect::rect,
-    room_game_screen::{CommandMenuRecord, ScreenElement, rec},
+    room_game_screen::{CMD_GREY, CommandMenuRecord, ScreenElement, rec},
 };
 
 /// = seg001:20f2 menu_map_main — the map main verb menu's compiled-in records
@@ -32,11 +32,11 @@ use crate::{
 /// bits are rewritten by map_setup_main_menu before every push.
 #[rustfmt::skip]
 pub(crate) const MENU_MAP_MAIN: [CommandMenuRecord; 5] = [
-    rec(0x0063, 0x186b), // EXIT MAPS -> ui_toggle_room_view
-    rec(0x0062, 0x86cc), // CONTACT FREMEN TROOPS
-    rec(0x0064, 0x53f1), // SEE SPICE DENSITY
-    rec(0x00a7, 0x42d9), // TAKE AN ORNITHOPTER
-    rec(0x0067, 0x5b1e), // FIND PROSPECTORS
+    rec(cmd::EXIT_MAPS,             0x186b), // -> ui_toggle_room_view
+    rec(cmd::CONTACT_FREMEN_TROOPS, 0x86cc),
+    rec(cmd::SEE_SPICE_DENSITY,     0x53f1),
+    rec(cmd::TAKE_AN_ORNITHOPTER,   0x42d9),
+    rec(cmd::FIND_PROSPECTORS,      0x5b1e),
 ];
 
 // = seg001:1482 full_map_view_rect — the SEE DUNE MAP window (4,4)-(316,148),
@@ -208,18 +208,18 @@ impl GameState {
     fn map_setup_main_menu(&mut self) {
         // = seg000:878c dialogue_resume_entry_ptr = 0.
         self.dialogue_resume_entry_ptr = 0;
-        // = seg000:8792..87bd the TAKE AN ORNITHOPTER id (0xa7): greyed
-        //   (0x4000) unless a location scene is up (current_scene != 0xff and
-        //   not a deep sietch room) and its available equipment has an orni.
-        let mut orni_id = 0x40a7;
+        // = seg000:8792..87bd the TAKE AN ORNITHOPTER id: greyed (CMD_GREY)
+        //   unless a location scene is up (current_scene != 0xff and not a
+        //   deep sietch room) and its available equipment has an orni.
+        let mut orni_id = CMD_GREY | cmd::TAKE_AN_ORNITHOPTER;
         if self.data_00008 != 0xff && (self.data_00008 < 0x20 || self.current_room < 3) {
             // = seg000:87aa..87bb compute_location_available_equipment; ax =
             //   0xa7, greyed when orni_count is 0.
             self.compute_location_available_equipment();
             orni_id = if self.available_equipment.ornithopters != 0 {
-                0xa7
+                cmd::TAKE_AN_ORNITHOPTER
             } else {
-                0x40a7
+                CMD_GREY | cmd::TAKE_AN_ORNITHOPTER
             };
         }
         // = seg000:87c0 bp = menu_map_main.
@@ -227,35 +227,35 @@ impl GameState {
         self.menu_map_main.records[3].text_id = orni_id;
         // = seg000:87c6 [bp+0bh] |= 0x40 — SEE SPICE DENSITY greyed;
         // = seg000:87ca [bp+12h] = 0 — FIND PROSPECTORS hidden.
-        self.menu_map_main.records[2].text_id = 0x4064;
+        self.menu_map_main.records[2].text_id = CMD_GREY | cmd::SEE_SPICE_DENSITY;
         self.menu_map_main.records[4].text_id = 0;
         // = seg000:87cf..87da game_phase >= 5 ungreys SEE SPICE DENSITY and
-        //   shows FIND PROSPECTORS (id 0x67).
+        //   shows FIND PROSPECTORS.
         if self.game_phase >= 5 {
-            self.menu_map_main.records[2].text_id = 0x0064;
-            self.menu_map_main.records[4].text_id = 0x0067;
+            self.menu_map_main.records[2].text_id = cmd::SEE_SPICE_DENSITY;
+            self.menu_map_main.records[4].text_id = cmd::FIND_PROSPECTORS;
         }
         // = seg000:87df..8813 the contact slot ([bp+6]).
         if self.location_visibility_distance < 2 {
-            // = seg000:87e6 id 0x93, greyed unless the current location has a
-            //   troop (the head of its troop chain resolves).
-            let mut id = 0x4093;
+            // = seg000:87e6 GIVE ORDERS TO TROOP, greyed unless the current
+            //   location has a troop (the head of its troop chain resolves).
+            let mut id = CMD_GREY | cmd::GIVE_ORDERS_TO_TROOP;
             if let Some(location) = self.locations.get(self.current_location_index as usize) {
                 // = seg000:87f3..87fd [di+9] != 0 and get_address_of_troop_by_ID.
                 let troop_id = location.troop_id;
                 if troop_id != 0 && self.troops.get((troop_id - 1) as usize).is_some() {
                     // = seg000:87ff and word ptr [bp+6],0bfffh.
-                    id = 0x0093;
+                    id = cmd::GIVE_ORDERS_TO_TROOP;
                 }
             }
             self.menu_map_main.records[1].text_id = id;
         } else {
-            // = seg000:8806..8813 CONTACT FREMEN TROOPS (0x62), greyed while
-            //   no troop icons are on the map (troop_icon_count 0).
+            // = seg000:8806..8813 CONTACT FREMEN TROOPS, greyed while no troop
+            //   icons are on the map (troop_icon_count 0).
             self.menu_map_main.records[1].text_id = if self.troop_icons.is_empty() {
-                0x4062
+                CMD_GREY | cmd::CONTACT_FREMEN_TROOPS
             } else {
-                0x0062
+                cmd::CONTACT_FREMEN_TROOPS
             };
         }
         // = seg000:8816/8819 bx = nullsub_00f66; call screen_element_stack_push.
@@ -266,9 +266,9 @@ impl GameState {
 
     // = seg000:5bb0 map_show_rallied_troops_popup — draw the first-visit DUNE
     // MAP title popup straight to the visible screen: the panel record
-    // data_0194a, then phrase 0xe2 ("DUNE MAP / * Map to command rallied
-    // troops * / Number of rallied troops = N") with the live count patched
-    // over the trailing digits.
+    // data_0194a, then DUNE_MAP_RALLIED_TROOPS ("DUNE MAP / * Map to command
+    // rallied troops * / Number of rallied troops = N") with the live count
+    // patched over the trailing digits.
     fn map_show_rallied_troops_popup(&mut self) {
         // = seg000:5bb0 call set_screen_as_active_framebuffer.
         self.set_screen_as_active_framebuffer();
@@ -303,8 +303,10 @@ impl GameState {
         self.draw_rect_outline(r.x0, r.y0, r.x1 - 1, r.y1 - 1, 0xf5);
         // = seg000:5bbd call font_select_tall_font.
         self.font_select_tall_font();
-        // = seg000:5bc0/5bc3 the phrase 0xe2 text.
-        let mut text = self.get_phrase_or_command_string(0xe2).to_vec();
+        // = seg000:5bc0/5bc3 the title text.
+        let mut text = self
+            .get_phrase_or_command_string(cmd::DUNE_MAP_RALLIED_TROOPS)
+            .to_vec();
         // = seg000:5bc6..5bce find_last_numeric_digit_in_str_at_es_si +
         //   string_replace_number_ending_at_es_si — write the decimal
         //   number_of_rallied_troops backwards over the digit tail (the
@@ -889,9 +891,12 @@ impl GameState {
             return;
         }
         // = seg000:78f4 call troop_prepare_troop_data_for_condit; 78f7
-        //   subst_id_04 += 0xc — the occupation caption's display variant
-        //   (the subst staging is TODO in troop_prepare_troop_data_for_condit).
+        //   subst_id_04 += 0xc — the panel wording of the occupation caption
+        //   the 0x84 placeholder expands to (COMMAND 0x24.. "Spice Mining",
+        //   "Spice Prospecting", "Awaiting orders", .. instead of the 0x18..
+        //   dialogue wording).
         self.troop_prepare_troop_data_for_condit(ti);
+        self.string_subst_id_table[4] += 0xc;
         // = seg000:78fc/78ff the panel fill + frame again (the refresh entry).
         let r = self.map_info_panel_rect;
         gfx::vga_fill_rect(
@@ -909,10 +914,14 @@ impl GameState {
         self.font_select_small_font();
         let header_x = (r.x0 + 12) as u16;
         let mut y = (r.y0 + 4) as u16;
-        // = seg000:7919..7924 the header: string 0x3a, 0x3b for a moving
+        // = seg000:7919..7924 the header: "Settled in", "Going to" for a moving
         //   troop (occupation bit 6). Only the header draws at x0+12.
         let occ = self.troops[ti].occupation;
-        let hdr = if occ & 0x40 != 0 { 0x3b } else { 0x3a };
+        let hdr = if occ & 0x40 != 0 {
+            cmd::GOING_TO
+        } else {
+            cmd::SETTLED_IN
+        };
         self.map_draw_interp_string(hdr, 0xf09a, header_x, y);
         // = seg000:7929 sub dx,8 — the pen drops to x0+4 for the location
         //   name AND stays there for every following line.
@@ -924,21 +933,27 @@ impl GameState {
         // = seg000:7936..7938 back to 0x9a; y += 10.
         y += 10;
         if occ & 0x20 != 0 {
-            // = seg000:793e..794a occupation bit 5: string 0x41, 0x42 for
-            //   occupation 0x22.
-            let id = if occ == 0x22 { 0x42 } else { 0x41 };
+            // = seg000:793e..794a occupation bit 5: "Captured", "Freed
+            //   Prisoner" for occupation 0x22.
+            let id = if occ == 0x22 {
+                cmd::FREED_PRISONER
+            } else {
+                cmd::CAPTURED
+            };
             self.map_draw_interp_string(id, 0xf09a, x0, y);
             y += 0x11;
         } else {
-            // = seg000:794c..794f the spice-rates string 0x3c
-            //   ("Average: .. kgs/h / Current: .. kgs/h").
-            self.map_draw_interp_string(0x3c, 0xf09a, x0, y);
+            // = seg000:794c..794f the troop line: the 0x84 occupation caption
+            //   (subst id 4) then "N men  Motiv. N%".
+            self.map_draw_interp_string(cmd::MEN_AND_MOTIVATION, 0xf09a, x0, y);
             y += 0x0f;
             // = seg000:7955 occupation 2 skips the caption + status lines.
             if occ != 2 {
-                // = seg000:795c..796b the occupation caption: the phrase at
+                // = seg000:795c..796b the skill caption for the occupation's
+                //   skill ("On trial".."Expert"): the id at
                 //   string_subst_id_table[6 + ((occ & 0xf) >> 2)]
-                //   (seg001:11f7 = the table + 12).
+                //   (seg001:11f7 = the table + 12), staged by
+                //   troop_prepare_troop_data_for_condit.
                 let idx = 6 + (((occ & 0x0f) >> 2) & 3) as usize;
                 let phrase = self.string_subst_id_table[idx];
                 self.font_draw_phrase_or_command_string_with_color_at_pos(phrase, 0xf09a, x0, y);
@@ -948,17 +963,17 @@ impl GameState {
                     let bf = self.troops[ti].bitfield_10;
                     let dissat = self.troops[ti].dissatisfaction_and_speech;
                     // = seg000:7978..79b4 the status pick. The DOS 0x100-clear
-                    //   and dissatisfaction branches both land on 0x40.
+                    //   and dissatisfaction branches both land on "Inactive".
                     let id = if bf & 0x200 != 0 {
-                        0x3f
+                        cmd::REPAIRING
                     } else if bf & 0x100 == 0 || dissat & 0x30 != 0 {
-                        0x40
+                        cmd::INACTIVE
                     } else if occ == 0 {
-                        0x3d
+                        cmd::SPICE_RATES
                     } else if occ & 0x0f == 1 {
-                        0x43
+                        cmd::COVERED_AREA
                     } else if occ == 6 {
-                        0x3e
+                        cmd::BATTLE_LOSSES
                     } else {
                         0
                     };
@@ -971,7 +986,7 @@ impl GameState {
         }
         // = seg000:79bc..79c7 the "Equipment:" header, colour 0x96.
         y += 4;
-        self.font_draw_phrase_or_command_string_with_color_at_pos(0x6e, 0xf096, x0, y);
+        self.font_draw_phrase_or_command_string_with_color_at_pos(cmd::EQUIPMENT, 0xf096, x0, y);
         y += 8;
         // = seg000:79ca..79d8 the equipment icon row: troop_unpack_equipment_
         //   flags (bitmask -> 0/1 per type) into the row, bottom = panel y1.
@@ -985,14 +1000,14 @@ impl GameState {
     // ONMAP icon counts (the seg001:192f sprite table, harvesters..bulbs).
     // Each nonzero type stacks `count` icons vertically within [y, bottom]
     // (loc_061d3) and advances x by the icon width; an all-zero row draws the
-    // "none" phrase (0x69). The troop info panel passes 0/1 flags
+    // "none" phrase. The troop info panel passes 0/1 flags
     // (troop_unpack_equipment_flags); the location popup passes real counts.
     fn map_draw_equipment_columns(&mut self, counts: &[u8; 7], bottom: i16, x0: i16, y: i16) {
         // = seg000:7e4f..7e64 nothing owned: the "none" phrase 12 px in
         //   (add dx,0ch; add bx,5) in the current colour.
         if counts.iter().all(|&c| c == 0) {
             self.font_set_draw_position((x0 + 12) as u16, (y + 5) as u16);
-            self.font_draw_phrase_or_command_string(0x69);
+            self.font_draw_phrase_or_command_string(cmd::NONE);
             return;
         }
         let clip = self.map_view_clip_rect();
@@ -1098,14 +1113,24 @@ impl GameState {
         if let Some(menu) = menu {
             let orni_greyed = self.available_equipment.ornithopters == 0;
             self.map_move_menu.records = match menu {
-                // = seg000:5fe1..5ff4 GO THERE FLYING AN ORNI (id 0x59, greyed
-                //   0x4000 without an orni) + Cancel.
+                // = seg000:5fe1..5ff4 GO THERE FLYING AN ORNI (greyed without
+                //   an orni) + Cancel.
                 MoveMenu::Orni => vec![
-                    rec(if orni_greyed { 0x4059 } else { 0x0059 }, 0x50db),
-                    rec(0x00a3, 0xd2e2),
+                    rec(
+                        if orni_greyed {
+                            CMD_GREY | cmd::GO_THERE_FLYING_AN_ORNI
+                        } else {
+                            cmd::GO_THERE_FLYING_AN_ORNI
+                        },
+                        0x50db,
+                    ),
+                    rec(cmd::CANCEL, 0xd2e2),
                 ],
-                // = seg000:6000 GO THERE RIDING A WORM (id 0x5a) + Cancel.
-                MoveMenu::Worm => vec![rec(0x005a, 0x50ea), rec(0x00a3, 0xd2e2)],
+                // = seg000:6000 GO THERE RIDING A WORM + Cancel.
+                MoveMenu::Worm => vec![
+                    rec(cmd::GO_THERE_RIDING_A_WORM, 0x50ea),
+                    rec(cmd::CANCEL, 0xd2e2),
+                ],
             };
             self.screen_overlay_request_transition();
             self.screen_element_stack_push(ScreenElement::MoveToLocationMenu);
@@ -1198,9 +1223,14 @@ impl GameState {
         //   name; the port derives the pen from the panel top.
         let y = (r.y0 + 4 + 9 + 0xc) as u16;
         if !self.location_has_battle(li) {
-            // = seg000:60c3..60d3 "Equipment:" (0x6e, colour 0x9a) then the
+            // = seg000:60c3..60d3 "Equipment:" (colour 0x9a) then the
             //   location's own equipment counts (record +0x14), bottom = y1.
-            self.font_draw_phrase_or_command_string_with_color_at_pos(0x6e, 0xf09a, x0, y);
+            self.font_draw_phrase_or_command_string_with_color_at_pos(
+                cmd::EQUIPMENT,
+                0xf09a,
+                x0,
+                y,
+            );
             let e = &self.locations[li].equipment;
             let counts = [
                 e.harvesters,
@@ -1213,9 +1243,9 @@ impl GameState {
             ];
             self.map_draw_equipment_columns(&counts, r.y1, x0 as i16, (y + 0x0a) as i16);
         } else {
-            // = seg000:60d6..60f5 "Battle:" (0x4c) then the battle gauge
-            //   sprite (0x8e + (gauge + 0xf) >> 5) at (x0+0x2f, y+6).
-            self.font_draw_phrase_or_command_string_with_color_at_pos(0x4c, 0xf09a, x0, y);
+            // = seg000:60d6..60f5 "Battle:" then the battle gauge sprite
+            //   (0x8e + (gauge + 0xf) >> 5) at (x0+0x2f, y+6).
+            self.font_draw_phrase_or_command_string_with_color_at_pos(cmd::BATTLE, 0xf09a, x0, y);
             let gauge = self.location_battle_gauge(li);
             let sprite = 0x8e + ((gauge as u16 + 0x0f) >> 5);
             let clip = self.map_view_clip_rect();
@@ -1420,7 +1450,11 @@ impl GameState {
 mod tests {
     use std::sync::mpsc;
 
-    use crate::{GameState, dat_file::DatFile, room_game_screen::ScreenElement};
+    use crate::{
+        GameState, command_strings as cmd,
+        dat_file::DatFile,
+        room_game_screen::{CMD_GREY, ScreenElement},
+    };
 
     // SEE DUNE MAP from the room screen: the full-planet map renders into the
     // (4,4)-(316,148) window, the map main menu becomes the active screen
@@ -1449,7 +1483,7 @@ mod tests {
         game.locations[13].status |= 0x10;
 
         // The SEE DUNE MAP verb (record seg001:220c, handler 0x186b).
-        game.dispatch_command_handler(0x186b, 0x98);
+        game.dispatch_command_handler(0x186b, cmd::SEE_DUNE_MAP);
         while rx.try_recv().is_ok() {}
 
         assert_eq!(game.data_046eb, 0x80, "full-map mode owns the screen");
@@ -1458,7 +1492,11 @@ mod tests {
             ScreenElement::DuneMapScreen,
             "the map main menu is the active element"
         );
-        assert_eq!(game.menu_map_main.records[0].text_id, 0x63, "EXIT MAPS");
+        assert_eq!(
+            game.menu_map_main.records[0].text_id,
+            cmd::EXIT_MAPS,
+            "EXIT MAPS"
+        );
         // The visible location markers at the game start carry stationed
         // troops, so the troop icon renderer spawns icons for them.
         eprintln!("troop icons spawned: {}", game.troop_icons.len());
@@ -1470,10 +1508,11 @@ mod tests {
         }
         assert!(!game.troop_icons.is_empty(), "troop icons on the map");
         // With location_visibility_distance still 1 the contact slot is GIVE
-        // ORDERS TO TROOP (0x93), greyed because the current location (index
-        // 0 at the start) has no troop chain.
+        // ORDERS TO TROOP, greyed because the current location (index 0 at the
+        // start) has no troop chain.
         assert_eq!(
-            game.menu_map_main.records[1].text_id, 0x4093,
+            game.menu_map_main.records[1].text_id,
+            CMD_GREY | cmd::GIVE_ORDERS_TO_TROOP,
             "GIVE ORDERS TO TROOP greyed with no troop at the current location"
         );
         game.framebuffer
@@ -1554,6 +1593,22 @@ mod tests {
             "the troop info panel is open"
         );
         assert_eq!(game.map_info_popup_troop, Some(0));
+        // The panel's men/motivation line opens with the 0x84 placeholder:
+        // string_subst_id_table[4] = (occupation & 0xf) + 0x18, bumped by 0xc
+        // to the panel wording — occupation 1 gives "Spice Prospecting".
+        assert_eq!(
+            game.string_subst_id_table[4], 0x25,
+            "the occupation caption id staged for the panel"
+        );
+        let line = game
+            .get_phrase_or_command_string(cmd::MEN_AND_MOTIVATION)
+            .to_vec();
+        let text = game.format_interpolated_string(&line);
+        assert!(
+            text.starts_with(b"Spice Prospecting"),
+            "the 0x84 placeholder expands to the occupation caption: {:?}",
+            String::from_utf8_lossy(&text)
+        );
         while rx.try_recv().is_ok() {}
         game.screen
             .write_png(&game.palette, "troop_map_screen_info.png")
