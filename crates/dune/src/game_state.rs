@@ -1717,11 +1717,11 @@ impl GameState {
                 records: MENU_PALACE_MIRROR_ROOM.to_vec(),
             },
             menu_multiple_cancel: MenuBuffer {
-                priority: ScreenElement::MapScreen.initial_priority(),
+                priority: ScreenElement::TravelMapScreen.initial_priority(),
                 records: Vec::new(),
             },
             menu_map_main: MenuBuffer {
-                priority: ScreenElement::DuneMapScreen.initial_priority(),
+                priority: ScreenElement::TroopMapScreen.initial_priority(),
                 records: MENU_MAP_MAIN.to_vec(),
             },
             cmd_skip_to_destination_flags: 0,

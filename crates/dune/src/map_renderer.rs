@@ -95,11 +95,14 @@ impl MapRenderer {
         self.buffer[addr] = v;
     }
 
-    // = segvga:206a/208f `stc; adc al,al; add al,al; shl al,1; shl al,1` —
-    // unpack a map cell's low-nibble height into the interpolation range:
-    // ((cell & 0x0f) * 2 + 1) * 8.
-    fn read_map_pixel(map: &[u8], map_base: usize, offset: usize) -> u8 {
-        let b = map[map_base + offset];
+    // = segvga:206a/208f/20a7 `stc; adc al,al; add al,al; shl al,1; shl al,1`
+    // — unpack a map cell's low-nibble height into the interpolation range:
+    // ((cell & 0x0f) * 2 + 1) * 8. `offset` is signed: the run seed reads
+    // `[si-1]`, the cell before the rotation offset, so an offset of 0 reads
+    // the byte preceding the row (the previous row's last cell) exactly as
+    // DOS's segment-relative pointer does.
+    fn read_map_pixel(map: &[u8], map_base: usize, offset: isize) -> u8 {
+        let b = map[map_base.wrapping_add_signed(offset)];
 
         (((b & 0x0f) << 1) + 1) << 3
     }
@@ -162,14 +165,14 @@ impl MapRenderer {
         }
 
         let mut p0 =
-            Self::read_map_pixel(map, map_lat_offset as usize, (rotation_offset - 1) as usize)
+            Self::read_map_pixel(map, map_lat_offset as usize, (rotation_offset - 1) as isize)
                 as i32;
 
         // = segvga:209e.. the two run loops: from the rotation offset to the
         // row end, then the wrap-around from the row start.
         for i in 0..len1 {
             let p1 =
-                Self::read_map_pixel(map, map_lat_offset as usize, (i + rotation_offset) as usize)
+                Self::read_map_pixel(map, map_lat_offset as usize, (i + rotation_offset) as isize)
                     as i32;
             let d = (p1 - p0) / 4;
 
@@ -182,7 +185,7 @@ impl MapRenderer {
         }
 
         for i in 0..len2 {
-            let p1 = Self::read_map_pixel(map, map_lat_offset as usize, i as usize) as i32;
+            let p1 = Self::read_map_pixel(map, map_lat_offset as usize, i as isize) as i32;
             let d = (p1 - p0) / 4;
 
             for _ in 0..4 {

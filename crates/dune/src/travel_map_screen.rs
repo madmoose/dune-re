@@ -218,7 +218,7 @@ impl GameState {
         //   cancel (seg001:212e) before the push, like DOS building the buffer
         //   it is about to insert.
         self.menu_multiple_cancel.records = records;
-        self.screen_element_stack_push(ScreenElement::MapScreen);
+        self.screen_element_stack_push(ScreenElement::TravelMapScreen);
         self.play_pending_panel_fold();
         self.highlight_hovered_text_action_item();
         // = seg000:4311 ax=mouse_handlers_01ac8; call set_active_mouse_handlers.
@@ -2906,7 +2906,10 @@ mod tests {
 
         game.menu_callback_choice_map_main_take_an_ornithopter_notransition();
 
-        assert_eq!(game.get_active_screen_element(), ScreenElement::MapScreen);
+        assert_eq!(
+            game.get_active_screen_element(),
+            ScreenElement::TravelMapScreen
+        );
         assert_eq!(game.map_ornithopter_mode, 1);
         assert_eq!(game.game_screen_mode_flags, 4);
         assert_eq!(game.travel_vehicle_mode, 2);
@@ -3954,7 +3957,10 @@ mod tests {
         game.mouse_pos_x = game.orni_hotspot_x + 16;
         game.mouse_pos_y = game.orni_hotspot_y + 16;
         game.game_loop_dispatch_lmb_press();
-        assert_eq!(game.get_active_screen_element(), ScreenElement::MapScreen);
+        assert_eq!(
+            game.get_active_screen_element(),
+            ScreenElement::TravelMapScreen
+        );
         assert_eq!(game.map_ornithopter_mode, 1);
 
         // The same press did not leak into the map screen as a destination
@@ -3967,6 +3973,9 @@ mod tests {
         // The map screen owns the game area now: the hit test's room-view gate
         // (game_screen_mode_flags != 0) keeps further orni clicks inert.
         game.callback_main_ui_element_21_22();
-        assert_eq!(game.get_active_screen_element(), ScreenElement::MapScreen);
+        assert_eq!(
+            game.get_active_screen_element(),
+            ScreenElement::TravelMapScreen
+        );
     }
 }

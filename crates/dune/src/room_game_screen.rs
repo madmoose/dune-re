@@ -370,14 +370,14 @@ pub(crate) enum ScreenElement {
     // = menu_multiple_cancel (seg001:212e, priority byte 0xf8) — the map/globe
     // main view (map_screen_open, seg000:430b) with its single Cancel verb.
     // Its cleanup func is map_screen_cleanup (seg000:4415).
-    MapScreen,
+    TravelMapScreen,
     // = menu_map_main (seg001:20f2, leading priority word 0xff) — the SEE DUNE
     // MAP full-planet view's verb menu, pushed by map_setup_main_menu
     // (seg000:8819) with the no-op cleanup nullsub_00f66. Its 0xff priority
     // replaces the room base on push (and the room base replaces it back when
     // ui_draw_room_command_panel re-inserts on the way out), and locks it
     // against the transient-overlay drain.
-    DuneMapScreen,
+    TroopMapScreen,
     // = menu_go_towards_this_place (seg001:1f92, priority byte 0xfc) — the
     // fly-over divert menu install_pending_room_action_menu stages for
     // pending_room_action 3. Staged with cleanup func menu_npc_actions_cleanup
@@ -409,13 +409,13 @@ impl ScreenElement {
         match self {
             ScreenElement::RoomCommandMenu
             | ScreenElement::LookAwayFromMirror
-            | ScreenElement::DuneMapScreen => 0xff,
+            | ScreenElement::TroopMapScreen => 0xff,
             ScreenElement::NpcActionsMenu
             | ScreenElement::GoTowardsThisPlace
             | ScreenElement::MoveToLocationMenu => 0xfc,
             ScreenElement::MixerPanel
             | ScreenElement::PalacePlan
-            | ScreenElement::MapScreen
+            | ScreenElement::TravelMapScreen
             | ScreenElement::ChangeDestinationIgnoreWarning => 0xf8,
             ScreenElement::ExitGameConfirmation | ScreenElement::MusicCdOrderMenu => 0xf6,
         }
@@ -434,8 +434,8 @@ impl GameState {
             ScreenElement::ExitGameConfirmation => &self.menu_exit_game_confirmation,
             ScreenElement::MusicCdOrderMenu => &self.menu_globe_music,
             ScreenElement::PalacePlan => &self.menu_done,
-            ScreenElement::MapScreen => &self.menu_multiple_cancel,
-            ScreenElement::DuneMapScreen => &self.menu_map_main,
+            ScreenElement::TravelMapScreen => &self.menu_multiple_cancel,
+            ScreenElement::TroopMapScreen => &self.menu_map_main,
             ScreenElement::MoveToLocationMenu => &self.map_move_menu,
             ScreenElement::GoTowardsThisPlace => &self.menu_go_towards_this_place,
             ScreenElement::ChangeDestinationIgnoreWarning => {
@@ -453,8 +453,8 @@ impl GameState {
             ScreenElement::ExitGameConfirmation => &mut self.menu_exit_game_confirmation,
             ScreenElement::MusicCdOrderMenu => &mut self.menu_globe_music,
             ScreenElement::PalacePlan => &mut self.menu_done,
-            ScreenElement::MapScreen => &mut self.menu_multiple_cancel,
-            ScreenElement::DuneMapScreen => &mut self.menu_map_main,
+            ScreenElement::TravelMapScreen => &mut self.menu_multiple_cancel,
+            ScreenElement::TroopMapScreen => &mut self.menu_map_main,
             ScreenElement::MoveToLocationMenu => &mut self.map_move_menu,
             ScreenElement::GoTowardsThisPlace => &mut self.menu_go_towards_this_place,
             ScreenElement::ChangeDestinationIgnoreWarning => {
@@ -1748,7 +1748,7 @@ impl GameState {
             ScreenElement::PalacePlan => self.palace_plan_cleanup(),
             // = seg000:4415 map_screen_cleanup — leave the map/globe view and
             //   restore the room screen.
-            ScreenElement::MapScreen => self.map_screen_cleanup(),
+            ScreenElement::TravelMapScreen => self.map_screen_cleanup(),
             // = seg000:5f91 loc_05f91 — the GO THERE menu's cleanup closes
             //   the location info panel.
             ScreenElement::MoveToLocationMenu => self.map_close_location_popup(),

@@ -259,7 +259,7 @@ impl GameState {
             };
         }
         // = seg000:8816/8819 bx = nullsub_00f66; call screen_element_stack_push.
-        self.screen_element_stack_push(ScreenElement::DuneMapScreen);
+        self.screen_element_stack_push(ScreenElement::TroopMapScreen);
         // = seg000:881c jmp open_onmap_resource.
         self.open_onmap_spritesheet();
     }
@@ -1489,7 +1489,7 @@ mod tests {
         assert_eq!(game.data_046eb, 0x80, "full-map mode owns the screen");
         assert_eq!(
             game.get_active_screen_element(),
-            ScreenElement::DuneMapScreen,
+            ScreenElement::TroopMapScreen,
             "the map main menu is the active element"
         );
         assert_eq!(
@@ -1673,7 +1673,7 @@ mod tests {
         assert_eq!(game.map_popup_ptr, 0);
         assert_eq!(
             game.get_active_screen_element(),
-            ScreenElement::DuneMapScreen,
+            ScreenElement::TroopMapScreen,
             "back to the map main menu"
         );
 
@@ -1686,7 +1686,7 @@ mod tests {
         assert_eq!(game.map_popup_ptr, super::MAP_POPUP_LOCATION);
         assert_eq!(
             game.get_active_screen_element(),
-            ScreenElement::DuneMapScreen,
+            ScreenElement::TroopMapScreen,
             "no GO THERE menu deep inside a location"
         );
         while rx.try_recv().is_ok() {}
@@ -1829,5 +1829,52 @@ mod tests {
         // armed the travel pump.
         assert_eq!(game.game_screen_mode_flags & 3, 1, "orni travel mode");
         assert_eq!(game.travel_active, 0xff, "the travel pump is armed");
+    }
+    // The full-planet renderer's interpolation seed reads the map cell BEFORE
+    // the row's rotation offset (segvga:20a5 `add si,ax; mov al,[si-1]`), so a
+    // longitude that lands the offset on cell 0 reads the byte preceding the
+    // row. Rotate the view through a full turn at three latitudes to cover
+    // every row length's boundary longitude. Asset-gated:
+    //   cargo test -p dune --bin dune -- --ignored map_view_longitude_rotation
+    #[test]
+    #[ignore = "needs assets/DUNE.DAT"]
+    fn map_view_longitude_rotation_renders_every_step() {
+        let dat_path = concat!(env!("CARGO_MANIFEST_DIR"), "/../../assets/DUNE.DAT");
+        let Ok(dat_file) = DatFile::open(dat_path) else {
+            eprintln!("skipping: {dat_path} not found");
+            return;
+        };
+        let (tx, rx) = mpsc::sync_channel(64);
+        let mut game = GameState::new(dat_file, tx);
+        game.set_headless();
+        game.start(true);
+        while rx.try_recv().is_ok() {}
+        game.dispatch_command_handler(0x186b, cmd::SEE_DUNE_MAP);
+        while rx.try_recv().is_ok() {}
+
+        for lat in [-0x4b, 0, 0x4b] {
+            game.zoomed_globe_latitude = lat;
+            for step in 0..512u32 {
+                game.zoomed_globe_longitude = (step * 128) as u16;
+                game.map_draw_zoomed_globe();
+                while rx.try_recv().is_ok() {}
+            }
+        }
+        // 0x4000 puts the 176-cell equator rows' rotation offset exactly on
+        // cell 0 — the case that used to index past the row start.
+        game.zoomed_globe_latitude = 0;
+        game.zoomed_globe_longitude = 0x4000;
+        game.map_draw_zoomed_globe();
+        while rx.try_recv().is_ok() {}
+        game.framebuffer
+            .write_png(&game.palette, "troop_map_screen_rotated.png")
+            .unwrap();
+        for (x, y) in [(4u16, 76u16), (315, 76), (80, 40), (240, 110)] {
+            let p = game.framebuffer.get(x, y);
+            assert!(
+                (0x10..0x20).contains(&p),
+                "map pixel at ({x},{y}) = {p:#04x} outside the map bank"
+            );
+        }
     }
 }
