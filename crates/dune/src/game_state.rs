@@ -10,7 +10,7 @@ use crate::{
     hnm::hnm_id_by_name,
     input::SharedInput,
     locations::LOCATIONS,
-    map_screen::MapLocationMarker,
+    map_renderer::MapRenderer,
     midi::{self, Midi},
     mouse::{MOUSE_START_X, MOUSE_START_Y, SharedCursor},
     pcm_player::{self, PcmPlayer},
@@ -25,6 +25,8 @@ use crate::{
     sprite_bank::Banks,
     sprite_blitter,
     tablat::Tablat,
+    travel_map_screen::MapLocationMarker,
+    troop_map_screen::MENU_MAP_MAIN,
     troops::{TROOPS, Troop},
 };
 
@@ -86,6 +88,9 @@ pub(crate) enum TaskId {
     // (interval 1): one outline row into fb1 per tick, present + one phase
     // step per finished pass.
     GlobeRotation,
+    // = seg000:6b34 troop_icon_anim_task — the troop icon animation task on
+    // the full map view (interval 15).
+    TroopIconAnim,
 }
 
 pub(crate) struct FrameTask {
@@ -669,6 +674,12 @@ pub struct GameState {
     // strip (map_screen_open installs the caller's record set here).
     pub(crate) menu_multiple_cancel: MenuBuffer,
 
+    // = seg001:20f2 menu_map_main — the SEE DUNE MAP view's verb menu (EXIT
+    // MAPS / CONTACT FREMEN TROOPS / SEE SPICE DENSITY / TAKE AN ORNITHOPTER /
+    // FIND PROSPECTORS). map_setup_main_menu (seg000:878c) rewrites the ids
+    // and grey bits before every push.
+    pub(crate) menu_map_main: MenuBuffer,
+
     // = seg001:21fd data_021fd — the SKIP TO DESTINATION command template's
     // flags byte (the seg001:21fc record's text-id high byte; 0x40 = greyed).
     // DOS patches the static template in place
@@ -874,6 +885,74 @@ pub struct GameState {
     // flow. DOS never clears it (the dispatch sites are gated on data_046eb);
     // None = the initial 0 word.
     pub(crate) current_main_view_drawing_function: Option<fn(&mut GameState)>,
+
+    // = seg001:3cbe troop_icon_count / seg001:3cc0 troop_icons — the troop
+    // icon renderer's live icon list (troop_icons.rs). The night attack
+    // scene's separate copy lives in attack/mod.rs.
+    pub(crate) troop_icons: Vec<crate::troop_icons::TroopIcon>,
+
+    // = seg001:2786 troop_icon_draw_order_func — which draw-order pick
+    // troop_icons_update_dirty_rect uses: false = troop_icons_pick_next_fifo
+    // (0xc827, insertion order), true = troop_icons_pick_next_by_depth
+    // (0xc835, the full map's back-to-front layering).
+    pub(crate) troop_icon_draw_by_depth: bool,
+
+    // = seg001:4752 troop_icon_focused_ptr — the two focused-icon slots; the
+    // anim task steps slot 0 every firing where the rest only step every 4th.
+    pub(crate) troop_icon_focused: [Option<usize>; 2],
+
+    // = seg001:46f6 troop_icon_anim_phase — the anim task's frame counter.
+    pub(crate) troop_icon_anim_phase: u8,
+
+    // = seg001:46f3 map_view_reentry_count — counts map-view re-entries within
+    // one visit (loc_05a03 increments it when a troop dialogue path re-opens
+    // the view); reset_room_scene_state zeroes it. While 0,
+    // ui_show_globe_map_view shows the rallied-troops title popup.
+    pub(crate) map_view_reentry_count: u8,
+
+    // = seg001:dbe0 map_popup_ptr / seg001:dbe2 map_popup2_ptr — pointers to
+    // the open popup panel records on the full map view (0 = none): the
+    // rallied-troops title panel (MAP_POPUP_RALLIED = data_0194a), the troop
+    // occupation panel (data_04710) or the troop info panel (data_018df).
+    // The map mouse handlers dispatch on which record is open. The port keeps
+    // the DOS record offsets as the identity values.
+    pub(crate) map_popup_ptr: u16,
+    pub(crate) map_popup2_ptr: u16,
+
+    // = seg001:1954 data_01954 — the selected troop id on the full map view
+    // (0 = none): set by the icon click (troop_0872c), shown with the
+    // highlight ring; reset_room_scene_state zeroes it.
+    pub(crate) map_selected_troop_id: u8,
+
+    // = seg001:46fa data_046fa — the troop whose info panel (data_018df) is
+    // open (a troop ptr in DOS, the table index here; None = closed).
+    pub(crate) map_info_popup_troop: Option<usize>,
+
+    // = the data_018df panel record's runtime rect (loc_05f25 writes the
+    // record's +0..+7 next to the clicked icon each open).
+    pub(crate) map_info_panel_rect: Rect,
+
+    // = seg000:5f65/_unk_2CCC6 — the source point (the clicked icon / marker
+    // position) the panel's XOR outline scale animation grows from and shrinks
+    // back to (xor_rect_outline_advance / _reverse, effects al=6/8), plus the
+    // panel rect it animates to. = seg001:46d8 data_046d8 — set by
+    // map_select_troop to suppress the next close animation (loc_07b2b).
+    pub(crate) map_popup_anim_src: (i16, i16),
+    pub(crate) map_popup_anim_rect: Rect,
+    pub(crate) map_popup_anim_suppress: bool,
+
+    // = seg001:46f8 data_046f8 — the location whose info popup is open
+    // (a location ptr in DOS, the table index here; None = closed), the
+    // re-click gate. = seg001:46f7 data_046f7 — its class+1 (0 = closed).
+    pub(crate) map_location_popup_loc: Option<usize>,
+    pub(crate) map_location_popup_class: u8,
+    // = the data_01668 record's runtime rect.
+    pub(crate) map_location_popup_rect: Rect,
+
+    // = seg001:20da menu_multiple_move_to_location_flying_an_orni /
+    // seg001:20e6 riding_a_worm — the GO THERE command menu the location
+    // popup folds in; the records are set per open (map_click_location_marker).
+    pub(crate) map_move_menu: MenuBuffer,
 
     // = seg001:46fc data_046fc — the map screen's hover state, maintained by
     // map_mouse_hover_tracker (seg000:4586) and consumed by the LMB
@@ -1201,6 +1280,11 @@ pub struct GameState {
     // initialize_resources.
     pub(crate) tablat: Option<Tablat>,
 
+    // = segvga:1f4c vga_draw_map_zoomed's working state (the RESOURCE_GLOBDATA
+    // band scratch) — the SEE DUNE MAP full-planet renderer,
+    // map_draw_zoomed_globe's data_046eb bit-0x80 path.
+    pub(crate) map_renderer: MapRenderer,
+
     // = seg001:cd9e — the buffer ui_save_head_rect (seg000:1834) grabs the head-
     // fold strip into: framebuffer-1 rect [1e76h] = (150,137,170,147), 20×10 =
     // 200 packed bytes. loc_017be's animating-down branch puts it back to fb1 to
@@ -1213,10 +1297,9 @@ pub struct GameState {
     // portrait backdrop from fb2.
     pub(crate) ui_hud_head_animating_down: bool,
 
-    // = seg001:ce7a _word_2C32A_pit_timer_callback_counter — free-running PIT
-    // ISR tick counter. draw_room_game_screen snapshots it into
-    // game_clock_tick_base to time-stamp the room entry.
-    pub(crate) pit_timer_callback_counter: u16,
+    // = seg001:ce7a _word_2C32A_pit_timer_callback_counter — the free-running
+    // PIT ISR tick counter — has no stored field: `game_ticks() as u16` is the
+    // port's live equivalent, and every reader derives it from there.
 
     // = seg001:ce80 data_0ce80 pause_enabled — P-key GAME PAUSED window enable
     // flag (pause_if_p_key_pressed opens the window only when nonzero). Cleared
@@ -1359,9 +1442,10 @@ pub struct GameState {
     pub(crate) cursor_save_w: u16,
     pub(crate) cursor_save_h: u16,
 
-    // = seg001:dc5a game_clock_tick_base — PIT-counter reference snapshot taken
-    // when the room screen is presented; elapsed ticks are derived by
-    // subtracting this base.
+    // = seg001:dc5a game_clock_tick_base — PIT-counter reference snapshot
+    // (`game_ticks() as u16`), taken when the room screen is presented and on
+    // every mouse-button edge (seg000:d893); elapsed ticks are derived by
+    // subtracting this base from the current `game_ticks() as u16`.
     pub(crate) game_clock_tick_base: u16,
 
     // = seg001:dc68 frame_tasks_last_tick — the PIT tick at the previous
@@ -1568,6 +1652,27 @@ impl GameState {
             // re-seeds the view centre.
             zoomed_globe_longitude: 0x1964,
             zoomed_globe_latitude: -4,
+            troop_icons: Vec::new(),
+            troop_icon_draw_by_depth: false,
+            troop_icon_focused: [None; 2],
+            troop_icon_anim_phase: 0,
+            map_view_reentry_count: 0,
+            map_popup_ptr: 0,
+            map_popup2_ptr: 0,
+            map_selected_troop_id: 0,
+            map_info_popup_troop: None,
+            map_info_panel_rect: Rect::default(),
+            map_popup_anim_src: (0, 0),
+            map_popup_anim_rect: Rect::default(),
+            map_popup_anim_suppress: false,
+            map_location_popup_loc: None,
+            map_location_popup_class: 0,
+            map_location_popup_rect: Rect::default(),
+            map_move_menu: MenuBuffer {
+                priority: ScreenElement::MoveToLocationMenu.initial_priority(),
+                records: Vec::new(),
+            },
+            map_renderer: MapRenderer::new(),
             globe_renderer: None,
             globe_rotation: 0,
             globe_tilt: 0,
@@ -1614,6 +1719,10 @@ impl GameState {
             menu_multiple_cancel: MenuBuffer {
                 priority: ScreenElement::MapScreen.initial_priority(),
                 records: Vec::new(),
+            },
+            menu_map_main: MenuBuffer {
+                priority: ScreenElement::DuneMapScreen.initial_priority(),
+                records: MENU_MAP_MAIN.to_vec(),
             },
             cmd_skip_to_destination_flags: 0,
             screen_element_stack: vec![ScreenElement::RoomCommandMenu],
@@ -1723,7 +1832,6 @@ impl GameState {
             tablat: None,
             ui_hud_head_saved_strip: vec![0; 20 * 10],
             ui_hud_head_animating_down: false,
-            pit_timer_callback_counter: 0,
             pause_enabled: 0,
             language_setting: 0,
             voc_bases: [0; 17],
@@ -1771,6 +1879,10 @@ impl GameState {
             in_transition: 0,
             idle_anim_trigger: 0,
         }
+    }
+
+    pub(crate) fn is_headless(&self) -> bool {
+        self.headless
     }
 
     pub fn set_headless(&mut self) {
@@ -2032,7 +2144,7 @@ impl GameState {
 
             // = seg000:d851 call travel_pump — the in-game travel pump: while a
             //   flight is active (travel_active) it drives the flight HNM and a
-            //   travel step every 0x300 ticks (map_screen.rs).
+            //   travel step every 0x300 ticks (travel_map_screen.rs).
             self.travel_pump();
 
             // = seg000:d854 if data_0dc4b != 0 take the idle-anim path
@@ -2467,6 +2579,9 @@ impl GameState {
                 }
                 TaskId::GlobeRotation => {
                     self.tick_globe_rotation();
+                }
+                TaskId::TroopIconAnim => {
+                    self.tick_troop_icon_anim();
                 }
             }
         }
@@ -3038,7 +3153,7 @@ impl GameState {
     pub(crate) fn draw_debug_overlay(&self, fb: &mut FrameBuffer) {
         use crate::font::TextSize;
 
-        let day = self.get_ingame_day_in_ax();
+        // let day = self.get_ingame_day_in_ax();
         // (label, value) rows. The value column is placed at a fixed pixel x
         // past the widest label, so the values line up even though the glyph
         // font is proportional (space-padding would not align them).

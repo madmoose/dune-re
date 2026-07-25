@@ -120,9 +120,14 @@ pub const NAV_PANEL_RECORD_COUNT: usize = 6; // the nav panel is 6 records long
 
 /// = seg001:1c36 data_01c36 — the closed-book (normal room view) frieze-side
 /// template: the (flags, sprite_id) applied to HUD records 0..4 by
-/// `ui_set_and_draw_frieze_sides`. The sibling templates (open book 1c56, map
-/// 1c66, globe 1c46) land with those views.
+/// `ui_set_and_draw_frieze_sides`. The sibling templates (open book 1c56,
+/// globe 1c46) land with those views.
 const FRIEZE_SIDES_CLOSED_BOOK: [(u16, i16); 4] = [(0, -1), (0, 0), (0, 3), (0x80, -1)];
+
+/// = seg001:1c66 hud_sides_map — the SEE DUNE MAP view's frieze-side template:
+/// the left side shows the map-view frieze (sprite 0x0d, flags 0xc0) with the
+/// date/time area parked on sprite 6.
+const FRIEZE_SIDES_MAP: [(u16, i16); 4] = [(0xc0, 0x0d), (0, 6), (0, 3), (0, -1)];
 
 /// = seg001:1e7e the date/time moon/sun coordinate table, indexed by the
 /// time-of-day phase (game_time & 0xf). Each phase gives the screen position of
@@ -403,7 +408,7 @@ impl GameState {
     // button handlers). Clears the mouse rect, then negs room_view_toggle: a
     // non-negative result shows the in-game room view, otherwise the globe/map
     // view (ui_show_globe_map_view).
-    fn ui_toggle_room_view(&mut self) {
+    pub(crate) fn ui_toggle_room_view(&mut self) {
         // = seg000:186b call clear_mouse_nav_rect.
         self.clear_mouse_nav_rect();
         // = seg000:186e neg room_view_toggle; jns -> room view, else map view.
@@ -546,17 +551,40 @@ impl GameState {
         self.in_transition = saved;
     }
 
-    // = seg000:5adf reset_room_scene_state — reset per-scene state (particles and
-    // assorted scene globals) before drawing the room.
-    // TODO: port; no-op stub.
-    fn reset_room_scene_state(&mut self) {}
+    // = seg000:5adf reset_room_scene_state — reset the map/globe-view state
+    // before showing the room view.
+    fn reset_room_scene_state(&mut self) {
+        // = seg000:5adf call map_dismiss_troop_popups.
+        self.map_dismiss_troop_popups();
+        // = seg000:5ae4/5ae7 data_046eb = 0; map_view_reentry_count = 0.
+        self.data_046eb = 0;
+        self.map_view_reentry_count = 0;
+        // = seg000:5aea troop_icon_count = 0 (the focused slots are cleared
+        //   with the list, port-side). = seg000:5aed clear the marker list.
+        self.troop_icons.clear();
+        self.troop_icon_focused = [None; 2];
+        self.visible_location_markers.clear();
+        // = seg000:5af0/5af3 map_popup_ptr / map_popup2_ptr = 0.
+        self.map_popup_ptr = 0;
+        self.map_popup2_ptr = 0;
+        // The map popup gates cleared with the view (data_046f8/046fa).
+        self.map_location_popup_loc = None;
+        self.map_info_popup_troop = None;
+        // = seg000:5af6 data_01954 = 0 — the troop-contact selection.
+        self.map_selected_troop_id = 0;
+        // = seg000:5af9 troop_icon_draw_order_func =
+        //   troop_icons_pick_next_fifo.
+        self.troop_icon_draw_by_depth = false;
+        // = seg000:5aff remove troop_icon_anim_task.
+        self.remove_frame_task(crate::TaskId::TroopIconAnim);
+    }
 
     // = seg000:b930 remove_globe_frame_tasks — stop the globe/map animation
     // frame tasks: data_0dd03 = 0 (no port field yet), remove the globe
     // rotation task (frame_task_callback_0b9ae), then fall through into
     // removing the side-decoration slide task (frame_task_callback_0be57 —
     // not ported).
-    fn remove_globe_frame_tasks(&mut self) {
+    pub(crate) fn remove_globe_frame_tasks(&mut self) {
         self.remove_frame_task(crate::TaskId::GlobeRotation);
     }
 
@@ -571,6 +599,14 @@ impl GameState {
         self.ui_draw_date_and_time_indicator();
         // = seg000:d763 fall into the book/companion button redraw.
         self.ui_hud_draw_companions();
+    }
+
+    // = seg000:d792 ui_set_and_draw_frieze_sides_map — the SEE DUNE MAP view's
+    // frieze sides (hud_sides_map). Unlike the closed-book entry there is no
+    // date/time + companion-button tail (d792 falls straight into the shared
+    // template body at d795).
+    pub(crate) fn ui_set_and_draw_frieze_sides_map(&mut self) {
+        self.ui_set_and_draw_frieze_sides(&FRIEZE_SIDES_MAP);
     }
 
     // = seg000:d763 the tail of ui_set_and_draw_frieze_sides_closed_book (also
@@ -755,10 +791,34 @@ impl GameState {
         (self.game_time + 3) >> 4
     }
 
-    // = seg000:5a1a ui_show_globe_map_view — leave the room view and bring up the
-    // globe/map view (the else-branch of ui_toggle_room_view).
-    // TODO: port; no-op stub.
-    fn ui_show_globe_map_view(&mut self) {}
+    // = seg000:18ba ui_teardown_room_view — tear down the in-game room view
+    // (the counterpart of ui_toggle_room_view's enter-room path; called from
+    // ui_show_globe_map_view and the message viewer at loc_0aede).
+    pub(crate) fn ui_teardown_room_view(&mut self) {
+        // = seg000:18ba..18c6 disable the game-area and book/companion HUD
+        //   hotspots (elements 20/21/22).
+        self.ui_elements[20].flags = 0;
+        self.ui_elements[21].flags = 0;
+        self.ui_elements[22].flags = 0;
+        // = seg000:18cc call remove_room_frame_task.
+        self.remove_room_frame_task();
+        // = seg000:18cf call_pcm_vtable_end_loop — end a looping VOC.
+        self.pcm_player.end_loop();
+        // = seg000:18d2 call loc_04d00 — remove the command-panel overlay
+        //   frame task (frame_task_callback_04bb9); never armed in the port.
+        // = seg000:18d5 call dismiss_stacked_overlays.
+        self.dismiss_stacked_overlays();
+        // = seg000:18d8 call loc_04aca — data_011ca = 1.
+        self.data_011ca = 1;
+        // = seg000:18db call reset_scene_lip_sync_state.
+        self.reset_scene_lip_sync_state();
+        // = seg000:18de sky_fade_active = 0.
+        self.sky_fade_active = false;
+        // = seg000:18e3..18ea the staged night attack is torn down (loc_00b21).
+        if self.night_attack_stage != 0 {
+            println!("ui_teardown_room_view: night-attack teardown (loc_00b21) not ported");
+        }
+    }
 
     // = seg000:d443
     fn dispatch_command_menu_slot_0(&mut self) {

@@ -371,6 +371,13 @@ pub(crate) enum ScreenElement {
     // main view (map_screen_open, seg000:430b) with its single Cancel verb.
     // Its cleanup func is map_screen_cleanup (seg000:4415).
     MapScreen,
+    // = menu_map_main (seg001:20f2, leading priority word 0xff) — the SEE DUNE
+    // MAP full-planet view's verb menu, pushed by map_setup_main_menu
+    // (seg000:8819) with the no-op cleanup nullsub_00f66. Its 0xff priority
+    // replaces the room base on push (and the room base replaces it back when
+    // ui_draw_room_command_panel re-inserts on the way out), and locks it
+    // against the transient-overlay drain.
+    DuneMapScreen,
     // = menu_go_towards_this_place (seg001:1f92, priority byte 0xfc) — the
     // fly-over divert menu install_pending_room_action_menu stages for
     // pending_room_action 3. Staged with cleanup func menu_npc_actions_cleanup
@@ -380,6 +387,11 @@ pub(crate) enum ScreenElement {
     // 0xf8) — the fly-over hostile-zone warning menu for pending_room_action 4.
     // Staged with cleanup func menu_npc_actions_cleanup (seg000:3580).
     ChangeDestinationIgnoreWarning,
+    // = menu_multiple_move_to_location_flying_an_orni / riding_a_worm
+    // (seg001:20da / 20e6, priority byte 0xfc) — the GO THERE command menu the
+    // location troop popup folds in (loc_05fb0). Its cleanup func is
+    // loc_05f91 (map_close_location_popup), which closes the info panel.
+    MoveToLocationMenu,
 }
 
 impl ScreenElement {
@@ -395,8 +407,12 @@ impl ScreenElement {
     // (dismiss_stacked_overlays) stops at.
     pub(crate) const fn initial_priority(self) -> u8 {
         match self {
-            ScreenElement::RoomCommandMenu | ScreenElement::LookAwayFromMirror => 0xff,
-            ScreenElement::NpcActionsMenu | ScreenElement::GoTowardsThisPlace => 0xfc,
+            ScreenElement::RoomCommandMenu
+            | ScreenElement::LookAwayFromMirror
+            | ScreenElement::DuneMapScreen => 0xff,
+            ScreenElement::NpcActionsMenu
+            | ScreenElement::GoTowardsThisPlace
+            | ScreenElement::MoveToLocationMenu => 0xfc,
             ScreenElement::MixerPanel
             | ScreenElement::PalacePlan
             | ScreenElement::MapScreen
@@ -419,6 +435,8 @@ impl GameState {
             ScreenElement::MusicCdOrderMenu => &self.menu_globe_music,
             ScreenElement::PalacePlan => &self.menu_done,
             ScreenElement::MapScreen => &self.menu_multiple_cancel,
+            ScreenElement::DuneMapScreen => &self.menu_map_main,
+            ScreenElement::MoveToLocationMenu => &self.map_move_menu,
             ScreenElement::GoTowardsThisPlace => &self.menu_go_towards_this_place,
             ScreenElement::ChangeDestinationIgnoreWarning => {
                 &self.menu_change_destination_ignore_warning
@@ -436,6 +454,8 @@ impl GameState {
             ScreenElement::MusicCdOrderMenu => &mut self.menu_globe_music,
             ScreenElement::PalacePlan => &mut self.menu_done,
             ScreenElement::MapScreen => &mut self.menu_multiple_cancel,
+            ScreenElement::DuneMapScreen => &mut self.menu_map_main,
+            ScreenElement::MoveToLocationMenu => &mut self.map_move_menu,
             ScreenElement::GoTowardsThisPlace => &mut self.menu_go_towards_this_place,
             ScreenElement::ChangeDestinationIgnoreWarning => {
                 &mut self.menu_change_destination_ignore_warning
@@ -558,7 +578,7 @@ impl GameState {
         // = seg000:2e52 loc_02e52 — post-render bookkeeping + dialogue tail.
         self.finish_room_screen_setup();
         // = seg000:2e55 game_clock_tick_base = the current PIT counter.
-        self.game_clock_tick_base = self.pit_timer_callback_counter;
+        self.game_clock_tick_base = self.game_ticks() as u16;
         // = seg000:2e5b data_047a7 != 0 suppresses the dialogue/lip-sync tail.
         if self.data_047a7 != 0 {
             return;
@@ -618,7 +638,7 @@ impl GameState {
         self.set_fb1_as_active_framebuffer();
         self.service_midi_music();
         // = seg000:18b1 game_clock_tick_base = the current PIT counter.
-        self.game_clock_tick_base = self.pit_timer_callback_counter;
+        self.game_clock_tick_base = self.game_ticks() as u16;
         // = seg000:18b7 jmp ui_hud_head_animate_up.
         self.ui_hud_head_animate_up();
     }
@@ -808,9 +828,28 @@ impl GameState {
             // = seg000:0f67 menu_callback_choice_wait_for_morning — the plain-room
             // "WAIT FOR MORNING" time-skip verb (CMD_WAIT_FOR_MORNING).
             0x0f67 => self.menu_callback_choice_wait_for_morning(),
+            // = seg000:186b ui_toggle_room_view — the SEE DUNE MAP room verb
+            // (CMD_SEE_DUNE_MAP) and the map main menu's EXIT MAPS verb: both
+            // sides of the room <-> full-map toggle dispatch the same handler.
+            0x186b => self.ui_toggle_room_view(),
+            // = the map main menu's remaining verbs (MENU_MAP_MAIN) — the
+            // troop-command flows are not ported yet.
+            // = seg000:86cc menu_callback_choice_map_main_contact_fremen_troops.
+            0x86cc => println!("dispatch: CONTACT FREMEN TROOPS (0x86cc) not ported"),
+            // = seg000:53f1 menu_callback_choice_map_main_see_spice_density.
+            0x53f1 => println!("dispatch: SEE SPICE DENSITY (0x53f1) not ported"),
+            // = seg000:42d9 menu_callback_choice_map_main_take_an_ornithopter —
+            // commit_room_move + ui_toggle_room_view into the ported
+            // notransition entry.
+            0x42d9 => println!("dispatch: map-menu TAKE AN ORNITHOPTER (0x42d9) not ported"),
+            // = seg000:5b1e menu_callback_choice_map_main_find_prospectors.
+            0x5b1e => println!("dispatch: FIND PROSPECTORS (0x5b1e) not ported"),
+            // = the location popup's GO THERE verbs (loc_05fb0's menu).
+            0x50db => self.menu_callback_choice_move_to_location_orni(),
+            0x50ea => self.menu_callback_choice_move_to_location_worm(),
             // TODO: the other mirror-menu verbs (RESTART 0x0e47, LOAD 0xb29e,
-            // SAVE 0xb28c) and the room verbs (SEE DUNE MAP 0x186b, CALL A
-            // WORM 0x42d1, ...) are not ported.
+            // SAVE 0xb28c) and the room verbs (CALL A WORM 0x42d1, ...) are
+            // not ported.
             0xd2e2 => self.menu_callback_choice_exit_menu(),
             _ => {
                 println!("dispatch_command_handler: unhandled 0x{handler:04x}");
@@ -1562,7 +1601,7 @@ impl GameState {
     // location's per-type available equipment (DOS buffer at seg001:46fe,
     // location_available_equipment); the ornithopters slot is orni_count, read
     // just below to grey TAKE AN ORNITHOPTER.
-    fn compute_location_available_equipment(&mut self) {
+    pub(crate) fn compute_location_available_equipment(&mut self) {
         // = seg000:2f3e di = [current_location_ptr] — the current location
         // record (this call site is the location entry room's verb build, so
         // it is always set; the guard covers the "no location" sentinel).
@@ -1655,12 +1694,17 @@ impl GameState {
                 // for the Fremen-2 one while one STOP TALKING still closes the
                 // dialogue, and how ui_draw_room_command_panel's tail
                 // re-insert of command_menu_buf repaints the room base in
-                // place. Port deviation for the 0xff class: a DIFFERENT 0xff
-                // element (the mirror overlay over the room base) deepens
-                // instead — the port keeps the room base on the stack and
-                // pops the mirror explicitly (see the 0x0eb9 handler) where
-                // DOS really does replace the room slot.
-                if priority != 0xff || top == element {
+                // place, and how the SEE DUNE MAP menu (also 0xff) swaps
+                // with the room base in both directions. Port deviation for
+                // the mirror overlay only: pushing LookAwayFromMirror over a
+                // different 0xff element deepens instead — the port keeps
+                // the room base on the stack and pops the mirror explicitly
+                // (see the 0x0eb9 handler) where DOS really does replace the
+                // room slot.
+                if priority != 0xff
+                    || top == element
+                    || element != ScreenElement::LookAwayFromMirror
+                {
                     *self.screen_element_stack.last_mut().unwrap() = element;
                     self.redraw_active_command_menu();
                     return;
@@ -1705,6 +1749,12 @@ impl GameState {
             // = seg000:4415 map_screen_cleanup — leave the map/globe view and
             //   restore the room screen.
             ScreenElement::MapScreen => self.map_screen_cleanup(),
+            // = seg000:5f91 loc_05f91 — the GO THERE menu's cleanup closes
+            //   the location info panel.
+            ScreenElement::MoveToLocationMenu => self.map_close_location_popup(),
+            // = seg000:8816 the SEE DUNE MAP menu is pushed with bx =
+            //   nullsub_00f66 — a no-op cleanup (the view resets through
+            //   reset_room_scene_state on the way back to the room).
             // The room base and the remaining menus carry nullsub_00f66 /
             // fn_0d917_noop — no-op cleanups.
             _ => {}
@@ -2854,7 +2904,7 @@ impl GameState {
     // gfx_call_bp_with_front_buffer_as_screen), then wipe it onto the visible
     // screen with effect `effect` (DOS al, via the segvga vga_transition) and
     // flush the palette.
-    fn transition(&mut self, effect: u8, render: fn(&mut GameState)) {
+    pub(crate) fn transition(&mut self, effect: u8, render: fn(&mut GameState)) {
         // = seg000:c108 in_transition = 0x80.
         self.in_transition = 0x80;
         // = seg000:c10f run the render routine with the front buffer redirected

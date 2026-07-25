@@ -633,12 +633,14 @@ impl GameState {
         }
     }
 
-    // = seg000:4057 loc_04057 — commit a move: move companion NPCs to the
-    // destination, record location_and_room / location_appearance, rotate
-    // current_room into previous_room, then redraw. Reached from the in-room
-    // move (seg000:3fcf), the desert-position dispatch, and the walk-in
-    // arrival fall-through.
-    fn commit_room_move(&mut self, new_room: u16, new_appearance: u16) {
+    // = seg000:4057 callback_transition_04057 — commit a move: move companion
+    // NPCs to the destination, record location_and_room / location_appearance,
+    // rotate current_room into previous_room, then redraw. Reached from the
+    // in-room move (seg000:3fcf), the desert-position dispatch, the walk-in
+    // arrival fall-through, and the two map-side boarding verbs (seg000:42e3
+    // TAKE AN ORNITHOPTER, seg000:510b GO THERE FLYING AN ORNI) which move the
+    // player to the location's outdoor room 1 first.
+    pub(crate) fn commit_room_move(&mut self, new_room: u16, new_appearance: u16) {
         // = seg000:4057 call move_all_NPCs_whose_bit_6_of_flags_is_set —
         //   companions in the room being left follow the player to the
         //   destination. Runs before location_and_room is updated: the scan

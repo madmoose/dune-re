@@ -1,7 +1,7 @@
 # Map screen — remaining work
 
 Status as of 2026-07-17. The TAKE AN ORNITHOPTER verb (seg000:42e9) is ported
-and wired end-to-end in `crates/dune/src/map_screen.rs`: the screen opens with
+and wired end-to-end in `crates/dune/src/travel_map_screen.rs`: the screen opens with
 the ORNYPAN cockpit, the windowed one-cell-per-pixel map (curved globe edges),
 the alternate nav panel, the Cancel menu, and the "select destination"
 narration clip; Cancel restores the room; hovering resolves markers/compass
@@ -259,14 +259,52 @@ not yet started.
 
 ## Sibling entry points sharing this code
 
-- [ ] **SEE DUNE MAP** (0x186b → `ui_show_globe_map_view`, seg000:5a1a — stub
-  in game_ui.rs) — the full-globe view: `data_046eb` bit 0x80 selects
-  `vga_draw_map_zoomed` in `map_draw_zoomed_globe` (println stub; wire the
-  standalone `MapRenderer`, which already ports that segvga routine), plus the
-  globe-mode branches of `map_screen_draw_base` (seg000:43a9..43c9: fb2
-  snapshot, `loc_05b69` border, `data_014a4` title strip) and
+- [x] **SEE DUNE MAP** (0x186b → `ui_show_globe_map_view`, seg000:5a1a) —
+  DONE 2026-07-24 (troop_map_screen.rs): the open/close toggle, the transition
+  callback (seg000:5a56: full-map rect, border, `data_046eb = 0x80`, map
+  frieze sides, alt nav panel), `ui_main_view_map_interface` (seg000:5a9a:
+  the `MapRenderer` full-planet draw wired into `map_draw_zoomed_globe`'s
+  0x80 path, vegetation marks seg000:633b, location markers, the player
+  sprite seg000:6314, the fb2 snapshot + `troop_icons_update_dirty_rect`
+  present), the map main menu (seg001:20f2 + the seg000:878c grey-bit
+  config), the rallied-troops popup (seg000:5bb0/5beb), the nav-arrow
+  scroll and the mouse-handler record (seg001:1a9e). ALSO DONE 2026-07-24
+  (troop_icons.rs): the troop icon renderer — spawn/remove/anim
+  (seg000:c58d..c661, `TaskId::TroopIconAnim` = troop_icon_anim_task 6b34),
+  the dirty-rect repaint with the pluggable draw order (seg000:c6ad +
+  seg001:2786, fifo c827 / by-depth c835), the map spawn pass
+  (map_spawn_troop_icons 6715: marker troop chains + moving troops) with the
+  position/script selection (troop_icon_screen_pos 686e,
+  troop_icon_pick_script 6770/6827) and the seg001:1672..1935 icon-script
+  data block embedded verbatim. AND 2026-07-24, the troop interactions:
+  the icon click hit-test (troop_icon_hit_test 6946), troop selection +
+  the rotating highlight ring (map_click_troop_icon 872c /
+  map_select_troop 8685 / map_focus_troop_icon 697c, the 18fd ring
+  script), and the RMB troop info panel (map_open_troop_info_popup 78bc /
+  map_place_info_panel 5f25 / map_draw_troop_info_panel_content 78e9 with
+  the CONDIT-staged interpolated strings + the equipment row 7e3d, close
+  79de, toggle wired in the rmb handler). Still stubbed: the contact verb
+  menu + troop dialogue (troop_0780a / troop_07c02 and the 7b58 contact
+  strip), the hover label (loc_05692), the occupation panel + popup
+  dragging, the comm-glow pointer arrow (loc_0c0e8 / 7b0f / 7b2b), SEE SPICE
+  DENSITY (the `data_046eb` bit-0x40 overlay, seg000:53f1/5406) and the
+  map-main-menu verbs beyond EXIT MAPS.
+- [x] **Location troop popup** (loc_05fb0) — DONE 2026-07-24
+  (troop_map_screen.rs): the LMB click near a marker opens the location info
+  panel (map_draw_location_popup 0600e: type + name, class code
+  location_popup_class 6252, battle gate location_has_battle 627e via troop
+  accumulation, the equipment column row with vertical stacking
+  draw_equipment_column 61d3, the battle gauge location_battle_gauge 60f8),
+  and folds in the GO THERE command menu (menu_multiple_move_to_location_
+  flying_an_orni / riding_a_worm, ScreenElement::MoveToLocationMenu, cleanup
+  map_close_location_popup 5f91). The GO THERE ORNI verb (50db) wires to the
+  ported travel confirm; the WORM verb (50ea) and the departure transition
+  are stubbed. The water/spice extra (loc_0605c) is stubbed.
+- [ ] The globe-mode branches of `map_screen_draw_base` (seg000:43a9..43c9:
+  fb2 snapshot, `loc_05b69` border, `data_014a4` title strip) and
   `map_screen_restore_room_view` (seg000:43ea..43f9: `data_014ac` rect from
-  fb2, gated on `hnm_counter_2`).
+  fb2, gated on `hnm_counter_2`) — the CALL A WORM windowed view without the
+  cockpit.
 - [ ] **CALL A WORM** (0x42d1 → seg000:4285) — VER.HSQ setup + the
   `data_00167`/`data_0aa6e` sub-resource plumbing, then the shared
   `map_screen_open_with_cancel_menu`; greyed until `game_phase >= 0x4f`.

@@ -1,4 +1,14 @@
-#![allow(clippy::new_without_default)]
+//! = segvga:1f4c vga_draw_map_zoomed — the SEE DUNE MAP full-planet renderer.
+//!
+//! Draws the whole planet as a flat map into the full-map window
+//! (seg001:1482 full_map_view_rect, (4,4)-(316,148)): 36 latitude bands of 4
+//! rows each, 312 px wide. Every band interpolates one raw MAP.HSQ row pair
+//! (4 output px per map cell horizontally, 4 rows per band vertically with
+//! error-spread row duplication) through the RESOURCE_GLOBDATA scratch
+//! buffer, shades the curved west/east planet edges, and stores the band
+//! into the framebuffer through an absolute destination cursor
+//! (data_segvga_01cb2, seeded 0x504 = (4,4) — no fb_base_ofs, like the
+//! globe renderer).
 
 use crate::{FrameBuffer, fixed_point::FixedU16F16, tablat::Tablat};
 
@@ -13,36 +23,59 @@ const _MAP_HEIGHT: u16 = 144;
 
 const LOG_GLOBDATA_ACCESS: bool = false;
 
+// = the ss scratch the DOS routine works in (si = RESOURCE_GLOBDATA): the
+// interpolated row pair at +140/+1740, the five 400-byte band lines at +316,
+// and the packed output row at +160.
 pub struct MapRenderer {
-    map: [u8; 50681],
-    tablat: Tablat,
     buffer: Vec<u8>,
 }
 
-impl MapRenderer {
-    pub fn new(map: &[u8; 50681], tablat: &[u8; 792]) -> Self {
-        let tablat = Tablat::new(tablat);
+impl Default for MapRenderer {
+    fn default() -> Self {
+        Self::new()
+    }
+}
 
+impl MapRenderer {
+    pub fn new() -> Self {
         Self {
-            map: *map,
-            tablat,
             buffer: vec![0; 4096],
         }
     }
 
-    pub fn draw(&mut self, fb: &mut FrameBuffer, lat: i16, lng: u16) {
+    // = segvga:1f4c vga_draw_map_zoomed — draw the full map. `lat`/`lng` are
+    // the zoomed globe centre (dx / the ax = lat - 0x12 top band on the DOS
+    // side; the +80 below is that -0x12 plus the +98 tablat row bias). The
+    // caller clamps `lat` to ±0x4b.
+    pub fn draw(&mut self, fb: &mut FrameBuffer, map: &[u8], tablat: &Tablat, lat: i16, lng: u16) {
         let lat = (lat + 75 + 5) as u16;
+        // = segvga:1f60 the 0x24-band loop counter (data_segvga_001b7); the
+        // north/south walks (segvga:1fa1 / 2005) are folded into the tablat
+        // row index here.
         for i in 0..36 {
-            self.draw_band(fb, i, lat + i, lng);
+            self.draw_band(fb, map, tablat, i, lat + i, lng);
         }
     }
 
-    pub fn draw_band(&mut self, fb: &mut FrameBuffer, i: u16, lat: u16, lng: u16) {
+    // = one iteration of the band loop (segvga:1fa1 north / 2005 south):
+    // interpolate the band's top and bottom map rows, spread them over the
+    // four band lines, shade the planet edges, and store the band.
+    pub fn draw_band(
+        &mut self,
+        fb: &mut FrameBuffer,
+        map: &[u8],
+        tablat: &Tablat,
+        i: u16,
+        lat: u16,
+        lng: u16,
+    ) {
         self.buffer.fill(0);
 
-        self.interpolate_horizontal_line(lat, lng, 140);
-        self.interpolate_horizontal_line(lat + 1, lng, 1740);
-        self.interpolate_vertically(lat);
+        // = segvga:1f9e/1fb7 the band's top row into +140 (0x8c) and
+        // = segvga:2002/2017 its bottom row into +1740 (0x6cc).
+        self.interpolate_horizontal_line(map, tablat, lat, lng, 140);
+        self.interpolate_horizontal_line(map, tablat, lat + 1, lng, 1740);
+        self.interpolate_vertically(tablat, lat);
         self.post_process(lat);
         self.copy_to_framebuffer(fb, i);
     }
@@ -62,17 +95,34 @@ impl MapRenderer {
         self.buffer[addr] = v;
     }
 
-    fn read_map_pixel(&mut self, map_base: usize, offset: usize) -> u8 {
-        let b = self.map[map_base + offset];
+    // = segvga:206a/208f `stc; adc al,al; add al,al; shl al,1; shl al,1` —
+    // unpack a map cell's low-nibble height into the interpolation range:
+    // ((cell & 0x0f) * 2 + 1) * 8.
+    fn read_map_pixel(map: &[u8], map_base: usize, offset: usize) -> u8 {
+        let b = map[map_base + offset];
 
         (((b & 0x0f) << 1) + 1) << 3
     }
 
-    fn interpolate_horizontal_line(&mut self, y0: u16, lng: u16, output: u16) {
+    // = segvga:2025 loc_segvga_02025 — interpolate one map row into the
+    // scratch at `output`, 4 px per cell, rotated so longitude `lng` is the
+    // row centre. Rows shorter than 88 cells (segvga:204b) are centred by
+    // stepping `output` in; wider rows show an 88-cell window.
+    fn interpolate_horizontal_line(
+        &mut self,
+        map: &[u8],
+        tablat: &Tablat,
+        y0: u16,
+        lng: u16,
+        output: u16,
+    ) {
         let mut output = output;
-        let len = self.tablat.len(y0);
-        let map_lat_offset = self.tablat.offset(y0);
+        let len = tablat.len(y0);
+        let map_lat_offset = tablat.offset(y0);
 
+        // = segvga:2034 mul bx; the cell = the high word of lng * len, with
+        // = segvga:203b rol/and — the sub-cell remainder's top 2 bits nudge
+        // the output pen left for sub-cell scrolling.
         let lng_fp = FixedU16F16::from_u16_u16(0, lng);
         let rotation_offset = lng_fp * len;
 
@@ -85,6 +135,7 @@ impl MapRenderer {
         let mut len1 = len as i32;
 
         if len1 < 88 {
+            // = segvga:204d..2051 centre a short row.
             output += 2 * (88 - len1) as u16;
 
             rotation_offset -= len1 / 2;
@@ -97,6 +148,7 @@ impl MapRenderer {
             len1 -= rotation_offset;
             len2 = (len0 + 1) - len1;
         } else {
+            // = segvga:2079..2087 the 88-cell window of a wide row.
             rotation_offset -= 88 / 2;
             if rotation_offset < 0 {
                 rotation_offset += len1;
@@ -110,11 +162,15 @@ impl MapRenderer {
         }
 
         let mut p0 =
-            self.read_map_pixel(map_lat_offset as usize, (rotation_offset - 1) as usize) as i32;
+            Self::read_map_pixel(map, map_lat_offset as usize, (rotation_offset - 1) as usize)
+                as i32;
 
+        // = segvga:209e.. the two run loops: from the rotation offset to the
+        // row end, then the wrap-around from the row start.
         for i in 0..len1 {
             let p1 =
-                self.read_map_pixel(map_lat_offset as usize, (i + rotation_offset) as usize) as i32;
+                Self::read_map_pixel(map, map_lat_offset as usize, (i + rotation_offset) as usize)
+                    as i32;
             let d = (p1 - p0) / 4;
 
             for _ in 0..4 {
@@ -126,7 +182,7 @@ impl MapRenderer {
         }
 
         for i in 0..len2 {
-            let p1 = self.read_map_pixel(map_lat_offset as usize, i as usize) as i32;
+            let p1 = Self::read_map_pixel(map, map_lat_offset as usize, i as usize) as i32;
             let d = (p1 - p0) / 4;
 
             for _ in 0..4 {
@@ -138,9 +194,14 @@ impl MapRenderer {
         }
     }
 
-    fn interpolate_vertically(&mut self, y0: u16) {
-        let mut l0_len = (self.tablat.len(y0) / 2) as u32;
-        let mut l4_len = (self.tablat.len(y0 + 1) / 2) as u32;
+    // = segvga:2123 (northern hemisphere) / segvga:2153 (southern) — spread
+    // the interpolated top/bottom rows over the band's four 400-byte lines
+    // (segvga:213d the 0x190 line stride, segvga:2164 the 0xb0 = 176-column
+    // loop), duplicating columns with the 8-bit error accumulators seeded
+    // +0x80 (segvga:21ad..21b4) as the line length grows toward the equator.
+    fn interpolate_vertically(&mut self, tablat: &Tablat, y0: u16) {
+        let mut l0_len = (tablat.len(y0) / 2) as u32;
+        let mut l4_len = (tablat.len(y0 + 1) / 2) as u32;
 
         let south_hemisphere = y0 >= BANDS / 2;
         if south_hemisphere {
@@ -314,6 +375,10 @@ impl MapRenderer {
         }
     }
 
+    // = segvga:22a0 loc_segvga_022a0 — shade the planet's west/east edges into
+    // the polar bands: per band line, black out to the edge, then the four
+    // shade bytes (cs:8ef) toward the map. The (width, inset) pairs come from
+    // the per-band tables at cs:8f7 (north) / cs:92f (south).
     fn post_process(&mut self, y0: u16) {
         assert!(y0 >= MAP_BAND_BEGIN);
         assert!(y0 < MAP_BAND_END);
@@ -401,6 +466,11 @@ impl MapRenderer {
         }
     }
 
+    // = segvga:230a loc_segvga_0230a + segvga:2343 — store the band's four
+    // lines into the framebuffer, remapping each interpolated height to the
+    // map palette (pixel = (v >> 4) + 0x10, segvga:2353..235d). The DOS
+    // destination cursor (data_segvga_01cb2) is absolute, seeded 0x504 =
+    // (4,4) — no fb_base_ofs.
     fn copy_to_framebuffer(&mut self, fb: &mut FrameBuffer, i: u16) {
         for y in 0..4 {
             for x in 0..MAP_WIDTH {

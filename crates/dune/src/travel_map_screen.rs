@@ -10,7 +10,7 @@
 //! full-globe (data_046eb bit 0x80) drawing are not ported yet.
 
 use crate::{
-    GameState, Rect, TaskId,
+    FbId, GameState, Rect, TaskId,
     game_ui::{MouseHandlers, NAV_PANEL_ALT},
     gfx,
     locations::{location_index_from_ptr, location_ptr},
@@ -379,13 +379,18 @@ impl GameState {
         if self.prev_mouse_buttons & 1 == 0 {
             return;
         }
-        // = seg000:8835 cmp [data_046eb],0; jns loc_08846 — the full-globe
-        //   view (bit 0x80) scrolls the globe instead: bit 0x40 moves
-        //   globe_param_3/4 (loc_08858 -> loc_0542f), else loc_05beb runs
-        //   first. TODO: port with SEE DUNE MAP (the full-globe view).
+        // = seg000:8835 cmp [data_046eb],0; jns loc_08846 — the full-map view
+        //   (bit 0x80): the spice-density sub-mode (bit 0x40) scrolls
+        //   globe_param_3/4 instead (loc_08858 -> loc_0542f, not ported); the
+        //   plain full map dismisses the rallied-troops popup and scrolls the
+        //   shared zoomed position below.
         if self.data_046eb & 0x80 != 0 {
-            println!("ui_click_map_buttons: full-globe scroll not ported");
-            return;
+            if self.data_046eb & 0x40 != 0 {
+                println!("ui_click_map_buttons: spice-density scroll (loc_08858) not ported");
+                return;
+            }
+            // = seg000:8843 call map_dismiss_rallied_troops_popup.
+            self.map_dismiss_rallied_troops_popup();
         }
         // = seg000:8846 lodsw; add [zoomed_globe_longitude],ax; lodsw; add
         //   [zoomed_globe_latitude],ax — the longitude wraps around the map;
@@ -436,14 +441,36 @@ impl GameState {
     }
 
     // = seg000:7b36 map_dismiss_troop_popups — close any troop-contact UI over
-    // the map before a redraw: the no-more-orders teardown (menu_callback_
-    // choice_map_troop_contact_no_more_orders), the popup menu exit gated on
-    // data_046f8 (loc_05f79) and the troop marker overlay removal gated on
-    // data_046fa (loc_079de), bracketed by in_transition = 0x80. The gates
-    // belong to the troop-contact flow (SEE DUNE MAP), which is not ported;
-    // nothing sets them yet, so this stays a no-op stub.
-    // TODO: port with the troop-contact map interactions.
-    fn map_dismiss_troop_popups(&mut self) {}
+    // the map before a redraw, bracketed by in_transition = 0x80 so the
+    // repaints do not arm a panel fold: the no-more-orders teardown
+    // (menu_callback_choice_map_troop_contact_no_more_orders — TODO with the
+    // contact menu), the location popup menu exit (loc_05f79) and the troop
+    // info panel close (loc_079de).
+    pub(crate) fn map_dismiss_troop_popups(&mut self) {
+        let saved = self.in_transition;
+        self.in_transition = 0x80;
+        self.map_close_location_troop_popup();
+        self.map_close_troop_info_popup();
+        self.in_transition = saved;
+    }
+
+    // = seg000:5f79 loc_05f79 map_close_location_troop_popup — close an open
+    // location popup: when its GO THERE menu is up, exit the menu (its cleanup,
+    // map_close_location_popup, closes the panel); otherwise (the panel-only
+    // case) close the panel directly.
+    pub(crate) fn map_close_location_troop_popup(&mut self) {
+        // = seg000:5f7b xor ax,ax; xchg ax,[data_046f8]; jz ret.
+        if self.map_location_popup_loc.is_none() {
+            return;
+        }
+        // = seg000:5f83..5f8d the active element's priority byte: a locked base
+        //   (0xff, no menu) closes directly (loc_05f91); a menu exits.
+        if self.get_active_screen_element() == ScreenElement::MoveToLocationMenu {
+            self.menu_callback_choice_exit_menu();
+        } else {
+            self.map_close_location_popup();
+        }
+    }
 
     // = seg000:4415 map_screen_cleanup — the map screen element's cleanup func
     // (the DOS bx passed to the screen-element push at seg000:430b), run when
@@ -524,11 +551,31 @@ impl GameState {
 
     // = seg000:b6c3 map_draw_zoomed_globe — draw the map into the map window.
     pub(crate) fn map_draw_zoomed_globe(&mut self) {
-        // = seg000:b6c3 test data_046eb,80h — the full interpolated globe
-        //   (vga_draw_map_zoomed, centre (0xa0,0x4c), latitude clamped ±0x4b).
-        //   TODO: wire the standalone MapRenderer port up to this path.
+        // = seg000:b6c3 test data_046eb,80h — the full-map mode: the whole
+        //   planet through the interpolated flat-map renderer.
         if self.data_046eb & 0x80 != 0 {
-            println!("map_draw_zoomed_globe: full-globe mode not ported");
+            // = seg000:b6cc/b6d2 the fixed window centre (0xa0, 0x4c) into
+            //   data_0dcf6/data_0dcf8 — map_position_to_screen projects the
+            //   markers against it (see the 0x80 branch there).
+            // = seg000:b6d8..b6f5 clamp the latitude to ±0x4b so all 37 band
+            //   row pairs have tablat entries.
+            self.zoomed_globe_latitude = self.zoomed_globe_latitude.clamp(-0x4b, 0x4b);
+            // = seg000:b6f8..b70f dx = the longitude, ax = latitude - 0x12
+            //   (the top band), es:di = the MAP bytes, bp = TABLAT, si =
+            //   RESOURCE_GLOBDATA, bx = the active framebuffer; call
+            //   vga_draw_map_zoomed (ported as MapRenderer).
+            let lat = self.zoomed_globe_latitude;
+            let lng = self.zoomed_globe_longitude;
+            let tablat = self.tablat.as_ref().expect("TABLAT.BIN not loaded");
+            // Disjoint field borrows: the renderer, the map bytes and the
+            // active framebuffer.
+            let fb = match self.active_fb {
+                FbId::Screen => &mut self.screen,
+                FbId::Fb1 => &mut self.framebuffer,
+                FbId::Saved => &mut self.framebuffer_saved,
+                FbId::Back => &mut self.framebuffer_back,
+            };
+            self.map_renderer.draw(fb, &self.map, tablat, lat, lng);
             return;
         }
         // = seg000:b714 loc_0b714 — the windowed map. Window geometry from
@@ -602,12 +649,15 @@ impl GameState {
     pub(crate) fn map_position_to_screen(&self, x: u16, lat: i16) -> (i16, i16) {
         // = seg000:b649 cl = 2 on the full globe, else 0.
         let shift = if self.data_046eb & 0x80 != 0 { 2 } else { 0 };
-        // = data_0dcf6 / data_0dcf8 — the window centre, derived from
-        // data_046e3_rect the way map_draw_zoomed_globe stores it (the globe
-        // path stores the fixed centre (0xa0, 0x4c) instead — TODO with it).
+        // = data_0dcf6 / data_0dcf8 — the window centre, as map_draw_zoomed_
+        // globe stores it: the fixed (0xa0, 0x4c) in full-map mode
+        // (seg000:b6cc/b6d2), else derived from data_046e3_rect.
         let r = self.map_view_rect;
-        let centre_x = r.x0 + (r.x1 - r.x0) / 2;
-        let centre_y = r.y0 + (r.y1 - r.y0 - 1) / 2;
+        let (centre_x, centre_y) = if self.data_046eb & 0x80 != 0 {
+            (0xa0, 0x4c)
+        } else {
+            (r.x0 + (r.x1 - r.x0) / 2, r.y0 + (r.y1 - r.y0 - 1) / 2)
+        };
         // = seg000:b652..b65a the screen y.
         let sy = ((lat - self.zoomed_globe_latitude) << shift) + centre_y;
         // = seg000:b65e..b67e the screen x: `imul bp` then the cl-step
@@ -685,7 +735,7 @@ impl GameState {
     // the map window (data_046e3_rect). The port passes it per draw call
     // instead of storing the segvga clip rect; like the segvga clip, it lives
     // in fb_base_ofs (y_offset) space.
-    fn map_view_clip_rect(&self) -> Rect {
+    pub(crate) fn map_view_clip_rect(&self) -> Rect {
         let yoff = self.y_offset as i16;
         let r = self.map_view_rect;
         rect(r.x0, r.y0 + yoff, r.x1, r.y1 + yoff)
@@ -694,8 +744,11 @@ impl GameState {
     // = seg000:5dce map_build_and_draw_location_markers — rebuild the
     // visible-location marker list and draw the markers over the map view.
     pub(crate) fn map_build_and_draw_location_markers(&mut self) {
-        // = seg000:5dd1 or al,al; js — globe mode first refreshes the per-band
-        // rotated offsets (loc_0633b). TODO with the full-globe view.
+        // = seg000:5dd1 or al,al; js — full-map mode first draws the
+        // vegetation tufts (map_draw_vegetation_marks).
+        if self.data_046eb & 0x80 != 0 {
+            self.map_draw_vegetation_marks();
+        }
         // = seg000:5dda..5def — data_046eb bit 0x40 keeps the list's leading
         // non-0x40 entries and rebuilds from the first 0x40-flagged one (the
         // travel pass); otherwise rebuild the whole list.
@@ -750,7 +803,7 @@ impl GameState {
     // = seg000:49ea travel_reset_trail — reset the travel state:
     // travel_minimap_state = 0 and every travel_trail_ring entry refilled with
     // the 0x800 empty sentinel (the write cursor keeps its position, like DOS).
-    fn travel_reset_trail(&mut self) {
+    pub(crate) fn travel_reset_trail(&mut self) {
         self.travel_minimap_state = 0;
         self.travel_trail_ring = [(0x800, 0x800); crate::game_state::TRAVEL_TRAIL_LEN];
     }
@@ -950,7 +1003,12 @@ impl GameState {
     // and the entry's stored mode byte equals data_046eb. Returns the winning
     // location ptr and its distance ((0, 0xffff) with no match, DOS di/ax);
     // the first entry wins ties.
-    fn find_nearest_location_marker(&self, max_appearance: u8, x: i16, y: i16) -> (u16, u16) {
+    pub(crate) fn find_nearest_location_marker(
+        &self,
+        max_appearance: u8,
+        x: i16,
+        y: i16,
+    ) -> (u16, u16) {
         // = seg000:5e73/5e7e [bp-8] = 0xffff (best distance), [bp-2] = 0.
         let mut best = 0u16;
         let mut best_dist = 0xffffu16;
@@ -1662,7 +1720,7 @@ impl GameState {
                 //   game-clock stamp; the dialogue/lip-sync tail bails in a
                 //   travel mode (seg000:2e7d).
                 self.finish_room_screen_setup();
-                self.game_clock_tick_base = self.pit_timer_callback_counter;
+                self.game_clock_tick_base = self.game_ticks() as u16;
                 return;
             }
         }
@@ -2209,7 +2267,7 @@ impl GameState {
     // = seg000:5b69 draw_map_view_border — the nested 4-line border around the
     // map view rect (data_046e3_rect), colours 0xfc, 0xfa, 0xf8, 0xf6 growing
     // outward (draw_nested_rect_border, seg000:5b6e).
-    fn draw_map_view_border(&mut self) {
+    pub(crate) fn draw_map_view_border(&mut self) {
         let r = self.map_view_rect;
         let (mut x0, mut y0, mut x1, mut y1) = (r.x0, r.y0, r.x1, r.y1);
         let mut color = 0xfcu8;
@@ -2589,7 +2647,7 @@ impl GameState {
     // (entered from the destination click at seg000:4569; SKIP TO DESTINATION
     // at seg000:5116 re-enters it mid-flight, not ported): arm the pending
     // travel, close the map screen back to the room and depart.
-    fn map_confirm_travel_and_close(&mut self, hover: u16, x: i16, y: i16) {
+    pub(crate) fn map_confirm_travel_and_close(&mut self, hover: u16, x: i16, y: i16) {
         // = seg000:4703 call arm_pending_travel.
         self.arm_pending_travel(hover, x, y);
         // = seg000:4706 call loc_038e1 — refresh the sky palette.

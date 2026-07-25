@@ -1,3 +1,11 @@
+//! The night-attack scene. Its bombs/debris "particles" run on the DOS troop
+//! icon renderer (troop_icon_spawn seg000:c60b, troop_icon_remove c58d,
+//! troop_icons_update_dirty_rect c6ad — the sub_1cXXXX linear addresses
+//! below), whose main job is the layered troop icons on the full map view;
+//! this scene abuses it as a particle system. The port keeps the two uses as
+//! separate systems: this module owns its private particle pool, and the
+//! troop-icon side lives with the map view (troop_map_screen.rs).
+
 mod countdown_timer;
 
 use bytes_ext::U32Ext;
@@ -259,7 +267,7 @@ impl AttackState {
 
                     let sprite_id = FIRST_AIR_BOMB_SPRITE_ID + ((y as u16) % 8);
 
-                    self.sub_1c60b_particles_spawn_particle(sprite_id, x, y, (0, 0));
+                    self.sub_1c60b_troop_icon_spawn(sprite_id, x, y, (0, 0));
                 }
             }
         }
@@ -328,7 +336,7 @@ impl AttackState {
             } else {
                 ax = ax.wrapping_add(1);
                 if (ax & 0xFF) > 0x2D {
-                    self.sub_1c58a_particles_remove_particle(i);
+                    self.sub_1c58a_troop_icon_remove(i);
 
                     i += 1;
 
@@ -355,7 +363,7 @@ impl AttackState {
             }
 
             if should_remove {
-                self.sub_1c58a_particles_remove_particle(i);
+                self.sub_1c58a_troop_icon_remove(i);
             }
 
             i += 1;
@@ -506,7 +514,7 @@ impl AttackState {
         let y = INITIAL_POSITIONS[origin as usize].1;
 
         if self
-            .sub_1c60b_particles_spawn_particle(sprite_id, x, y, velocity)
+            .sub_1c60b_troop_icon_spawn(sprite_id, x, y, velocity)
             .is_some()
         {
             let last_particle_idx = (self.particle_count - 1) as usize;
@@ -624,7 +632,7 @@ impl AttackState {
         *center_y = center_y.saturating_sub_unsigned(height / 2);
     }
 
-    fn sub_1c60b_particles_spawn_particle(
+    fn sub_1c60b_troop_icon_spawn(
         &mut self,
         sprite_id: u16,
         center_x: i16,
@@ -692,18 +700,18 @@ impl AttackState {
             temp_rect.y0 = self.particles[particle_index].rect.y0;
         }
 
-        self.sub_1c6ad_particles_update_dirty_rect(&temp_rect);
+        self.sub_1c6ad_troop_icons_update_dirty_rect(&temp_rect);
     }
 
     fn sub_1c13b_open_onmap_spritesheet(&self) {}
 
-    fn sub_1c58a_particles_remove_particle(&mut self, index: u16) {
+    fn sub_1c58a_troop_icon_remove(&mut self, index: u16) {
         self.sub_1c13b_open_onmap_spritesheet();
 
         if self.particle_count != 0 && index < self.particle_count {
             self.particles[index as usize].flags |= 0x80;
             let rect = self.particles[index as usize].rect;
-            self.sub_1c6ad_particles_update_dirty_rect(&rect);
+            self.sub_1c6ad_troop_icons_update_dirty_rect(&rect);
 
             if index < self.particle_count - 1 {
                 for i in index..self.particle_count - 1 {
@@ -726,7 +734,7 @@ impl AttackState {
     //     }
     // }
 
-    fn sub_1c6ad_particles_update_dirty_rect(&mut self, dirty_rect: &Rect) {
+    fn sub_1c6ad_troop_icons_update_dirty_rect(&mut self, dirty_rect: &Rect) {
         self.sub_1c13b_open_onmap_spritesheet();
 
         let screen_bounds = Rect {
