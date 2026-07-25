@@ -32,6 +32,32 @@ pub(crate) const FREED_PRISONER: u16 = 0x42;
 pub(crate) const COVERED_AREA: u16 = 0x43;
 /// "Battle:"
 pub(crate) const BATTLE: u16 = 0x4c;
+/// "ASK FOR MORE INFORMATION"
+pub(crate) const ASK_FOR_MORE_INFORMATION: u16 = 0x4d;
+/// "MODIFY EQUIPMENT"
+pub(crate) const MODIFY_EQUIPMENT: u16 = 0x4e;
+/// "CHANGE TROOP OCCUPATION"
+pub(crate) const CHANGE_TROOP_OCCUPATION: u16 = 0x4f;
+/// "MOVE TROOP"
+pub(crate) const MOVE_TROOP: u16 = 0x50;
+/// "NEXT TROOP"
+pub(crate) const NEXT_TROOP: u16 = 0x51;
+/// "NO MORE ORDERS"
+pub(crate) const NO_MORE_ORDERS: u16 = 0x52;
+/// "CUT CONTACT"
+pub(crate) const CUT_CONTACT: u16 = 0x53;
+/// "SELECT TROOP OCCUPATION"
+pub(crate) const SELECT_TROOP_OCCUPATION: u16 = 0x56;
+/// "CHANGE DESTINATION"
+pub(crate) const CHANGE_DESTINATION: u16 = 0x58;
+/// "GO & SEARCH FOR EQUIPMENT"
+pub(crate) const GO_AND_SEARCH_FOR_EQUIPMENT: u16 = 0x5d;
+/// "ESPIONAGE"
+pub(crate) const ESPIONAGE: u16 = 0x5f;
+/// "ATTACK"
+pub(crate) const ATTACK: u16 = 0x60;
+/// "ASSEMBLY WIND-TRAP"
+pub(crate) const ASSEMBLY_WIND_TRAP: u16 = 0x61;
 /// "GO THERE FLYING AN ORNI"
 pub(crate) const GO_THERE_FLYING_AN_ORNI: u16 = 0x59;
 /// "GO THERE RIDING A WORM"
@@ -46,6 +72,12 @@ pub(crate) const SEE_SPICE_DENSITY: u16 = 0x64;
 pub(crate) const FIND_PROSPECTORS: u16 = 0x67;
 /// "none"
 pub(crate) const NONE: u16 = 0x69;
+/// "SPECIALIZE IN SPICE"
+pub(crate) const SPECIALIZE_IN_SPICE: u16 = 0x75;
+/// "SPECIALIZE IN ARMY"
+pub(crate) const SPECIALIZE_IN_ARMY: u16 = 0x76;
+/// "SPECIALIZE IN ECOLOGY"
+pub(crate) const SPECIALIZE_IN_ECOLOGY: u16 = 0x77;
 /// "Equipment:"
 pub(crate) const EQUIPMENT: u16 = 0x6e;
 /// "GIVE ORDERS TO TROOP"

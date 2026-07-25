@@ -39,7 +39,8 @@ fn condit_var_name(addr: u16) -> Option<(&'static str, bool)> {
         0x3c => ("troop.population", false),
         0x40 => ("troop.days_since_ralliement", false),
         0x42 => ("troop.time_periods_since_ralliement", true),
-        0x48 => ("troop.harvest_estimate", true),
+        0x48 => ("troop.harvest_rate", true),
+        0x4c => ("contacting_troops_ds_4c", false),
         0x4d => ("location.appearance", false),
         0x4e => ("location.area_and_name", true),
         0x51 => ("location.status", false),
@@ -133,6 +134,9 @@ impl GameState {
             0x3c => self.troop_condit.population,
             0x40 => self.troop_condit.days_since_ralliement,
             0x41 => self.troop_condit.game_days_since_ralliement,
+            // = seg001:004c related_to_contacting_troops_ds_4c — 0xff while
+            // the contacted troop answers from outside the visibility range.
+            0x4c => self.contacting_troops_ds_4c,
             // = seg001:004d..005b the staged location block (prepare_location_
             // data_for_condit, troops.rs).
             0x4d => self.location_condit.appearance,
@@ -193,12 +197,14 @@ impl GameState {
             0x32 => self.troop_condit.bitfield_10,
             0x34 => self.troop_condit.dissatisfaction_and_speech,
             0x42 => self.troop_condit.time_periods_since_ralliement,
-            0x44 => self.troop_condit.field_c,
-            0x46 => self.troop_condit.field_e,
+            0x44 => self.troop_condit.harvest_rate,
+            0x46 => self.troop_condit.harvest_total,
             0x48 => self.troop_condit.ds_48,
             0x4a => self.troop_condit.ds_4a,
             // = seg001:004e the staged location area+name word.
             0x4e => self.location_condit.area_and_name,
+            // = seg001:00a0 spice_in_stock — the player's spice.
+            0xa0 => self.spice_in_stock,
             // = seg001:00ac data_000ac — total population of the
             // allegiance-flagged troops.
             0xac => self.data_000ac,

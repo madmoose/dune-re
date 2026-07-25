@@ -559,6 +559,11 @@ impl PcmPlayer {
         self.enabled.store(enabled, Ordering::Relaxed);
     }
 
+    /// Whether a digital-sound card is modelled at all (= check_pcm_enabled).
+    pub fn is_enabled(&self) -> bool {
+        self.enabled.load(Ordering::Relaxed)
+    }
+
     /// = dnsdb_start_playback (seg001:0106). Returns false if refused because a
     /// voice is already playing (no preemption), or when no PCM card is present.
     pub fn start_playback(&self, voc: &[u8], loop_flags: u8) -> bool {

@@ -97,6 +97,87 @@ const TALKING_HEAD_MOUTH_BOX: [Rect; 17] = [
     rect(72, 54, 100,  89), // FRM3
 ];
 
+/// = one 10-byte row of the seg001:1984 sign table: the phrase id of a spoken
+/// line, and the placard the speaker holds up while saying it — a COMMAND
+/// string id, the screen position it is drawn at, and its fg/bg colour word.
+/// The rows are sorted by phrase id; callback_event_dialogue_line_0a scans
+/// them with `scasw` and stops as soon as it passes the id it wants.
+struct HeadSign {
+    phrase: u16,
+    string_id: u16,
+    x: u16,
+    y: u16,
+    color: u16,
+}
+
+const fn sign(phrase: u16, string_id: u16, x: u16, y: u16, color: u16) -> HeadSign {
+    HeadSign {
+        phrase,
+        string_id,
+        x,
+        y,
+        color,
+    }
+}
+
+/// = seg001:1984 — every line that puts a number on screen. The string ids
+/// 0x30..0x37 are all "{word_XXh}0 kgs" templates whose placeholder reads a
+/// ds variable, so the sign shows that variable times ten, in kg:
+/// 0x30 spice_in_stock (ds:a0), 0x31/0x32 yesterday's production (ds:ae) with
+/// the day-on-day gain (ds:b0) or loss (ds:b2), 0x33..0x36 the four
+/// negotiation figures (ds:b4..ba) and 0x37 the demanded shipment (ds:bc).
+/// A string id of 0x38 or above draws no text — those rows put digit SPRITES
+/// on the sign instead (loc_09b09), which is not ported.
+#[rustfmt::skip]
+static HEAD_SIGN_TABLE: [HeadSign; 28] = [
+    sign(0x089f, 0x37,  13,  91, 0x3338),
+    sign(0x08a0, 0x37,  13,  91, 0x3338),
+    sign(0x08a1, 0x37,  13,  91, 0x3338),
+    sign(0x08a2, 0x37,  13,  91, 0x3338),
+    sign(0x08a3, 0x37,  13,  91, 0x3338),
+    sign(0x08c6, 0x39,  86, 113, 0x2d28),
+    sign(0x08c7, 0x39,  86, 113, 0x2d28),
+    sign(0x08c8, 0x39,  86, 113, 0x2d28),
+    sign(0x08c9, 0x39,  86, 113, 0x2d28),
+    sign(0x08ca, 0x39,  86, 113, 0x2d28),
+    sign(0x08cb, 0x39,  86, 113, 0x2d28),
+    sign(0x08e8, 0x30, 113,  89, 0x462c),
+    sign(0x08ea, 0x31, 113,  86, 0x462c),
+    sign(0x08eb, 0x32, 113,  86, 0x462c),
+    sign(0x08f0, 0x37, 113,  89, 0x462c),
+    sign(0x08f1, 0x33, 113,  89, 0x462c),
+    sign(0x08f2, 0x34, 113,  89, 0x462c),
+    sign(0x08f3, 0x35, 113,  89, 0x462c),
+    sign(0x08f4, 0x36, 113,  89, 0x462c),
+    sign(0x08f5, 0x33, 113,  89, 0x462c),
+    sign(0x08f6, 0x34, 113,  89, 0x462c),
+    sign(0x08f7, 0x34, 113,  89, 0x462c),
+    sign(0x08f8, 0x35, 113,  89, 0x462c),
+    sign(0x08f9, 0x36, 113,  89, 0x462c),
+    sign(0x08fa, 0x36, 113,  89, 0x462c),
+    sign(0x08fb, 0x35, 113,  89, 0x462c),
+    sign(0x08fc, 0x36, 113,  89, 0x462c),
+    sign(0x0909, 0x38, 151, 119, 0x0037),
+];
+
+// = seg001:22b9 — the troop-contact strip's per-head anchor: the point in
+// head-rect-relative coordinates that the strip's head box origin lines up
+// with, so heads of different sizes all frame the face in the same 59x59 box
+// (seg000:7ac1 reads the pair into data_046d2/046d4 and draw_head_image_group_in_box subtracts
+// it). Entries 0..2 are the generic Fremen heads FRM1..FRM3 (indexed by the
+// head sprite index - 0x0e); the HARK head reaches entry 3 through the
+// hard-coded 0x0c byte offset at seg000:7a8e.
+const TALKING_HEAD_STRIP_ANCHOR: [(i16, i16); 4] =
+    [(0x48, 0x3d), (0x54, 0x1d), (0x38, 0x1a), (0x2f, 0x08)];
+
+/// The seg001:22b9 entry `index`, clamped like the DOS read cannot be.
+pub(crate) fn strip_anchor(index: usize) -> (i16, i16) {
+    TALKING_HEAD_STRIP_ANCHOR
+        .get(index)
+        .copied()
+        .unwrap_or(TALKING_HEAD_STRIP_ANCHOR[3])
+}
+
 // = lip_sync_frame_task (seg000:a7c2) advance cadence. The per-frame time is
 // `_word_21D32_audio_time_to_play_28224_samples` (the measured time to play the
 // 28224-sample FREQ.HSQ calibration clip) scaled by the fixed-point math
@@ -169,6 +250,9 @@ pub struct TalkingHead {
     pub voc_total_samples: u64,
     /// `PcmPlayer::samples_played()` at the moment voice playback started.
     pub voc_baseline: u64,
+    /// Port-only: the game tick the voice was armed at, so the mouth can be
+    /// stepped on the DOS PIT cadence when no audio is playing to slave it to.
+    pub voc_start_tick: u64,
     /// True while the voice .voc is playing — the idle frame task yields to the
     /// lip-sync task. = `_byte_2D0DB_is_voc_pcm_playing`.
     pub speaking: bool,
@@ -265,6 +349,168 @@ impl GameState {
             (facing - 1) as usize
         };
         idx.min(idle_count - 1)
+    }
+
+    // = seg000:a25b callback_event_dialogue_line_0a — the spoken line wants the
+    // speaker to hold up a sign. Look the line's phrase id up in the sign table
+    // and, when it is there, arm the overlay: the portrait animation that
+    // raises the sign, and the row the text is drawn from.
+    pub(crate) fn head_sign_arm_for_current_line(&mut self) {
+        // = seg000:a25e..a26d ax = current_subtitle_id; the scan walks the
+        //   sorted phrase ids and gives up as soon as it passes the one it
+        //   wants (`ja` keeps going, `jnz` bails).
+        let id = self.current_subtitle_id;
+        let Some(index) = HEAD_SIGN_TABLE.iter().position(|r| r.phrase == id) else {
+            return;
+        };
+        // = seg000:a261 bx = 0x0a01 — the state (1 = armed) and animation 5
+        //   (the index is a byte offset into the animation table, so 0x0a);
+        //   a26f..a274 a sign whose string id is exactly 0x38 raises a
+        //   different one (0x10 = animation 8).
+        let mut anim: u8 = if HEAD_SIGN_TABLE[index].string_id == 0x38 {
+            0x10
+        } else {
+            0x0a
+        };
+        // = seg000:a276..a282 a head with an idle expression (the generic
+        //   Fremen and Paul variants) banks the animation by it: + (facing-1)
+        //   * 4 + 2.
+        let facing = self.talking_head.as_ref().map_or(0, |h| h.facing);
+        if facing >= 1 {
+            anim = anim.wrapping_add(((facing - 1) * 2 + 1) * 2);
+        }
+        // = seg000:a284/a288 data_047e1 = bx; data_047e4 = di.
+        self.head_sign_state = 1;
+        self.head_sign_anim = anim;
+        self.head_sign_record = Some(index);
+    }
+
+    // = seg000:9b49 loc_09b49 — take the sign back down. The talk verb calls
+    // this before presenting the next line: a sign that is up and carrying its
+    // number (state 0x80) plays the animation AFTER the one that raised it —
+    // the lowering — through to its end before the new line starts.
+    //
+    // Unlike the raise, which the idle animator drives a frame at a time, this
+    // is a blocking wait: DOS pumps the frame tasks 12 ticks per frame
+    // (wait_processing_frame_tasks_interruptable with loc_099f6 as the
+    // per-call advance) until the animation hits its terminator.
+    pub(crate) fn head_sign_lower(&mut self) {
+        // = seg000:9b4c cmp al,80h; jnz loc_09b84 — only a raised, drawn sign
+        //   is lowered; any other state just clears (the 9b84 tail).
+        if self.head_sign_state != 0x80 {
+            self.head_sign_state = 0;
+            return;
+        }
+        // = seg000:9b56..9b66 al = data_047e2 + 2 — the animation after the
+        //   raise is the matching lowering.
+        let anim = (self.head_sign_anim as usize + 2) / 2;
+        // = seg000:9b69 data_047e1 = 0x81 — neither redraw clamp applies while
+        //   it plays, so the sign coming down is drawn in full.
+        self.head_sign_state = 0x81;
+        let frames = self
+            .talking_head
+            .as_ref()
+            .and_then(|h| h.lipsync.animations.get(anim))
+            .map(|a| a.frames.len())
+            .unwrap_or(0);
+        if let Some(head) = self.talking_head.as_mut() {
+            head.anim = anim;
+        }
+        // = seg000:9b6e..9b81 the loop: advance one frame (the loc_099f6 passed
+        //   as bp) and pace 12 PIT ticks, stopping at the animation's 0xff
+        //   terminator.
+        //
+        //   The pacing must not run the frame tasks, and in DOS it does not:
+        //   e353 services them only while suppress_sky_240_255 (data_0227d) is
+        //   non-zero, via the any_key_pressed it calls on that branch. That
+        //   byte is the intro/cutscene state — callers that want the servicing
+        //   bracket themselves with inc/dec (0d4e/0d89, 1566/1579) — and it is
+        //   0 in-game (set at seg000:029d), so here e353 is a plain timed spin.
+        //
+        //   That matters: this loop leaves data_047e1 at 0x81 throughout, so an
+        //   idle animator firing mid-lowering would re-enter head_sign_tick,
+        //   which for 0x81 re-draws the number and drops the state to 0x80. The
+        //   0x4c clamp that then applies confines every later redraw to above
+        //   the sign — which is exactly the lowering never appearing.
+        for frame in 0..frames {
+            if let Some(head) = self.talking_head.as_mut() {
+                head.frame = frame;
+            }
+            if let Some(rect) = self.redraw_head_frame_incremental(anim, frame) {
+                self.present_head_dirty_rect(rect);
+            }
+            // The pacing is a foreground timing effect; headless runs skip it.
+            if !self.is_headless() {
+                let start = self.game_ticks();
+                self.sleep_ticks(start, 12);
+            }
+        }
+        // = seg000:9b84 data_047e1 = 0 — the sign is gone.
+        self.head_sign_state = 0;
+    }
+
+    // = seg000:9ab4 loc_09ab4 — the idle animator's sign hook, run when a calm
+    // window's budget is spent. Returns DOS's carry: true when it took over the
+    // head (the caller then plays that animation instead of picking a new calm
+    // one).
+    //
+    // It runs in two steps, one idle tick apart: first raise the sign (the
+    // portrait animation), then — once that has played — draw the number onto
+    // it.
+    fn head_sign_tick(&mut self) -> bool {
+        // = seg000:9ab4..9ab9 nothing armed.
+        if self.head_sign_state == 0 {
+            return false;
+        }
+        // = seg000:9abb `js loc_09adb` — bit 7 set means the sign is already up.
+        if self.head_sign_state & 0x80 == 0 {
+            // = seg000:9abd or [data_047e1],80h — mark it raised.
+            self.head_sign_state |= 0x80;
+            // = seg000:9ac2 call loc_09b09 — for a digit-sprite sign (string id
+            //   >= 0x38) this patches the number's digits into the portrait
+            //   resource. Not ported; the text signs below need nothing.
+            // = seg000:9ac5..9ad3 bp = data_047e2; si = the animation it names;
+            //   data_047ce = 0x14 — a 20-frame window to hold the sign up.
+            let anim = (self.head_sign_anim / 2) as usize;
+            if let Some(head) = self.talking_head.as_mut() {
+                head.anim = anim;
+                head.frame = 0;
+                head.idle_countdown = 0x14;
+            }
+            // = seg000:9ad9 stc.
+            return true;
+        }
+        // = seg000:9adb/9add shr al,1; jnb — only the tick right after the
+        //   raise (state 0x81) draws; a plain 0x80 is already done.
+        if self.head_sign_state & 1 == 0 {
+            return false;
+        }
+        // = seg000:9adf data_047e1 = 0x80 — drawn.
+        self.head_sign_state = 0x80;
+        let Some(row) = self.head_sign_record.and_then(|i| HEAD_SIGN_TABLE.get(i)) else {
+            return false;
+        };
+        // = seg000:9aeb cmp word ptr [si],38h; jnb — a digit-sprite sign draws
+        //   no text (loc_09b09 put the digits in the animation instead).
+        if row.string_id >= 0x38 {
+            return false;
+        }
+        // = seg000:9ae4/9af0..9afb the small font, then the row's string
+        //   interpolated at its position in its colour — the number the
+        //   placeholder reads is what appears on the sign.
+        let (string_id, x, y, color) = (row.string_id, row.x, row.y, row.color);
+        self.font_select_small_font();
+        let s = self.get_phrase_or_command_string(string_id).to_vec();
+        let text = self.format_interpolated_string(&s);
+        self.font_state.color = color;
+        self.font_set_draw_position(x, y);
+        self.font_draw_string(&text);
+        // = seg000:9afe..9b07 back to the tall font, then publish the game area.
+        self.font_select_tall_font();
+        self.call_restore_cursor();
+        self.present_game_area();
+        // = seg000:9b07 clc — the caller carries on picking a calm animation.
+        false
     }
 
     // = seg000:9a7b loc_09a7b — pick the settled idle's resting animation and its
@@ -410,83 +656,20 @@ impl GameState {
     // first (idle) frame. `dx` shifts the head right (loc_009c7; intro heads
     // pass 0).
     pub fn setup_talking_head(&mut self, lip_sync_resource_id: u8, dx: i16) {
-        // = character_id_to_sprite (seg000:9123) + open_talking_head_resource.
-        let (head, facing) = self.character_id_to_sprite(lip_sync_resource_id);
-        // = seg000:91bb cmp ax,[talking_head_id]; jz open_talking_head_resource
-        // — the same head stays up untouched: DOS's per-line setup only
-        // re-opens the already-parsed sheet. No backdrop re-save (fb2 keeps the
-        // clean room the conversation started with), no anim / prev_images
-        // reset. Rebuilding here instead corrupted fb2 with a baked head copy
-        // and snapped the idle animation on every dialogue line. Restricted to
-        // dx == 0 (the dialogue path); the dx-shifted fly-over rects rebuild.
-        if dx == 0
-            && self.talking_head.as_ref().is_some_and(|h| {
-                h.talking_head_id == head as u16
-                    && h.lip_sync_resource_id == lip_sync_resource_id as u16
-            })
-        {
+        // = seg000:91a0 setup_lip_sync_data_from_sprite_sheet — open + parse
+        //   the portrait sheet. An unchanged head is left exactly as it is,
+        //   and so is everything below it.
+        if !self.open_talking_head_resource(lip_sync_resource_id, dx) {
             return;
         }
-        // TODO: = seg000:91c1/91c2 a CHANGED head should first run
-        // tear_down_prior_talking_head_overlay; the port rebuilds in place.
-        // = seg000:91ce..91da — patch the x0 of the three balloon descriptors
-        // (seg001:2224/222c/2234) with this head's balloon x. DOS does it only
-        // on a head change; the value is head-determined, so setting it every
-        // setup is equivalent.
-        self.balloon_x = balloon_x_for_head(head);
-        let name = Self::head_name(head);
-        let file = format!("{name}.HSQ");
-
-        let data = self
-            .dat_file
-            .read(&file)
-            .unwrap_or_else(|_| panic!("failed to read {file}"));
-        let sheet =
-            SpriteSheet::from_slice(&data).unwrap_or_else(|_| panic!("failed to parse {file}"));
-        // = open_spritesheet -> apply_sprite_sheet_palette.
-        sheet
-            .apply_palette_update(&mut self.palette)
-            .expect("failed to apply portrait palette");
-
-        let last = sheet.resource_count() - 1;
-        let lipsync_data = sheet
-            .get_resource(last)
-            .expect("portrait sheet has no lip-sync resource");
-        let lipsync = Lipsync::from_bytes(lipsync_data);
-
-        // = loc_009c7: shift the rect right by `dx`, clamping x1 ≤ 320.
-        let (mut x0, y0, mut x1, y1) = lipsync.rect;
-        if x0 < dx {
-            x0 += dx;
-            x1 = (x1 + dx).min(320);
-        }
-
         // = copy_active_framebuffer_to_framebuffer_2: save the freshly-drawn
         // room (active = fb1 during init) into fb2, the clean backdrop the head
-        // is composited over and restored from each frame.
+        // is composited over and restored from each frame. DOS does this in the
+        // room render around the setup, not inside seg000:91a0 — which is why
+        // the troop-contact strip (map_draw_troop_contact_strip) loads its head
+        // through open_talking_head_resource alone: on the map view fb2 holds
+        // the clean map snapshot the troop icons repaint from.
         self.copy_active_framebuffer_to_framebuffer_2();
-
-        self.talking_head = Some(TalkingHead {
-            sheet,
-            lipsync,
-            lip_sync_resource_id: lip_sync_resource_id as u16,
-            // = character_id_to_sprite(al) = the returned head/sprite-pair index
-            // (id itself for ids < 0x0d, HEAD_PAUL for the player).
-            talking_head_id: head as u16,
-            rect: (x0, y0, x1, y1),
-            mouth: 0,
-            facing,
-            anim: 0,
-            frame: 0,
-            settled: false,
-            // = loc_09908: data_047ce = data_0478c * 4, and data_0478c is 0.
-            idle_countdown: 0,
-            voc_lipsync: Vec::new(),
-            voc_total_samples: 0,
-            voc_baseline: 0,
-            speaking: false,
-            prev_images: Vec::new(),
-        });
 
         // = loc_0978e first render: pick a random idle animation and draw its
         // first frame onto the backdrop. This composites into the offscreen
@@ -525,6 +708,94 @@ impl GameState {
         // fires in the post-transition wait loop (so the head is revealed by the
         // transition, then animates).
         self.add_frame_task(0x10, crate::TaskId::TalkingHeadIdle);
+    }
+
+    /// = seg000:91a0 setup_lip_sync_data_from_sprite_sheet on its own — open
+    /// the portrait sheet for `lip_sync_resource_id`, apply its palette and
+    /// parse its lip-sync resource into the live head, touching no
+    /// framebuffer. Returns false when the same head is already up and nothing
+    /// was rebuilt (the seg000:91bb early-out).
+    ///
+    /// The room dialogue reaches this through setup_talking_head, which adds
+    /// the backdrop save, the first idle render and the idle task; the
+    /// troop-contact strip calls it directly and draws its own frame into the
+    /// strip's head box (draw_talking_head_in_box).
+    pub(crate) fn open_talking_head_resource(&mut self, lip_sync_resource_id: u8, dx: i16) -> bool {
+        // = character_id_to_sprite (seg000:9123) + open_talking_head_resource.
+        let (head, facing) = self.character_id_to_sprite(lip_sync_resource_id);
+        // = seg000:91bb cmp ax,[talking_head_id]; jz open_talking_head_resource
+        // — the same head stays up untouched: DOS's per-line setup only
+        // re-opens the already-parsed sheet. No backdrop re-save (fb2 keeps the
+        // clean room the conversation started with), no anim / prev_images
+        // reset. Rebuilding here instead corrupted fb2 with a baked head copy
+        // and snapped the idle animation on every dialogue line. Restricted to
+        // dx == 0 (the dialogue path); the dx-shifted fly-over rects rebuild.
+        if dx == 0
+            && self.talking_head.as_ref().is_some_and(|h| {
+                h.talking_head_id == head as u16
+                    && h.lip_sync_resource_id == lip_sync_resource_id as u16
+            })
+        {
+            return false;
+        }
+        // TODO: = seg000:91c1/91c2 a CHANGED head should first run
+        // tear_down_prior_talking_head_overlay; the port rebuilds in place.
+        // = seg000:91ce..91da — patch the x0 of the three balloon descriptors
+        // (seg001:2224/222c/2234) with this head's balloon x. DOS does it only
+        // on a head change; the value is head-determined, so setting it every
+        // setup is equivalent.
+        self.balloon_x = balloon_x_for_head(head);
+        let name = Self::head_name(head);
+        let file = format!("{name}.HSQ");
+
+        let data = self
+            .dat_file
+            .read(&file)
+            .unwrap_or_else(|_| panic!("failed to read {file}"));
+        let sheet =
+            SpriteSheet::from_slice(&data).unwrap_or_else(|_| panic!("failed to parse {file}"));
+        // = open_spritesheet -> apply_sprite_sheet_palette.
+        sheet
+            .apply_palette_update(&mut self.palette)
+            .expect("failed to apply portrait palette");
+
+        let last = sheet.resource_count() - 1;
+        let lipsync_data = sheet
+            .get_resource(last)
+            .expect("portrait sheet has no lip-sync resource");
+        let lipsync = Lipsync::from_bytes(lipsync_data);
+
+        // = loc_009c7: shift the rect right by `dx`, clamping x1 ≤ 320.
+        let (mut x0, y0, mut x1, y1) = lipsync.rect;
+        if x0 < dx {
+            x0 += dx;
+            x1 = (x1 + dx).min(320);
+        }
+
+        self.talking_head = Some(TalkingHead {
+            sheet,
+            lipsync,
+            lip_sync_resource_id: lip_sync_resource_id as u16,
+            // = character_id_to_sprite(al) = the returned head/sprite-pair index
+            // (id itself for ids < 0x0d, HEAD_PAUL for the player).
+            talking_head_id: head as u16,
+            rect: (x0, y0, x1, y1),
+            mouth: 0,
+            facing,
+            anim: 0,
+            frame: 0,
+            settled: false,
+            // = loc_09908: data_047ce = data_0478c * 4, and data_0478c is 0.
+            idle_countdown: 0,
+            voc_lipsync: Vec::new(),
+            voc_total_samples: 0,
+            voc_baseline: 0,
+            voc_start_tick: 0,
+            speaking: false,
+            prev_images: Vec::new(),
+        });
+
+        true
     }
 
     // = seg000:99be loc_099be (via loc_099da/loc_099f6) — one tick of the idle
@@ -575,14 +846,20 @@ impl GameState {
         // = loc_09a40 — the settled (calm) idle.
         if settled {
             if self.talking_head.as_ref().unwrap().idle_countdown <= 0 {
-                // = loc_09a48 budget spent -> loc_09a7b. `or ah,ah; jnz loc_09a1c`
-                // holds the current frame (a pause) while the high byte is set.
-                let r = self.idle_select_calm_animation();
-                if (r >> 8) != 0 {
-                    return;
+                // = seg000:9a4f call loc_09ab4; jb loc_099f6 — a line that
+                // wants the speaker to hold up a sign takes the head over here,
+                // and the advance below plays that animation instead of a calm
+                // window.
+                if !self.head_sign_tick() {
+                    // = loc_09a48 budget spent -> loc_09a7b. `or ah,ah; jnz loc_09a1c`
+                    // holds the current frame (a pause) while the high byte is set.
+                    let r = self.idle_select_calm_animation();
+                    if (r >> 8) != 0 {
+                        return;
+                    }
+                    // = loc_09a60 + loc_09a74: start a window at a random frame offset.
+                    self.idle_start_window(r);
                 }
-                // = loc_09a60 + loc_09a74: start a window at a random frame offset.
-                self.idle_start_window(r);
             } else {
                 // = loc_09a4d `jg loc_099f6`: still inside the window — advance.
                 let head = self.talking_head.as_mut().unwrap();
@@ -740,10 +1017,15 @@ impl GameState {
         let total = voc.pcm.len() as u64;
         self.pcm_player.start_playback(&data, 0);
 
+        // = seg000:a774/a77a — DOS seeds the next mouth-frame time from the
+        //   PIT counter; the port keeps the tick the line started at for the
+        //   same purpose (see tick_talking_head_voc).
+        let start_tick = self.game_ticks();
         if let Some(head) = self.talking_head.as_mut() {
             head.voc_lipsync = voc.lipsync;
             head.voc_total_samples = total;
             head.voc_baseline = baseline;
+            head.voc_start_tick = start_tick;
             head.mouth = 0;
             head.speaking = true;
         }
@@ -780,7 +1062,30 @@ impl GameState {
     // draws the matching speech frame (last animation, frame = mouth value).
     // When the clip's audio finishes the head reverts to idle.
     pub(crate) fn tick_talking_head_voc(&mut self) {
-        let played = self.pcm_player.samples_played();
+        // The mouth stream is stepped one value per SAMPLES_PER_LIP_FRAME of
+        // audio, read off the PCM sample clock so it stays locked to what is
+        // actually being heard.
+        //
+        // With no voice playing — no digital-sound card, so start_playback
+        // refused (= the DOS check_pcm_enabled == false steady state) — that
+        // clock never moves and the mouth would stamp once and freeze. DOS
+        // does not read a sample counter at all: seg000:a774/a77a seed
+        // next_lipsync_frame_time from the PIT counter and advance_lipsync
+        // steps it from there, so its mouth animates with or without a card.
+        // Fall back to the same cadence off the game clock: the PIT runs at
+        // 200Hz and a mouth frame is 882 samples of 22050Hz audio, i.e. 8
+        // ticks.
+        const TICKS_PER_LIP_FRAME: u64 = 8;
+        let played = if self.pcm_player.is_playing() {
+            self.pcm_player.samples_played()
+        } else {
+            let elapsed = self
+                .talking_head
+                .as_ref()
+                .map_or(0, |h| self.game_ticks().saturating_sub(h.voc_start_tick));
+            let baseline = self.talking_head.as_ref().map_or(0, |h| h.voc_baseline);
+            baseline + elapsed / TICKS_PER_LIP_FRAME * SAMPLES_PER_LIP_FRAME
+        };
 
         let (lip_anim, frame, mouth, done) = {
             let Some(head) = self.talking_head.as_ref() else {
@@ -863,6 +1168,36 @@ impl GameState {
         };
 
         if changed {
+            // = seg000:9df1 cmp data_046eb,0; js lip_sync_stamp_troop_strip —
+            // while the full-map view owns the screen the head lives in the strip's
+            // box, so the stamp goes there instead: the same lip frame
+            // (9e79..9e8a banks it by idle expression exactly like the room
+            // path, minus the SMUG stride), re-anchored into the box and
+            // clipped to it.
+            //
+            // Deviation: DOS splits on the lip group's second entry
+            // (seg000:9eb1) and sends multi-image groups to fb1 with an
+            // fb1->screen present of the box, single-image ones straight to
+            // the screen buffer. On the map view fb1 holds the plain map — the
+            // strip is only ever painted into the screen buffer — so the fb1
+            // variant would publish map pixels over the head. The port draws
+            // both into the screen buffer and publishes.
+            if self.data_046eb & 0x80 != 0 {
+                self.draw_talking_head_in_box(lip_anim, frame);
+                // = seg000:9e92..9e96 restore_mouse_if_rect_intersects
+                //   (data_047d4), 9ec3 present, 9ec6 draw_mouse_cursor_if_needed.
+                let yoff = self.y_offset as i16;
+                let boxr = self.head_strip_box;
+                let published = Rect {
+                    y0: boxr.y0 + yoff,
+                    y1: boxr.y1 + yoff,
+                    ..boxr
+                };
+                self.restore_mouse_if_rect_intersects(published);
+                self.send_frame_to_display();
+                self.draw_mouse_cursor_if_needed_then_present();
+                return;
+            }
             // = seg000:9e33..9e45 — stamp the lip-id frame's sprite list over
             // the live fb1 (setup_non_lip_sync_data_structure +
             // draw_talking_head_at_si), clipped to the head's MOUTH BOX
@@ -1039,6 +1374,62 @@ impl GameState {
         clip
     }
 
+    // = seg000:7ac1..7b09 (the tail of map_draw_troop_contact_strip) driving
+    // draw_talking_head_in_box -> draw_head_image_group_in_box — draw one
+    // (anim, frame) of the live head into the troop-contact strip's head box
+    // instead of at the head's own rect.
+    //
+    // Every image lands at `image.xy + head.rect.origin - anchor + box.origin`
+    // (draw_head_image_group_in_box's `add [1bf0]; sub [46d2]; add [47d4]`), i.e. the head is
+    // shifted so its per-head anchor point (TALKING_HEAD_STRIP_ANCHOR, staged in
+    // head_strip_anchor) sits on the box origin, and everything is clipped to
+    // the box. Unlike the room path this draws into the SCREEN buffer (DOS es =
+    // _word_2D088_screen_buffer_seg), where the rest of the strip is painted —
+    // fb1/fb2 hold the map view and must not be touched.
+    pub(crate) fn draw_talking_head_in_box(&mut self, anim: usize, frame_idx: usize) {
+        let Some(head) = self.talking_head.as_ref() else {
+            return;
+        };
+        let (ax, ay) = self.head_strip_anchor;
+        let boxr = self.head_strip_box;
+        let yoff = self.y_offset as i16;
+        // = the draw_head_image_group_in_box clip rect is the box itself (DOS bp = 47d4h).
+        let clip = Rect {
+            x0: boxr.x0,
+            y0: boxr.y0 + yoff,
+            x1: boxr.x1,
+            y1: boxr.y1 + yoff,
+        };
+        // = draw_head_image_group_in_box: image.xy + [1bf0] (the head rect
+        //   origin) - [46d2] (the anchor) + [47d4] (the box origin).
+        let (dx, dy) = (
+            head.rect.0 - ax + boxr.x0,
+            head.rect.1 - ay + boxr.y0 + yoff,
+        );
+        let lipsync = &head.lipsync;
+        let sheet = &head.sheet;
+        let Some(animation) = lipsync.animations.get(anim) else {
+            return;
+        };
+        let Some(frame) = animation.frames.get(frame_idx) else {
+            return;
+        };
+        for &group_idx in &frame.image_groups {
+            let Some(group) = lipsync.image_groups.get(group_idx as usize) else {
+                continue;
+            };
+            for image in group {
+                // = seg000:9dcf: the sprite index is id - 1.
+                if let Some(sprite) = sheet.get_sprite(image.id as u16 - 1) {
+                    let _ = sprite_blitter(sprite, &mut self.screen)
+                        .at(image.x as i16 + dx, image.y as i16 + dy)
+                        .clip_rect(clip)
+                        .draw();
+                }
+            }
+        }
+    }
+
     // = seg000:9bb1 loc_09bb1 with `_word_239F0 != 0` — the incremental redraw
     // the idle / lip-sync frame tasks run on every tick after the first full
     // composite. It diffs the new frame's flattened image list against the
@@ -1115,9 +1506,17 @@ impl GameState {
         // table boxes sit near the top of the head and would collapse every
         // redraw. (DOS compares the element-relative table y0 directly
         // against the absolute box, keeping its off-by-origin slack; the
-        // port adds only yoff. The data_047e1 0x80/0x81 vision branches at
-        // 9c79/9ca6 are not modelled.)
-        if head.speaking && !matches!(head.lip_sync_resource_id, 9 | 0x0c) {
+        // port adds only yoff.)
+        //
+        // = seg000:9c79 cmp data_047e1,81h; jz loc_09ca6 — EXCEPT while a sign
+        // is raised and its number not yet drawn. The clamp would suppress the
+        // whole sign animation: a placard sits well below the mouth box's top,
+        // so every one of its frames collapses the box and never reaches the
+        // screen.
+        if self.head_sign_state != 0x81
+            && head.speaking
+            && !matches!(head.lip_sync_resource_id, 9 | 0x0c)
+        {
             if let Some(&r) = TALKING_HEAD_MOUTH_BOX.get(head.talking_head_id as usize) {
                 let mouth_top = r.y0 + yoff;
                 if mouth_top < y1 {
@@ -1125,6 +1524,19 @@ impl GameState {
                     if mouth_top <= y0 {
                         x0 = 319;
                     }
+                }
+            }
+        }
+        // = seg000:9ca6..9cbd — once the number IS on the sign (state 0x80) no
+        // head redraw may reach below y 0x4c, so the idle can never wipe the
+        // text off the placard. Same shape as the mouth clamp: a box left
+        // entirely below the line collapses.
+        if self.head_sign_state == 0x80 {
+            let limit = 0x4c + yoff;
+            if limit < y1 {
+                y1 = limit;
+                if limit <= y0 {
+                    x0 = 319;
                 }
             }
         }
@@ -1186,4 +1598,61 @@ fn flatten_frame(lipsync: &Lipsync, anim: usize, frame_idx: usize) -> Vec<(u8, u
         }
     }
     images
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::mpsc;
+
+    use crate::{GameState, dat_file::DatFile};
+
+    // Duncan's "Here are our current stocks of spice." (phrase 0x08e8) fires
+    // dialogue-line event 0x0a, which arms the sign he holds up: COMMAND string
+    // 0x30, "{word_A0h}0 kgs" — spice_in_stock times ten, in kg. Asset-gated:
+    //   cargo test -p dune --bin dune -- --ignored duncan_spice_sign
+    #[test]
+    #[ignore = "needs assets/DUNE.DAT"]
+    fn duncan_spice_sign_shows_the_stock() {
+        let dat_path = concat!(env!("CARGO_MANIFEST_DIR"), "/../../assets/DUNE.DAT");
+        let Ok(dat_file) = DatFile::open(dat_path) else {
+            eprintln!("skipping: {dat_path} not found");
+            return;
+        };
+        let (tx, rx) = mpsc::sync_channel(64);
+        let mut game = GameState::new(dat_file, tx);
+        game.set_headless();
+        game.start(true);
+        while rx.try_recv().is_ok() {}
+
+        // The line has been presented, so current_subtitle_id is its phrase id.
+        game.spice_in_stock = 42;
+        game.current_subtitle_id = 0x08e8;
+        game.dispatch_dialogue_line_event(0x0a, 0);
+        assert_eq!(game.head_sign_state, 1, "the sign is armed");
+        assert_eq!(
+            game.head_sign_anim, 0x0a,
+            "Duncan is a named head (facing 0), so the unbanked raise animation"
+        );
+        // The sign's text is the stock times ten, in kg.
+        let row = game.head_sign_record.expect("a table row matched");
+        let text = {
+            let s = game.get_phrase_or_command_string(super::HEAD_SIGN_TABLE[row].string_id);
+            let s = s.to_vec();
+            let t = game.format_interpolated_string(&s);
+            // The formatted buffer keeps its terminator (>= 0xf0).
+            let end = t.iter().position(|&b| b >= 0xf0).unwrap_or(t.len());
+            t[..end].to_vec()
+        };
+        assert_eq!(
+            String::from_utf8_lossy(&text),
+            "420 kgs",
+            "the sign reads spice_in_stock * 10"
+        );
+
+        // A line with no sign leaves the overlay alone.
+        game.head_sign_state = 0;
+        game.current_subtitle_id = 0x0500;
+        game.dispatch_dialogue_line_event(0x0a, 0);
+        assert_eq!(game.head_sign_state, 0, "no sign for an unlisted line");
+    }
 }

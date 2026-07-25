@@ -63,6 +63,13 @@ impl GameState {
             }
             // = seg001:223c the mode-0 strip layout.
             0x223c => (0, 0, 320, 0x47),
+            // = seg001:2244 the troop-contact strip's text box; its origin is
+            // written per open by map_draw_troop_contact_strip.
+            0x2244 => {
+                let (x, y) = self.map_contact_subtitle_pos;
+                let (w, h) = crate::troop_map_screen::TROOP_CONTACT_SUBTITLE_SIZE;
+                (x, y, w, h)
+            }
             // = seg001:224c the free-form narration layout.
             0x224c => (0x10, 0, 0x120, 0x42),
             // = seg001:2275 the dusk/night strip.
@@ -638,8 +645,29 @@ impl GameState {
         self.subtitle_layout_flags = 9;
         self.font_state.color = 0x00f0;
         let yoff = self.y_offset as i16;
-        // = seg000:8cd8 data_046eb != 0: the map-troop popup bubble
-        //   (seg001:2244). TODO: that context is not modelled; fall through.
+        // = seg000:8cd8 data_046eb != 0: a line spoken while the full-map view
+        //   owns the screen goes into the troop-contact strip's text box
+        //   (seg001:2244), whose origin map_draw_troop_contact_strip wrote.
+        //   The strip keeps the pads it set (0/5/0/1) and its own colour.
+        if self.data_046eb != 0 {
+            // = seg000:8cdf..8cf2 cmp data_046ef,0; jnz — a line presented
+            //   with no strip up rebuilds it for data_046f1 first.
+            if self.map_contact_troop.is_none() {
+                if let Some(ti) = self.map_contact_troop_pending {
+                    self.map_draw_troop_contact_strip(ti);
+                }
+            }
+            let (x, y) = self.map_contact_subtitle_pos;
+            let (w, h) = crate::troop_map_screen::TROOP_CONTACT_SUBTITLE_SIZE;
+            let rect = Rect {
+                x0: x,
+                y0: y + yoff,
+                x1: x + w,
+                y1: y + yoff + h,
+            };
+            let lines = self.layout_lines(text, rect)?;
+            return Some((0x2244, rect, lines));
+        }
         // = seg000:8cfb speaker 0xffff: the free-form narration rect
         //   (seg001:224c = 16,0,288,66), pads 0x48/0x10/8/8.
         if self.current_lip_sync_resource_id == 0xffff {
@@ -851,6 +879,31 @@ impl GameState {
             x1: rect.x1.min(320),
             ..rect
         };
+        // = seg000:8f7f cmp data_046eb,0; jnz loc_08fd1 — the troop-contact
+        //   strip's text box: no save-under and no balloon tile, just a fill
+        //   in the strip panel's own colour (seg001:18f2 = 0xfb) two pixels
+        //   above the box, so each line wipes the one before it. HUD element
+        //   18 also takes the ASK FOR MORE INFORMATION handler here, making
+        //   the text box itself clickable — the port has no clickable HUD
+        //   element model for the map view yet. TODO.
+        if self.data_046eb != 0 {
+            self.subtitle_bubble = Some(SubtitleBubble {
+                strip: false,
+                layout,
+                rect,
+                saved_fb2: Vec::new(),
+            });
+            gfx::vga_fill_rect(
+                self,
+                self.active_fb(),
+                rect.x0 as u16,
+                (rect.y0 - 2) as u16,
+                rect.x1 as u16,
+                rect.y1 as u16,
+                0xfb,
+            );
+            return false;
+        }
         // = seg000:8f8d/8f94 the dusk strip and pending room transitions
         //   paint no background at all (loc_08fd0).
         if self.data_0227d != 0 {

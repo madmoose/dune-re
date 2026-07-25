@@ -26,7 +26,9 @@ use crate::{
     sprite_blitter,
     tablat::Tablat,
     travel_map_screen::MapLocationMarker,
-    troop_map_screen::MENU_MAP_MAIN,
+    troop_map_screen::{
+        MENU_MAP_MAIN, MENU_MAP_TROOP_CONTACT_CYCLE, MENU_MAP_TROOP_DIALOG, MENU_MAP_TROOP_MOVING,
+    },
     troops::{TROOPS, Troop},
 };
 
@@ -377,6 +379,12 @@ pub struct GameState {
     // = seg001:002b night_attack_stage.
     pub(crate) night_attack_stage: u8,
 
+    // = seg001:00a0 spice_in_stock — the player's spice, in the units the HUD
+    // and the smuggler trade read. The mining troops pay into it one tenth of
+    // what they harvest each time period (seg000:701b), the remainder carried
+    // in spice_harvest_remainder.
+    pub(crate) spice_in_stock: u16,
+
     // = seg001:00ac data_000ac — total population of the allegiance-flagged
     // troops (the loc_0c049 scan sums troop byte +0x1a into ds:ac for troops
     // with byte +0x10 bit 0x80, else into ds:aa); static init 0x1b58 (7000).
@@ -603,6 +611,10 @@ pub struct GameState {
     // (decrementing this) before scanning for the next one.
     pub(crate) data_0196c: u8,
 
+    // = seg001:1174 data_01174 — the game_time the last time-period event run
+    // saw; run_events_for_current_time_period diffs it to raise new_day_flag.
+    pub(crate) last_event_game_time: u16,
+
     // = seg001:1176 location_visibility_distance — the sietch visibility
     // radius in map cells (static init 1): sietch map markers farther than
     // this from the player draw the +5 distant sprite variant, and the
@@ -679,6 +691,22 @@ pub struct GameState {
     // FIND PROSPECTORS). map_setup_main_menu (seg000:878c) rewrites the ids
     // and grey bits before every push.
     pub(crate) menu_map_main: MenuBuffer,
+
+    // = seg001:210a menu_map_troop_dialog — the contacted troop's order menu
+    // (ASK FOR MORE INFORMATION / CHANGE TROOP OCCUPATION / MODIFY EQUIPMENT /
+    // MOVE TROOP / NO MORE ORDERS). map_open_troop_contact_menu rewrites the
+    // last slot's id and map_setup_troop_dialog_menu the grey bits before
+    // every push.
+    pub(crate) menu_map_troop_dialog: MenuBuffer,
+    // = seg001:2122 menu_map_troop_contact_cycle_troops — the NEXT TROOP / NO
+    // MORE ORDERS menu for a troop that cannot be ordered.
+    pub(crate) menu_map_troop_contact_cycle: MenuBuffer,
+    // = seg001:214a menu_map_troop_moving_change_destination_next_troop — the
+    // CHANGE DESTINATION / NEXT TROOP / Cancel menu for a troop on the move.
+    pub(crate) menu_map_troop_moving: MenuBuffer,
+    // = the five occupation submenus (seg001:215a/216e/2182/219a/21a6); the
+    // records are set per open by the CHANGE TROOP OCCUPATION verb.
+    pub(crate) menu_map_troop_occupation: MenuBuffer,
 
     // = seg001:21fd data_021fd — the SKIP TO DESTINATION command template's
     // flags byte (the seg001:21fc record's text-id high byte; 0x40 = greyed).
@@ -853,6 +881,11 @@ pub struct GameState {
     // fire scheduled time-period events.
     pub(crate) new_time_period_pending: u8,
 
+    // = seg001:46de new_day_flag — the day part of game_time minus the day
+    // part the last time-period event run saw; non-zero on the first period of
+    // a new day, gating the per-day troop and location hooks.
+    pub(crate) new_day_flag: u8,
+
     // = seg001:46df data_046df — arms the loc_03916 sky-fade task (stage 29).
     // The task stops itself when this is cleared; set by intro_29_init.
     pub(crate) sky_fade_active: bool,
@@ -861,6 +894,10 @@ pub struct GameState {
     // screen xchg's it with the current flag to decide between a fade transition
     // and a plain palette+blit when the day/night state changed.
     pub(crate) data_046e0: u8,
+
+    // = seg001:46e1 data_046e1 — the carry of the spice split: what the last
+    // period's harvest left over towards the next whole unit of stock.
+    pub(crate) spice_harvest_remainder: u16,
 
     // = seg001:46e3 data_046e3_rect — the map window rect the map screen draws
     // the desert map into; copied from map_view_rect_template (seg001:149c,
@@ -874,6 +911,11 @@ pub struct GameState {
     // map_screen_open (seg000:4323) and the travel routines (seg000:49a6),
     // cleared back to 0 by map_screen_cleanup for the plain room view.
     pub(crate) data_046eb: u8,
+
+    // = seg001:46ec data_046ec — bumped when a mining troop eats through more
+    // than the spice-density overlay's current shade while that overlay is up
+    // (data_046eb bit 6), so it repaints.
+    pub(crate) spice_density_overlay_dirty: u8,
 
     // = seg001:46ed _word_23B9D_current_main_view_drawing_function — the
     // installed main-view redraw the map/globe dispatch sites call
@@ -924,9 +966,57 @@ pub struct GameState {
     // highlight ring; reset_room_scene_state zeroes it.
     pub(crate) map_selected_troop_id: u8,
 
+    // = seg001:1955 data_01955 — the last id map_select_troop actually
+    // contacted (the byte above data_01954, so the two are read as one word by
+    // menu_callback_choice_map_main_contact_fremen_troops and cleared together
+    // by reset_room_scene_state). With nothing selected, the contact verb
+    // resumes this troop as long as it still has an icon on the map.
+    pub(crate) map_last_selected_troop_id: u8,
+
     // = seg001:46fa data_046fa — the troop whose info panel (data_018df) is
     // open (a troop ptr in DOS, the table index here; None = closed).
     pub(crate) map_info_popup_troop: Option<usize>,
+
+    // = seg001:46ef data_046ef — the troop whose contact dialogue strip is up
+    // (a troop ptr in DOS, the table index here; None = no live contact).
+    // map_close_troop_contact_strip marks the contact on it and clears it.
+    pub(crate) map_contact_troop: Option<usize>,
+    // = seg001:46f1 data_046f1 — the troop the strip is being built for.
+    // map_setup_troop_contact_strip latches it before
+    // map_draw_troop_contact_strip, and
+    // subtitle_setup_layout rebuilds the strip from it (seg000:8cea) when a
+    // line is presented with no strip up.
+    pub(crate) map_contact_troop_pending: Option<usize>,
+    // = the troop_contact_text_panel_record's runtime rect (seg001:18e9: x
+    // (5,232) compiled in, the y pair rewritten per open) and the head box
+    // (seg001:18f3, written per open) inside it.
+    pub(crate) map_contact_strip_rect: Rect,
+    pub(crate) map_contact_head_rect: Rect,
+    // = seg001:2244/2246 — the x/y words of the contact subtitle's layout
+    // descriptor (seg001:2244, size 153x63), written per open by
+    // map_draw_troop_contact_strip.
+    pub(crate) map_contact_subtitle_pos: (i16, i16),
+    // = seg001:004c related_to_contacting_troops_ds_4c — 0xff while the
+    // contacted troop answers from outside the visibility range, so the
+    // dialogue record's conditions pick its "out of contact" lines; cleared
+    // by map_close_troop_contact_strip.
+    pub(crate) contacting_troops_ds_4c: u8,
+
+    // = seg001:00e2 distance_to_closest_Harkonnen_area_ds_e2 — how far the
+    // staged location is from the nearest Harkonnen holding. Initialised to
+    // 0xffff and narrowed by the location scan (seg000:5274) inside
+    // prepare_location_data_for_condit, which is not ported — so it stays at
+    // "nothing near", and the ESPIONAGE occupation (which needs < 0x1e) stays
+    // greyed. TODO with that scan.
+    pub(crate) distance_to_closest_harkonnen_area: u16,
+
+    // = seg001:46d2/46d4 data_046d2/046d4 — the head-rect-relative anchor point
+    // the troop-contact strip re-anchors the talking head on (staged from
+    // TALKING_HEAD_STRIP_ANCHOR by map_draw_troop_contact_strip), and
+    // = seg001:47d4 data_047d4 — the strip's head draw box: both the
+    // destination origin and the clip rect draw_head_image_group_in_box uses.
+    pub(crate) head_strip_anchor: (i16, i16),
+    pub(crate) head_strip_box: Rect,
 
     // = the data_018df panel record's runtime rect (loc_05f25 writes the
     // record's +0..+7 next to the clicked icon each open).
@@ -1198,6 +1288,17 @@ pub struct GameState {
     // (format_interpolated_string's rand & 3 tail); its reader (the voc
     // suffix pick) is not yet ported.
     pub(crate) data_047e0: u8,
+
+    // = seg001:47e1/47e2 data_047e1 — the speaker's "hold up a sign" overlay,
+    // armed by the dialogue-line event 0x0a: the low byte is the state (1
+    // armed, 0x80 shown) and the high byte (data_047e2) the portrait
+    // animation index * 2 that raises the sign. Cleared when the conversation
+    // is set up or torn down (seg000:93ac / 97e5).
+    pub(crate) head_sign_state: u8,
+    pub(crate) head_sign_anim: u8,
+    // = seg001:47e4 data_047e4 — the sign table row that armed it (a seg001
+    // pointer in DOS, the table index here).
+    pub(crate) head_sign_record: Option<usize>,
 
     // = seg001:477c dialogue_current_record_ptr — byte offset of the sentence
     // entry the present walk started at (seg000:9f9e); load_PHRASExx_HSQ
@@ -1594,6 +1695,7 @@ impl GameState {
             line_spoken_this_conversation: 0,
             data_0001b: 0,
             pending_room_action: 0,
+            spice_in_stock: 0,
             data_000ac: 0x1b58,
             number_of_sietches_visited: 0,
             number_of_rallied_troops: 0,
@@ -1646,6 +1748,7 @@ impl GameState {
             data_01968: 0,
             data_0196a: 0,
             data_0196c: 0,
+            last_event_game_time: 0,
             location_visibility_distance: 1,
             // = the seg001:197c/197e compiled-in statics (0x1964, -4) — the
             // orientation the intro2 globe scene renders before anything
@@ -1660,7 +1763,17 @@ impl GameState {
             map_popup_ptr: 0,
             map_popup2_ptr: 0,
             map_selected_troop_id: 0,
+            map_last_selected_troop_id: 0,
             map_info_popup_troop: None,
+            map_contact_troop: None,
+            map_contact_troop_pending: None,
+            map_contact_strip_rect: crate::troop_map_screen::TROOP_CONTACT_STRIP_RECT,
+            map_contact_head_rect: Rect::default(),
+            map_contact_subtitle_pos: (0, 0),
+            contacting_troops_ds_4c: 0,
+            distance_to_closest_harkonnen_area: 0xffff,
+            head_strip_anchor: (0, 0),
+            head_strip_box: Rect::default(),
             map_info_panel_rect: Rect::default(),
             map_popup_anim_src: (0, 0),
             map_popup_anim_rect: Rect::default(),
@@ -1724,6 +1837,22 @@ impl GameState {
                 priority: ScreenElement::TroopMapScreen.initial_priority(),
                 records: MENU_MAP_MAIN.to_vec(),
             },
+            menu_map_troop_dialog: MenuBuffer {
+                priority: ScreenElement::MapTroopDialog.initial_priority(),
+                records: MENU_MAP_TROOP_DIALOG.to_vec(),
+            },
+            menu_map_troop_contact_cycle: MenuBuffer {
+                priority: ScreenElement::MapTroopContactCycle.initial_priority(),
+                records: MENU_MAP_TROOP_CONTACT_CYCLE.to_vec(),
+            },
+            menu_map_troop_moving: MenuBuffer {
+                priority: ScreenElement::MapTroopMovingMenu.initial_priority(),
+                records: MENU_MAP_TROOP_MOVING.to_vec(),
+            },
+            menu_map_troop_occupation: MenuBuffer {
+                priority: ScreenElement::MapTroopOccupationMenu.initial_priority(),
+                records: Vec::new(),
+            },
             cmd_skip_to_destination_flags: 0,
             screen_element_stack: vec![ScreenElement::RoomCommandMenu],
             data_0227d: 1,
@@ -1758,10 +1887,13 @@ impl GameState {
             pending_room_screen_request: 0,
             data_046db: 0,
             new_time_period_pending: 0,
+            new_day_flag: 0,
             sky_fade_active: false,
             data_046e0: 0,
+            spice_harvest_remainder: 0,
             map_view_rect: Rect::default(),
             data_046eb: 0,
+            spice_density_overlay_dirty: 0,
             current_main_view_drawing_function: None,
             data_046fc: 0,
             available_equipment: Equipment::default(),
@@ -1818,6 +1950,9 @@ impl GameState {
             balloon_x: 0x50,
             subtitle_bubble: None,
             data_047e0: 0,
+            head_sign_state: 0,
+            head_sign_anim: 0,
+            head_sign_record: None,
             dialogue_line_word0: 0,
             dialogue_text_continuation: None,
             dialogue_end_request: 0,
@@ -2398,9 +2533,26 @@ impl GameState {
         //   the fade target each period), the spiral reveals the room in the old
         //   palette, then the SkyFade task morphs the sky to the new time-of-day.
         self.loc_038e1_sky_refresh();
-        // TODO: the rest of run_events_for_current_time_period (seg000:1b46..1c45)
-        // — the new-day hook (loc_01c46), the time-of-day action tables at
-        // data_01db3, and prepare_location_data_for_condit — is not ported.
+        // = seg000:1b46..1b56 new_day_flag = the day part of game_time minus
+        //   the day part the last run saw (data_01174) — non-zero on the first
+        //   period of a new day, which the per-day troop and location hooks
+        //   read.
+        let previous = std::mem::replace(&mut self.last_event_game_time, self.game_time);
+        self.new_day_flag = (self.game_time as u8 & 0xf0).wrapping_sub(previous as u8 & 0xf0);
+        // = seg000:1b5b call run_events_for_current_time_period_new_day_01c46 —
+        //   the new-day hook. Not ported.
+        // = seg000:1b5e/1b63 cmp final_attack_stage_ds_c2,7; jnb loc_01bb2 —
+        //   from stage 7 of the final attack the troop and location walks stop
+        //   running. That stage counter (seg001:00c2) is not modelled, and the
+        //   port cannot reach the endgame yet, so the walk always runs. TODO.
+        // = seg000:1b65 call test_for_Chani_in_room_and_do_stuff_if_true — not
+        //   ported.
+        // = seg000:1b70 call run_troop_occupation_events — one period of every troop's
+        //   occupation: the spice mining accumulation is the ported part.
+        self.run_troop_occupation_events();
+        // TODO: the rest (seg000:1b73..1c45) — iterate_over_all_locations_upon_
+        // new_day, the time-of-day action tables at data_01db3 and
+        // prepare_location_data_for_condit — is not ported.
     }
 
     // = seg000:390a drain_sky_fade — drain an in-flight sky cross-fade to completion,
@@ -2613,9 +2765,16 @@ impl GameState {
         self.sleep_ticks(start, 3);
     }
 
-    // = seg000:e353 wait_processing_frame_tasks_interruptable — run the
-    // driver for a fixed number of PIT ticks, breaking early on user input.
-    // Used for `stage.wait` style timed pauses, which the player can skip.
+    // = seg000:e387 wait_a_bit — run the driver for a fixed number of PIT
+    // ticks, servicing the frame tasks (e3ae calls process_frame_tasks) and
+    // breaking early on user input. Used for `stage.wait` style timed pauses,
+    // which the player can skip.
+    //
+    // NOT seg000:e353 (wait_processing_frame_tasks_interruptable), despite the
+    // similar shape: e353 only services tasks while suppress_sky_240_255
+    // (data_0227d) is non-zero — the intro/cutscene state its callers bracket
+    // themselves into. In-game that byte is 0 and e353 degenerates to a plain
+    // timed spin; head_sign_lower depends on exactly that.
     pub fn wait_frame_tasks_for_ticks(&mut self, ticks: u64) {
         let deadline = self.game_ticks() + ticks;
         while self.game_ticks() < deadline {

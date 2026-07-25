@@ -12,11 +12,32 @@
 //! troop (the rotating highlight ring), right-clicking toggles its info
 //! panel, and clicking a location marker opens the location info popup with
 //! its GO THERE command menu. The info/location panels scale in and out with
-//! an XOR outline animation (xor_rect_outline_advance / _reverse). Still
-//! stubbed: the contact verb menu + troop
-//! dialogue (troop_0780a / troop_07c02), the GO THERE launch's CALL A WORM
-//! branch, the water/spice popup extra (loc_0605c), popup dragging, and the
-//! spice-density overlay (data_046eb bit 0x40).
+//! an XOR outline animation (xor_rect_outline_advance / _reverse).
+//!
+//! The CONTACT FREMEN TROOPS / GIVE ORDERS TO TROOP verb
+//! (menu_callback_choice_map_main_contact_fremen_troops) selects a troop, opens
+//! its contact verb menu (map_open_troop_contact_menu) and puts the contact
+//! dialogue strip up over the map (map_open_troop_contact_dialogue): a panel
+//! opposite the troop's icon, the speaker's portrait re-anchored into the head
+//! box on the left (talking_head.rs draw_talking_head_in_box) and the troop's
+//! dialogue line, spoken and subtitled, on the right (the seg001:2244 subtitle
+//! layout in subtitle.rs).
+//!
+//! ASK FOR MORE INFORMATION asks the troop for its next line, and CHANGE /
+//! SELECT TROOP OCCUPATION opens the occupation submenu its current
+//! occupation class calls for.
+//!
+//! The SPECIALIZE IN … and ASSEMBLY WIND-TRAP verbs reassign the troop for
+//! real (troops.rs troop_set_occupation), ask it, and take the change back if
+//! it refuses.
+//!
+//! Still stubbed here: ESPIONAGE / ATTACK / GO & SEARCH FOR EQUIPMENT, which
+//! also MOVE the troop through the unported troop-command core
+//! (troop_location_082da / 084a6), MODIFY EQUIPMENT and MOVE TROOP with their
+//! equipment spinners, the
+//! GO THERE launch's CALL A WORM branch, the water/spice popup extra
+//! (loc_0605c), popup dragging, and the spice-density overlay (data_046eb bit
+//! 0x40).
 
 use crate::{
     GameState, Rect, command_strings as cmd,
@@ -39,6 +60,39 @@ pub(crate) const MENU_MAP_MAIN: [CommandMenuRecord; 5] = [
     rec(cmd::FIND_PROSPECTORS,      0x5b1e),
 ];
 
+/// = seg001:210a menu_map_troop_dialog — the contacted troop's order menu, the
+/// full set of verbs for a troop within visibility range that is standing
+/// still. map_open_troop_contact_menu rewrites the last slot (NO MORE ORDERS
+/// / CUT CONTACT) and map_setup_troop_dialog_menu the grey bits before every
+/// push.
+#[rustfmt::skip]
+pub(crate) const MENU_MAP_TROOP_DIALOG: [CommandMenuRecord; 5] = [
+    rec(cmd::ASK_FOR_MORE_INFORMATION, 0x7bed),
+    rec(cmd::CHANGE_TROOP_OCCUPATION,  0x69b3),
+    rec(cmd::MODIFY_EQUIPMENT,         0x7cbb),
+    rec(cmd::MOVE_TROOP,               0x8064),
+    rec(cmd::NO_MORE_ORDERS,           0x8763),
+];
+
+/// = seg001:2122 menu_map_troop_contact_cycle_troops — the menu for a troop
+/// that is out of visibility range or held prisoner: it can be cycled past,
+/// not ordered.
+#[rustfmt::skip]
+pub(crate) const MENU_MAP_TROOP_CONTACT_CYCLE: [CommandMenuRecord; 2] = [
+    rec(cmd::NEXT_TROOP,     0x86fa),
+    rec(cmd::NO_MORE_ORDERS, 0x8770),
+];
+
+/// = seg001:214a menu_map_troop_moving_change_destination_next_troop — the
+/// menu for a troop already on the move (occupation bit 6): its destination
+/// can still be changed, but no other order applies.
+#[rustfmt::skip]
+pub(crate) const MENU_MAP_TROOP_MOVING: [CommandMenuRecord; 3] = [
+    rec(cmd::CHANGE_DESTINATION, 0x8064),
+    rec(cmd::NEXT_TROOP,         0x86fa),
+    rec(cmd::CANCEL,             0xd2e2),
+];
+
 // = seg001:1482 full_map_view_rect — the SEE DUNE MAP window (4,4)-(316,148),
 // copied into data_046e3_rect (map_view_rect) by the open transition
 // callback. vga_draw_map_zoomed fills exactly this window: 36 bands of 4
@@ -59,6 +113,21 @@ pub(crate) const MAP_POPUP_TROOP_INFO: u16 = 0x18df;
 /// = seg001:1668 data_01668 — the location info panel record (frame 0xf8,
 /// fill 0x10). The record's seg001 offset is the popup identity.
 pub(crate) const MAP_POPUP_LOCATION: u16 = 0x1668;
+
+/// = seg001:18e9 troop_contact_text_panel_record — the contact dialogue
+/// strip's panel record, frame colour 0xf5 (+8), fill 0xfb (+9). The record's
+/// seg001 offset is the popup identity in map_popup_ptr.
+pub(crate) const MAP_POPUP_TROOP_CONTACT: u16 = 0x18e9;
+
+/// = the compiled-in rect of that record: (5,5)-(232,72). Only the y pair is
+/// rewritten per open (map_draw_troop_contact_strip picks the half of the
+/// screen the troop's icon is not in).
+pub(crate) const TROOP_CONTACT_STRIP_RECT: Rect = rect(5, 5, 232, 72);
+
+/// = seg001:2244 — the contact subtitle's layout descriptor: 153x63, its
+/// origin written per open. subtitle_setup_layout picks it for every line
+/// presented while the full-map view owns the screen (seg000:8cd8).
+pub(crate) const TROOP_CONTACT_SUBTITLE_SIZE: (i16, i16) = (153, 63);
 
 /// The GO THERE menu variant map_click_location_marker folds in.
 #[derive(Clone, Copy)]
@@ -213,9 +282,10 @@ impl GameState {
         //   deep sietch room) and its available equipment has an orni.
         let mut orni_id = CMD_GREY | cmd::TAKE_AN_ORNITHOPTER;
         if self.data_00008 != 0xff && (self.data_00008 < 0x20 || self.current_room < 3) {
-            // = seg000:87aa..87bb compute_location_available_equipment; ax =
-            //   0xa7, greyed when orni_count is 0.
-            self.compute_location_available_equipment();
+            // = seg000:87aa..87bb di = [current_location_ptr]; call
+            //   compute_location_available_equipment; ax = 0xa7, greyed when
+            //   orni_count is 0.
+            self.compute_location_available_equipment(self.current_location_index as usize);
             orni_id = if self.available_equipment.ornithopters != 0 {
                 cmd::TAKE_AN_ORNITHOPTER
             } else {
@@ -528,9 +598,13 @@ impl GameState {
         //   (loc_079de) and the spice sub-mode (loc_058fa, stubbed).
         self.map_close_location_troop_popup();
         self.map_close_troop_info_popup();
-        // = seg000:5cd3..5ce0 a live troop-contact strip (data_01954) tears
-        //   down through the no-more-orders path — TODO with the contact
-        //   menu.
+        // = seg000:5cd3..5ce0 a live troop contact (data_01954) tears down
+        //   through the no-more-orders path, folded back in.
+        if self.map_selected_troop_id != 0 {
+            self.screen_overlay_request_transition();
+            self.menu_callback_choice_multiple_no_more_orders();
+            self.play_pending_panel_fold();
+        }
     }
 
     // = the open popup panel's rect (seg000:5c7c/5c95 rect_contains against
@@ -602,9 +676,9 @@ impl GameState {
             }
         }
         // = seg000:8741..874d the already-selected troop goes straight to the
-        //   dialogue (troop_07c02). TODO with the contact menu.
+        //   next dialogue line, without rebuilding the contact UI.
         if id == self.map_selected_troop_id {
-            println!("map_click_troop_icon: the troop dialogue (troop_07c02) is not ported");
+            self.map_open_troop_contact_dialogue(ti);
             return;
         }
         // = seg000:8747 data_01954 = al; 874a jmp loc_08685.
@@ -615,33 +689,931 @@ impl GameState {
     // = seg000:8685 loc_08685 — (re)build the selected-troop UI: tear the old
     // contact UI down, spawn the highlight ring over the selection, then open
     // the contact verb menu and the troop dialogue.
-    fn map_select_troop(&mut self) {
+    pub(crate) fn map_select_troop(&mut self) {
         // = seg000:8685 data_046d8 = 1 — suppress the info panel's outline
         //   scale-out below (the selection replaces it immediately).
         self.map_popup_anim_suppress = true;
         // = seg000:868a call loc_069a3 — remove the old highlight ring.
         self.map_remove_focused_troop_icon();
-        // = seg000:868d call loc_07b58 — tear down the contact dialogue strip
-        //   (data_046ef). TODO with the contact dialogue.
+        // = seg000:868d call map_close_troop_contact_strip — tear down the
+        //   previous troop's contact dialogue strip.
+        self.map_close_troop_contact_strip();
         // = seg000:8690/8693/8696 close the location popup menu (loc_05f79,
         //   not ported), the info panel (loc_079de) and the spice sub-mode
         //   (loc_058fa, not ported).
         self.map_close_troop_info_popup();
-        // = seg000:8699..86a3 a valid selected id resolves its troop.
+        // = seg000:8699..86a3 a valid selected id resolves its troop; the
+        //   carry get_address_of_troop_by_ID returns is "the troop is rallied"
+        //   (occupation < 0x80), and jnb bails without one.
         let id = self.map_selected_troop_id;
-        if id == 0 || id > 0x43 || self.troops.get((id - 1) as usize).is_none() {
+        if id == 0 || id > 0x43 {
             return;
         }
         let ti = (id - 1) as usize;
-        // = seg000:86a5 data_01955 = al — the confirmed id; not modelled.
+        if self.troops.get(ti).is_none_or(|t| t.occupation >= 0x80) {
+            return;
+        }
+        // = seg000:86a5 data_01955 = al — the id the contact verb resumes from
+        //   once the selection is dropped.
+        self.map_last_selected_troop_id = id;
         // = seg000:86a9 call troop_0697c — the highlight ring.
         self.map_focus_troop_icon(ti);
-        // = seg000:86ae call troop_0780a — the contact verb menu;
-        // = seg000:86b2/86b5 di = the troop's location; call troop_07c02 —
-        //   the troop dialogue. TODO: both flows.
-        println!(
-            "map_select_troop: the contact menu (troop_0780a) and dialogue (troop_07c02) are not ported"
+        // = seg000:86ae call map_open_troop_contact_menu — the contact verb menu.
+        self.map_open_troop_contact_menu(ti);
+        // = seg000:86b2/86b5 di = the troop's location; call
+        //   map_open_troop_contact_dialogue — the strip and its first line.
+        self.map_open_troop_contact_dialogue(ti);
+    }
+
+    // = seg000:7c02 map_open_troop_contact_dialogue — the contacted troop's
+    // dialogue: (re)build the strip over the map, stage its CONDIT block, then present one
+    // line into it (subtitle + voice). Re-entered for every further line the
+    // contact menu's verbs ask for.
+    pub(crate) fn map_open_troop_contact_dialogue(&mut self, ti: usize) {
+        // = seg000:7c02 call map_setup_troop_contact_strip — the strip,
+        //   unless it is already up for this troop.
+        self.map_setup_troop_contact_strip(ti);
+        // = seg000:7c05 call troop_prepare_troop_data_for_condit — stage the
+        //   troop's block so the record's conditions can read it.
+        self.troop_prepare_troop_data_for_condit(ti);
+        // = seg000:7c08/7c0b di = [si+4]; call set_command_menu_origin — the
+        //   menu origin from the troop's location (a stub in the port).
+        self.set_command_menu_origin();
+        // = seg000:7c0e..7c2a out of visibility range the troop answers from
+        //   afar: ds:4c = 0xff picks the record's out-of-contact lines, and the
+        //   highlight ring's icon script swaps to seg001:1916 (the "no
+        //   contact" ring).
+        if self.troop_distance_from_player(ti) > self.location_visibility_distance {
+            self.contacting_troops_ds_4c = 0xff;
+            // = seg000:7c1c..7c2a di = troop_icon_focused_ptr; [di+0dh] and
+            //   [di+0fh] = 1916h — the cursor and the base, so the anim task
+            //   restarts on the new script.
+            if let Some(i) = self.troop_icon_focused[0] {
+                self.troop_icons[i].script_cursor = 0x1916;
+                self.troop_icons[i].script_base = 0x1916;
+            }
+        }
+        // = seg000:7c2d..7c34 call map_present_troop_contact_line; jb
+        //   loc_07c2d — present a line.
+        //   A walk that matched nothing reset the resume cursor, so the retry
+        //   restarts at the record head. DOS spins here until a line matches;
+        //   the port stops after the restart, since a second failure means no
+        //   line can ever match and the loop would take the game with it.
+        if !self.map_present_troop_contact_line() {
+            self.map_present_troop_contact_line();
+        }
+        // = seg000:7c36 call loc_09efd — load and play the line's voice.
+        self.play_dialogue_voc();
+        // = seg000:7c3b data_046f4 = 0; 7c40..7c53 with the interrupt gate at
+        //   0x80 (a line whose event armed the equipment hand-over) the strip
+        //   also shows the equipment spinners: data_046f4 = 1,
+        //   troop_unpack_equipment_flags, loc_07e1e. Not ported — the spinner
+        //   panel and its two mouse handlers (loc_07e97/loc_07eb8) are the
+        //   MODIFY EQUIPMENT verb's UI. TODO.
+        // = seg000:7c56..7c5d on the map view (data_046eb bit 7) drop the
+        //   bubble layout pointer without restoring under it (loc_09901): the
+        //   strip owns those pixels and takes them down itself.
+        if self.data_046eb & 0x80 != 0 {
+            self.subtitle_bubble = None;
+        }
+        // = seg000:7c60 jmp set_fb1_as_active_framebuffer.
+        self.set_fb1_as_active_framebuffer();
+    }
+
+    // = seg000:7bed menu_callback_choice_map_troop_dialogue_ask_for_more_
+    // information — the order menu's first verb: ask the contacted troop for
+    // its next line.
+    pub(crate) fn menu_callback_choice_map_troop_dialogue_ask_for_more_information(&mut self) {
+        // = seg000:7bed/7bf4 with the equipment spinners up (data_046f4) AND
+        //   the spinner sub-mode armed (data_046f5) the verb is a spinner
+        //   click instead (loc_07e97). Neither is ported, so the verb always
+        //   takes the dialogue path.
+        // = seg000:7bfe si = [data_046ef]; falls into troop_07c02.
+        let Some(ti) = self.map_contact_troop else {
+            return;
+        };
+        self.map_open_troop_contact_dialogue(ti);
+    }
+
+    // = seg000:69b3 menu_callback_choice_map_troop_dialogue_change_troop_
+    // occupation — the CHANGE / SELECT TROOP OCCUPATION verb: pick the
+    // occupation submenu the troop's current occupation calls for, apply its
+    // grey rules, and stage it over the order menu.
+    pub(crate) fn menu_callback_choice_map_troop_dialogue_change_troop_occupation(&mut self) {
+        // = seg000:69b3 call contact_verb_troop — the troop the contact verbs act on.
+        let Some(ti) = self.contact_verb_troop() else {
+            return;
+        };
+        let occupation = self.troops[ti].occupation;
+        // = seg000:69b9..69c0 al = occupation & 0xf; nibble 2 (awaiting
+        //   orders) has no occupation to change: the plain SELECT TROOP
+        //   OCCUPATION menu, and none of the grey rules below apply to it.
+        let mut records = if occupation & 0x0f == 2 {
+            // = seg001:215a menu_map_select_troop_occupation.
+            vec![
+                rec(cmd::SPECIALIZE_IN_SPICE, 0x6a71),
+                rec(cmd::SPECIALIZE_IN_ARMY, 0x6a83),
+                rec(CMD_GREY | cmd::SPECIALIZE_IN_ECOLOGY, 0x6a87),
+                rec(cmd::CANCEL, 0xd2e2),
+            ]
+        } else {
+            // = seg000:69c2 call troop_get_occupation_bits_2_and_3_0693b — the
+            //   occupation class (nibble >> 2): 0 spice, 1 army, >= 2 ecology.
+            //   Each class's menu offers the OTHER two specialisations plus
+            //   its own extra verb.
+            match (occupation & 0x0f) >> 2 {
+                // = seg000:69c5 seg001:216e for a spice troop.
+                0 => vec![
+                    rec(cmd::GO_AND_SEARCH_FOR_EQUIPMENT, 0x776d),
+                    rec(cmd::SPECIALIZE_IN_ARMY, 0x6a83),
+                    rec(cmd::SPECIALIZE_IN_ECOLOGY, 0x6a87),
+                    rec(cmd::CANCEL, 0xd2e2),
+                ],
+                // = seg000:69d2 seg001:2182 for an army troop.
+                1 => {
+                    // = seg000:69d5..69e2 ESPIONAGE is offered only with a
+                    //   Harkonnen holding within 0x1e of the troop's location.
+                    let espionage_greyed = self.distance_to_closest_harkonnen_area >= 0x1e;
+                    // = seg000:69e8..69f1 an army troop already on espionage
+                    //   duty (nibble 5) gets the fortress menu instead
+                    //   (seg001:219a) and skips every grey rule below.
+                    if occupation & 0x0f == 5 {
+                        self.map_stage_troop_occupation_menu(vec![
+                            rec(cmd::ATTACK, 0x6a2f),
+                            rec(cmd::CANCEL, 0xd2e2),
+                        ]);
+                        return;
+                    }
+                    vec![
+                        rec(cmd::GO_AND_SEARCH_FOR_EQUIPMENT, 0x7734),
+                        rec(
+                            if espionage_greyed {
+                                CMD_GREY | cmd::ESPIONAGE
+                            } else {
+                                cmd::ESPIONAGE
+                            },
+                            0x6a45,
+                        ),
+                        rec(cmd::SPECIALIZE_IN_SPICE, 0x6a71),
+                        rec(cmd::SPECIALIZE_IN_ECOLOGY, 0x6a87),
+                        rec(cmd::CANCEL, 0xd2e2),
+                    ]
+                }
+                // = seg000:69cd seg001:21a6 for an ecology troop.
+                _ => vec![
+                    rec(cmd::GO_AND_SEARCH_FOR_EQUIPMENT, 0x775c),
+                    rec(cmd::ASSEMBLY_WIND_TRAP, 0x6a2b),
+                    rec(cmd::SPECIALIZE_IN_SPICE, 0x6a71),
+                    rec(cmd::SPECIALIZE_IN_ARMY, 0x6a83),
+                    rec(cmd::CANCEL, 0xd2e2),
+                ],
+            }
+        };
+        // = seg000:69f6..6a02 the three class menus lead with GO & SEARCH FOR
+        //   EQUIPMENT, greyed until game_phase 0x10. (The SELECT menu skips
+        //   this: it jumps straight to the ecology scan below.)
+        if occupation & 0x0f != 2 {
+            records[0].text_id &= !CMD_GREY;
+            if self.game_phase < 0x10 {
+                records[0].text_id |= CMD_GREY;
+            }
+        }
+        // = seg000:6a07..6a23 walk the entries to the first SPECIALIZE IN
+        //   ECOLOGY and grey it unless Paul has learnt the ecology (the
+        //   bitfield_Paul_events 0x20 bit). The walk rewrites the id from its
+        //   masked value, so any other high bit on that entry is dropped.
+        if let Some(r) = records
+            .iter_mut()
+            .find(|r| r.text_id & 0x0fff == cmd::SPECIALIZE_IN_ECOLOGY)
+        {
+            r.text_id = cmd::SPECIALIZE_IN_ECOLOGY;
+            if self.bitfield_paul_events & 0x20 == 0 {
+                r.text_id |= CMD_GREY;
+            }
+        }
+        self.map_stage_troop_occupation_menu(records);
+    }
+
+    // = seg000:6a71 menu_callback_choice_troop_occupation_specialize_in_spice
+    // — SPECIALIZE IN SPICE: occupation 0 (spice mining), except the
+    // Prospector troop, which prospects (1) instead.
+    pub(crate) fn menu_callback_choice_troop_occupation_specialize_in_spice(&mut self) {
+        // = seg000:6a71/6a74 call contact_verb_troop; cl = 0.
+        let Some(ti) = self.contact_verb_troop() else {
+            return;
+        };
+        // = seg000:6a76..6a80 cmp si,troops[2]; jnz troop_apply_occupation_
+        //   choice — the Prospector troop (index 2) takes spice prospecting
+        //   and then re-installs
+        //   the dialogue panel element (loc_02ebf).
+        if ti == 2 {
+            self.troop_occupation_verb_apply(ti, 1);
+            self.draw_task_list_insert();
+            return;
+        }
+        self.troop_occupation_verb_apply(ti, 0);
+    }
+
+    // = seg000:6a83 menu_callback_choice_troop_occupation_specialize_in_army —
+    // SPECIALIZE IN ARMY: occupation 4 (military training).
+    pub(crate) fn menu_callback_choice_troop_occupation_specialize_in_army(&mut self) {
+        let Some(ti) = self.contact_verb_troop() else {
+            return;
+        };
+        self.troop_occupation_verb_apply(ti, 4);
+    }
+
+    // = seg000:6a87 menu_callback_choice_troop_occupation_specialize_in_ecology
+    // — SPECIALIZE IN ECOLOGY: occupation 8 (irrigation and tree care).
+    pub(crate) fn menu_callback_choice_troop_occupation_specialize_in_ecology(&mut self) {
+        let Some(ti) = self.contact_verb_troop() else {
+            return;
+        };
+        self.troop_occupation_verb_apply(ti, 8);
+    }
+
+    // = seg000:6a2b menu_callback_choice_troop_occupation_ecology_troop_
+    // assembly_wind_trap — ASSEMBLY WIND-TRAP, and seg000:6a35
+    // choice_troop_occupation_common_code: the verb keeps the troop's
+    // occupation CLASS (bits 2-3) and replaces the job within it (al = 1 here,
+    // so an ecology troop goes from irrigation 8 to wind-trap assembly 9).
+    pub(crate) fn menu_callback_choice_troop_occupation_assembly_wind_trap(&mut self) {
+        self.troop_occupation_within_class(1);
+    }
+
+    // = seg000:6a35 choice_troop_occupation_common_code — cl = (occupation &
+    // 0x0c) | al, i.e. `job` inside the troop's current occupation class.
+    fn troop_occupation_within_class(&mut self, job: u8) {
+        // = seg000:6a36 call contact_verb_troop.
+        let Some(ti) = self.contact_verb_troop() else {
+            return;
+        };
+        let new = (self.troops[ti].occupation & 0x0c) | job;
+        self.troop_occupation_verb_apply(ti, new);
+    }
+
+    // = seg000:6a89 troop_apply_occupation_choice — the shared occupation-verb
+    // tail: apply the new occupation, let the troop react, and take the change back if it
+    // refuses. The reaction is a dialogue line presented with
+    // pending_room_action 0x0a (troop_present_reaction_line); a line whose event clears the
+    // interrupt gate is the refusal.
+    fn troop_occupation_verb_apply(&mut self, ti: usize, new: u8) {
+        // = seg000:6a8c..6a93 an unchanged occupation only closes the menu.
+        if self.troops[ti].occupation & 0x0f == new {
+            self.menu_callback_choice_exit_menu();
+            return;
+        }
+        // = seg000:6a95..6a99 push the old occupation byte and the speech word
+        //   — what the refusal below puts back.
+        let old_occupation = self.troops[ti].occupation;
+        let old_speech = self.troops[ti].dissatisfaction_and_speech;
+        // = seg000:6a9c call troop_set_occupation — apply it.
+        self.troop_set_occupation(ti, new);
+        // = seg000:6a9f call arm_dialogue_interrupt_gate.
+        self.dialogue_interrupt_gate = 0xff;
+        // = seg000:6aa2/6aa4 al = 0x0a; call troop_present_reaction_line —
+        //   the troop's reaction.
+        self.map_present_troop_reaction_line(ti, 0x0a);
+        // = seg000:6aa7..6aad call test_dialogue_interrupt_gate; jz loc_06ab8 —
+        //   the gate still armed means no line objected.
+        if self.dialogue_interrupt_gate == 0xff {
+            // = seg000:6ab8..6ac3 accepted: a troop that left the spice class
+            //   (class != 0) gives up its harvester (equipment bit 7).
+            if self.troop_get_occupation_bits_2_and_3(ti) != 0 {
+                self.troops[ti].equipment &= 0x7f;
+            }
+        } else {
+            // = seg000:6aaf..6ab2 refused: put the speech word back and
+            //   re-apply the old occupation. DOS pushed the WORD at si+3, so
+            //   `pop cx` hands troop_set_occupation the whole old occupation byte —
+            //   bits 0x10..0x80 come back with the nibble.
+            self.troops[ti].dissatisfaction_and_speech = old_speech;
+            self.troop_set_occupation(ti, old_occupation);
+        }
+        // = seg000:6ab5 jmp menu_callback_choice_exit_menu — close the
+        //   occupation submenu, revealing the order menu under it.
+        self.menu_callback_choice_exit_menu();
+    }
+
+    // = seg000:7bb9 troop_present_reaction_line (+ loc_07bbe) — present one
+    // dialogue line for the troop with `action` in pending_room_action, the code the line's
+    // conditions read to pick the reaction. The line is spoken by the Fremen-2
+    // room person (0x0f), so on the map view it lands in the contact strip.
+    fn map_present_troop_reaction_line(&mut self, ti: usize, action: u8) {
+        // = seg000:7bb9 call troop_prepare_troop_data_for_condit.
+        self.troop_prepare_troop_data_for_condit(ti);
+        // = seg000:7bbe/7bc2 data_046f1 = si; pending_room_action = al —
+        //   data_046f1 is what subtitle_setup_layout rebuilds the strip from.
+        self.map_contact_troop_pending = Some(ti);
+        self.pending_room_action = action;
+        // = seg000:7bc5 dialogue_resume_entry_ptr = 0 — the reaction starts at
+        //   the head of the person's record, not where the contact left off.
+        self.dialogue_resume_entry_ptr = 0;
+        // = seg000:7bcb call set_screen_as_active_framebuffer.
+        self.set_screen_as_active_framebuffer();
+        // = seg000:7bce/7bd1 ax = 0x0f; call present_room_person_dialogue.
+        if self.present_room_person_line(0x0f) {
+            // = seg000:7bd6 call loc_09efd — the line's voice.
+            self.play_dialogue_voc();
+        }
+        // = seg000:7bd9/7bdd si = data_046f1; jmp loc_07c56 — the shared tail:
+        //   drop the bubble pointer on the map view, then fb1 active again.
+        if self.data_046eb & 0x80 != 0 {
+            self.subtitle_bubble = None;
+        }
+        self.set_fb1_as_active_framebuffer();
+    }
+
+    // = seg000:6a25 bx = nullsub_00f66; jmp loc_0d323 — stage the picked
+    // occupation submenu over the order menu (its 0xf8 priority sorts above
+    // the 0xfc contact menus, so Cancel pops back to the order menu) with a
+    // no-op cleanup.
+    fn map_stage_troop_occupation_menu(&mut self, records: Vec<CommandMenuRecord>) {
+        self.menu_map_troop_occupation.records = records;
+        self.stage_command_submenu(ScreenElement::MapTroopOccupationMenu);
+    }
+
+    // = seg000:68eb contact_verb_troop — the troop the contact verbs act on: the map's
+    // selected troop (data_01954) while the full-map view owns the screen,
+    // else the room's Fremen-2 slot (fremen2_troop_ptrs[selected_fremen2_
+    // index]). DOS also returns carry = "the troop is rallied" (occupation <
+    // 0x80); this caller does not read it.
+    pub(crate) fn contact_verb_troop(&self) -> Option<usize> {
+        // = seg000:68ee cmp data_046eb,80h; jnb get_address_of_troop_by_ID.
+        if self.data_046eb < 0x80 {
+            // = seg000:68f5..6904 in the room the troop is whichever Fremen-2
+            //   slot the conversation picked (the round-robin the room-entry
+            //   classification fills, troops.rs).
+            return self.fremen2_troops[(self.selected_fremen2 & 7) as usize];
+        }
+        // = seg000:6906 get_address_of_troop_by_ID: troops + (id - 1) * 0x1b.
+        let id = self.map_selected_troop_id;
+        if id == 0 {
+            return None;
+        }
+        self.troops
+            .get((id - 1) as usize)
+            .map(|_| (id - 1) as usize)
+    }
+
+    // = seg000:7ba3 map_setup_troop_contact_strip — put the contact strip up
+    // for `ti`, unless it is already this troop's: a further line only
+    // repaints the text.
+    fn map_setup_troop_contact_strip(&mut self, ti: usize) {
+        // = seg000:7ba3 call set_screen_as_active_framebuffer — the strip
+        //   draws straight to the visible screen, over the map.
+        self.set_screen_as_active_framebuffer();
+        // = seg000:7ba6 cmp si,[data_046ef]; jz ret.
+        if self.map_contact_troop == Some(ti) {
+            return;
+        }
+        // = seg000:7bad data_046f1 = si — the troop the strip is being built
+        //   for, which subtitle_setup_layout rebuilds from.
+        self.map_contact_troop_pending = Some(ti);
+        // = seg000:7bb1 call map_draw_troop_contact_strip.
+        self.map_draw_troop_contact_strip(ti);
+        // = seg000:7bb4 call loc_09f40 — the per-presentation setup. On the
+        //   map view its only effect is the subtitle font (loc_09f82 below);
+        //   the fb1 redirect and the in-room pads are gated on data_046eb == 0
+        //   and map_draw_troop_contact_strip set the strip's own pads.
+        self.font_state.color = 0x00f0;
+        self.font_select_tall_font();
+    }
+
+    // = seg000:79ee map_draw_troop_contact_strip — draw the contact dialogue
+    // strip: a panel in the half of the screen the troop's icon is not in, with the head box on
+    // the left and the subtitle box on the right. Also reached from
+    // subtitle_setup_layout (seg000:8cee) when a line is presented with no
+    // strip up.
+    pub(crate) fn map_draw_troop_contact_strip(&mut self, ti: usize) {
+        // = seg000:79ee data_046ef = si — the contact is live from here.
+        self.map_contact_troop = Some(ti);
+        // = seg000:79f2/79f8 call troop_find_icon; jnz loc_07a1e — without an
+        //   icon on the map the record keeps whatever rect it last had.
+        let mut r = self.map_contact_strip_rect;
+        if let Some(icon) = self.troop_find_icon(ti) {
+            // = seg000:79fa..7a09 the strip goes opposite the icon: with the
+            //   icon in the lower half (y0 >= 76) at the top (y0 = 5), else at
+            //   the bottom (y0 = 80). ax rides along as the occupation panel's
+            //   y (data_04712).
+            let icon_y = self.troop_icons[icon].rect.y0;
+            let y0 = if icon_y >= 0x4c { 5 } else { 0x50 };
+            // = seg000:7a0c/7a12 [si+2] = bx; [si+6] = bx + 0x43.
+            r.y0 = y0;
+            r.y1 = y0 + 0x43;
+            // = seg000:7a15/7a1b data_04710 = 0x5c, data_04712 = 0x1e / 0x0e —
+            //   the troop occupation panel's origin, read by the map's hover
+            //   readout (seg000:5c22) and the spice sub-mode. Neither is
+            //   ported, so the rect is not modelled. TODO.
+        }
+        self.map_contact_strip_rect = r;
+        // = seg000:7a1e map_popup_ptr = si — the strip is the open popup, so a
+        //   click inside it routes to the strip, not to the map.
+        self.map_popup_ptr = MAP_POPUP_TROOP_CONTACT;
+        // = seg000:7a22/7a24 al = 2; call loc_07b0f — data_046d8 = 0 then the
+        //   panel's open effect (run_vga_effect al=2, the segvga effect
+        //   dispatcher's entry 1; not ported), falling into loc_07b1b.
+        self.map_popup_anim_suppress = false;
+        // = the panel fill (0xfb) + frame (0xf5) from the record.
+        self.map_draw_panel_record(r, 0xfb, 0xf5);
+        // = seg000:7a32..7a50 the subtitle descriptor's origin (the panel
+        //   origin + (0x49, 3)) and the strip's own text insets.
+        self.map_contact_subtitle_pos = (r.x0 + 0x49, r.y0 + 3);
+        self.subtitle_pad_left = 0;
+        self.subtitle_pad_right = 5;
+        self.subtitle_pad_top = 0;
+        self.subtitle_pad_bottom = 1;
+        // = seg000:7a53..7a67 data_018f3 = the head box, the panel origin +
+        //   (4, 3) and 0x3d square, filled 0xe4 and framed 0xf5.
+        let head = rect(r.x0 + 4, r.y0 + 3, r.x0 + 4 + 0x3d, r.y0 + 3 + 0x3d);
+        self.map_contact_head_rect = head;
+        self.map_draw_panel_record(head, 0xe4, 0xf5);
+        // = seg000:7a6a..7b0c the head itself.
+        self.map_draw_troop_contact_head(ti, head);
+        // = seg000:7b0c jmp open_onmap_resource.
+        self.open_onmap_spritesheet();
+    }
+
+    // = seg000:7a6a..7b0c — the strip's talking head: pick the head the troop
+    // speaks through, load its portrait sheet, and draw one frame into the
+    // strip's head box (inset one pixel, 0x3b square).
+    fn map_draw_troop_contact_head(&mut self, ti: usize, head_box: Rect) {
+        let troop = self.troops[ti];
+        // = seg000:7a6e..7a80 a captured troop (occupation bit 5) at a
+        //   battle-flagged (location status bit 1) or Atreides location does
+        //   not speak for itself — the Harkonnen head 0x0c does, on its
+        //   animation 0 and the seg001:22b9 entry the 0x0c byte offset picks.
+        let li = location_index_from_ptr(troop.offset_of_location);
+        let captor = troop.occupation & 0x20 != 0
+            && (self.locations[li].status & 2 != 0 || self.location_is_atreides(li));
+        let (anim, anchor) = if captor {
+            // = seg000:7a82..7a94 ax = 0x0c both as the resource id and as the
+            //   anchor table's byte offset (entry 3); bp = 0 (animation 0).
+            self.current_lip_sync_resource_id = 0x0c;
+            self.open_talking_head_resource(0x0c, 0);
+            self.update_screen_palette();
+            (0usize, 3usize)
+        } else {
+            // = seg000:7a96..7abf the generic Fremen head. The troop is staged
+            //   as the room's Fremen-2 so character_id_to_sprite derives the
+            //   head sprite and idle expression from it (walk_facing_sprite).
+            self.current_lip_sync_resource_id = 0x0f;
+            self.fremen2_troops[0] = Some(ti);
+            self.selected_fremen2 = 0;
+            self.open_talking_head_resource(0x0f, 0);
+            self.update_screen_palette();
+            // = seg000:7aab..7abf ax = (talking_head_id - 0x0e) * 4 (the anchor
+            //   entry); bp = (talking_head_idle_expr - 1) * 2 (the animation).
+            let Some(head) = self.talking_head.as_ref() else {
+                return;
+            };
+            let anchor = (head.talking_head_id as usize).saturating_sub(0x0e);
+            let anim = head.facing.saturating_sub(1) as usize;
+            (anim, anchor)
+        };
+        // = seg000:7ac1..7acd si = data_022b9 + ax; the two words into
+        //   data_046d2/046d4 — the anchor draw_head_image_group_in_box subtracts.
+        self.head_strip_anchor = crate::talking_head::strip_anchor(anchor);
+        // = seg000:7adc..7afd data_047d4 = the head box inset one pixel, 0x3b
+        //   square — the draw origin and the clip.
+        self.head_strip_box = rect(
+            head_box.x0 + 1,
+            head_box.y0 + 1,
+            head_box.x0 + 1 + 0x3b,
+            head_box.y0 + 1 + 0x3b,
         );
+        // = seg000:7ad9/7b02 si = the animation's first frame; call draw_talking_head_in_box.
+        self.draw_talking_head_in_box(anim, 0);
+        // = seg000:7b06/7b09 si = data_047d4; call gfx_copy_rect_to_screen —
+        //   the strip drew into the screen buffer, so publish it.
+        if !self.front_buffer_is_fb1() {
+            self.send_frame_to_display();
+        }
+    }
+
+    // = seg000:7b1b loc_07b1b — paint a panel record: fill its rect with the
+    // record's fill colour ([rec+9]) and outline it one pixel in from the edge
+    // in its frame colour ([rec+8], loc_0c551).
+    pub(crate) fn map_draw_panel_record(&mut self, r: Rect, fill: u8, frame: u8) {
+        gfx::vga_fill_rect(
+            self,
+            self.active_fb(),
+            r.x0 as u16,
+            r.y0 as u16,
+            r.x1 as u16,
+            r.y1 as u16,
+            fill,
+        );
+        self.draw_rect_outline(r.x0, r.y0, r.x1 - 1, r.y1 - 1, frame);
+    }
+
+    // = seg000:9719 map_present_troop_contact_line — pick and present one
+    // line of the troop-contact dialogue: resume where the last line left off, or
+    // start at DIALOGUE[244], the block every contacted troop speaks from.
+    // Returns whether a line was presented (DOS's carry-clear exit).
+    fn map_present_troop_contact_line(&mut self) -> bool {
+        // = seg000:9719 cmp related_to_contacting_troops_ds_4c,0; js — a troop
+        //   answering from afar queues no message; one in range queues the
+        //   "<troop> is here" message for its location (al = 0x0f, di =
+        //   [si+4], messages_02a51). The message queue is not ported.
+        // = seg000:972c call loc_09f82 — the subtitle font setup.
+        self.font_state.color = 0x00f0;
+        self.font_select_tall_font();
+        // = seg000:972f current_lip_sync_resource_id = 0x0f — every troop
+        //   speaks through the generic Fremen head, so the voice bank and the
+        //   lip-sync resource are the Fremen ones.
+        self.current_lip_sync_resource_id = 0x0f;
+        // = seg000:9735 data_047a2 = &room_persons[15] — the Fremen-2 slot as
+        //   the active speaker; only the unported loc_094f3 reads it.
+        // = seg000:973b call arm_dialogue_interrupt_gate.
+        self.dialogue_interrupt_gate = 0xff;
+        // = seg000:973e..9748 si = dialogue_resume_entry_ptr; an exhausted (0)
+        //   or reset (0xffff) cursor starts over at si = [DIALOGUE + 122*2],
+        //   the record every contacted troop speaks from.
+        let start = match self.dialogue_resume_entry_ptr {
+            0 | 0xffff => crate::container::entry_offset(&self.dialogue, 122),
+            resume => resume,
+        };
+        // = seg000:974c data_047c2 = 0x20 — the auto/no-verb sentence mask.
+        self.data_047c2 = 0x20;
+        // = seg000:9751 call present_first_matching_dialogue_line.
+        let (next, presented) = self.present_first_matching_dialogue_line(start as usize);
+        // = seg000:9754/975a store the resume cursor; a walk that matched
+        //   nothing resets it so the next call restarts at the record head.
+        self.dialogue_resume_entry_ptr = if presented { next } else { 0 };
+        presented
+    }
+
+    // = seg000:5a03 loc_05a03 — GIVE ORDERS TO TROOP from the dialogue panel:
+    // the Fremen leader you are talking to is contacted on the full-planet map
+    // instead, with the map opened on him and his order menu already up.
+    pub(crate) fn menu_callback_choice_give_orders_to_troop(&mut self) {
+        // = seg000:5a03 call subtitle_restore_prior — take the speech balloon
+        //   down before the room goes away.
+        self.subtitle_restore_prior();
+        // = seg000:5a06 inc map_view_reentry_count — marks this map visit as
+        //   the room's troop detour: the order menu's last slot then reads NO
+        //   MORE ORDERS rather than CUT CONTACT, and choosing it returns here
+        //   (menu_callback_choice_multiple_no_more_orders).
+        self.map_view_reentry_count = self.map_view_reentry_count.wrapping_add(1);
+        // = seg000:5a0a/5a0d call contact_verb_troop; data_01954 = al — the troop
+        //   behind the room's Fremen-2 person becomes the map's selection.
+        //   (DOS stores al either way; an empty slot leaves id 0, which
+        //   map_select_troop then rejects.)
+        let id = self
+            .contact_verb_troop()
+            .map_or(0, |ti| self.troops[ti].troop_id);
+        self.map_selected_troop_id = id;
+        // = seg000:5a10 not room_view_toggle — the room/map toggle flips
+        //   without going through ui_toggle_room_view.
+        self.room_view_toggle = !self.room_view_toggle;
+        // = seg000:5a14 call ui_show_globe_map_view.
+        self.ui_show_globe_map_view();
+        // = seg000:5a17 jmp map_select_troop — the ring, the contact menu and
+        //   the troop's dialogue strip, exactly as a click on its icon.
+        self.map_select_troop();
+    }
+
+    // = seg000:86cc menu_callback_choice_map_main_contact_fremen_troops — the
+    // map main menu's contact slot: "CONTACT FREMEN TROOPS" over the whole
+    // planet, or "GIVE ORDERS TO TROOP" while location_visibility_distance is
+    // short enough that only the player's own location is reachable
+    // (map_setup_main_menu picks the wording). Resumes the last contacted
+    // troop when nothing is selected, else cycles to the next one.
+    pub(crate) fn menu_callback_choice_map_main_contact_fremen_troops(&mut self) {
+        // = seg000:86cc call map_dismiss_rallied_troops_popup.
+        self.map_dismiss_rallied_troops_popup();
+        // = seg000:86cf cmp number_of_rallied_troops,0; jz ret — no Fremen
+        //   have joined yet, so there is nobody to contact.
+        if self.number_of_rallied_troops == 0 {
+            return;
+        }
+        // = seg000:86d6 cmp location_visibility_distance,2; jb
+        //   map_contact_troop_at_current_location.
+        if self.location_visibility_distance < 2 {
+            self.map_contact_troop_at_current_location();
+            return;
+        }
+        // = seg000:86dd ax = the word at data_01954: al the selected id, ah
+        //   the last contacted one (data_01955).
+        // = seg000:86e0 or al,al; jnz — a live selection cycles on.
+        if self.map_selected_troop_id != 0 {
+            self.menu_callback_choice_map_troop_contact_next_troop();
+            return;
+        }
+        // = seg000:86e4/86e8 al = ah; or al,al; jz — nothing contacted yet
+        //   either, so start the cycle from troop id 0.
+        let last = self.map_last_selected_troop_id;
+        if last == 0 {
+            self.menu_callback_choice_map_troop_contact_next_troop();
+            return;
+        }
+        // = seg000:86ea data_01954 = ah; 86ed call get_address_of_troop_by_ID;
+        //   86f0 call troop_find_icon; 86f3 jz loc_08685 — resume the last
+        //   contacted troop, but only while it still has an icon on the map.
+        self.map_selected_troop_id = last;
+        let ti = (last - 1) as usize;
+        if self.troops.get(ti).is_some() && self.troop_find_icon(ti).is_some() {
+            self.map_select_troop();
+            return;
+        }
+        // = seg000:86f5 data_01954 = 0; falls into the next-troop scan.
+        self.map_selected_troop_id = 0;
+        self.menu_callback_choice_map_troop_contact_next_troop();
+    }
+
+    // = seg000:86b9 map_contact_troop_at_current_location — the GIVE ORDERS TO
+    // TROOP path: contact the troop stationed at the player's own location,
+    // recentring the map on it first (at this visibility distance it is the
+    // only troop reachable).
+    fn map_contact_troop_at_current_location(&mut self) {
+        // = seg000:86b9/86bd di = [current_location_ptr]; al = [di+9] — the
+        //   head of the location's troop chain.
+        let Some(location) = self.locations.get(self.current_location_index as usize) else {
+            return;
+        };
+        // = seg000:86c0 data_01954 = al.
+        self.map_selected_troop_id = location.troop_id;
+        // = seg000:86c3 call set_zoomed_globe_pos_from_map_position — recentre
+        //   the map on the player.
+        self.set_zoomed_globe_pos_from_map_position();
+        // = seg000:86c6 call [_word_23B9D_current_main_view_drawing_function]
+        //   — the installed main-view redraw (ui_main_view_map_interface here;
+        //   the verb is only reachable with the map view up).
+        let redraw = self
+            .current_main_view_drawing_function
+            .expect("the contact verb with no main-view drawing function installed");
+        redraw(self);
+        // = seg000:86ca jmp loc_08685.
+        self.map_select_troop();
+    }
+
+    // = seg000:86fa menu_callback_choice_map_troop_contact_next_troop — the
+    // NEXT TROOP verb: of the troops with an icon on the map, contact the one
+    // whose id follows the selected one cyclically.
+    pub(crate) fn menu_callback_choice_map_troop_contact_next_troop(&mut self) {
+        // = seg000:86fa si = troop_icon_count; lodsw; cx = ax; jcxz ret.
+        if self.troop_icons.is_empty() {
+            return;
+        }
+        // = seg000:8702..8707 al = the selected id; bh = 0xff (the best id
+        //   delta so far); di = 0 (the best icon).
+        let selected = self.map_selected_troop_id;
+        let mut best: Option<usize> = None;
+        let mut best_delta = 0xffu8;
+        for i in 0..self.troop_icons.len() {
+            // = seg000:8709 bp = [si+0ah] — the icon's troop.
+            let t = &self.troops[self.troop_icons[i].troop_index];
+            // = seg000:870c cmp byte ptr [bp+3],80h; jnb — an unrallied troop
+            //   (occupation bit 7) is not contactable.
+            if t.occupation >= 0x80 {
+                continue;
+            }
+            // = seg000:8712..871b ah = troop->troop_id - al; the smallest
+            //   non-zero unsigned delta wins, i.e. the next id above the
+            //   selection, wrapping past the end of the troop table.
+            let delta = t.troop_id.wrapping_sub(selected);
+            if delta == 0 || delta > best_delta {
+                continue;
+            }
+            best_delta = delta;
+            best = Some(i);
+        }
+        // = seg000:8726 or di,di; jz ret; 872a si = di, falling into
+        //   map_click_troop_icon with the winning icon.
+        let Some(i) = best else {
+            return;
+        };
+        let ti = self.troop_icons[i].troop_index;
+        self.map_click_troop_icon(ti);
+    }
+
+    // = seg000:780a map_open_troop_contact_menu — open the contact verb menu
+    // over the selected troop. Which of the three menus applies is decided
+    // here: the full order menu for a troop in range and standing still, the
+    // change-destination menu for one on the move, and the cycle menu for one
+    // out of range or held prisoner. Also entered from the room view
+    // (seg000:1768).
+    pub(crate) fn map_open_troop_contact_menu(&mut self, ti: usize) {
+        // = seg000:780a call troop_07c63; 780d bp = menu_map_troop_contact_
+        //   cycle_troops; 7810 cmp ax,[location_visibility_distance]; ja — out
+        //   of visibility range the troop can only be cycled past.
+        let mut element = ScreenElement::MapTroopContactCycle;
+        let in_range = self.troop_distance_from_player(ti) <= self.location_visibility_distance;
+        let occupation = self.troops[ti].occupation;
+        // = seg000:7816..781f occupation bit 5 (captured) keeps the cycle menu
+        //   too, unless the troop is a freed prisoner (occupation 0x22).
+        if in_range && (occupation & 0x20 == 0 || occupation == 0x22) {
+            if occupation & 0x40 != 0 {
+                // = seg000:7821/7824 test occupation,40h; jnz — a troop on the
+                //   move only takes a new destination.
+                element = ScreenElement::MapTroopMovingMenu;
+            } else {
+                // = seg000:782a bp = menu_map_troop_dialog.
+                element = ScreenElement::MapTroopDialog;
+                // = seg000:782d..7838 ax = 0x52; cmp map_view_reentry_count,1;
+                //   adc ax,0; [bp+12h] = ax — the last slot reads CUT CONTACT
+                //   on a map opened from the map itself, and NO MORE ORDERS
+                //   once the room's troop path re-entered the view (the count
+                //   that also sends the verb back to the room, seg000:8763).
+                self.menu_map_troop_dialog.records[4].text_id = if self.map_view_reentry_count == 0
+                {
+                    cmd::CUT_CONTACT
+                } else {
+                    cmd::NO_MORE_ORDERS
+                };
+                // = seg000:783b call map_setup_troop_dialog_menu — the order
+                //   menu's grey bits.
+                self.map_setup_troop_dialog_menu(ti);
+            }
+        }
+        // = seg000:783e bx = map_troop_contact_cleanup; 7841 call loc_0d323 —
+        //   stage the menu over the map main menu and fold it in.
+        self.stage_command_submenu(element);
+        // = seg000:7844 jmp open_onmap_resource.
+        self.open_onmap_spritesheet();
+    }
+
+    // = seg000:7847 map_setup_troop_dialog_menu — the order menu's grey bits.
+    // CHANGE TROOP OCCUPATION, MODIFY EQUIPMENT and MOVE TROOP all start
+    // greyed and are ungreyed one by one from the troop's state.
+    pub(crate) fn map_setup_troop_dialog_menu(&mut self, ti: usize) {
+        // = seg000:7847 [data_02110] = 0x404f; 784d/7852 [data_02115] |= 0x40,
+        //   [data_02119] |= 0x40 — the three orders greyed.
+        let records = &mut self.menu_map_troop_dialog.records;
+        records[1].text_id = CMD_GREY | cmd::CHANGE_TROOP_OCCUPATION;
+        records[2].text_id |= CMD_GREY;
+        records[3].text_id |= CMD_GREY;
+        let troop = self.troops[ti];
+        // = seg000:7857 test word ptr [si+12h],400h; jnz ret — the troop is
+        //   not taking orders at all.
+        if troop.dissatisfaction_and_speech & 0x400 != 0 {
+            return;
+        }
+        // = seg000:785e..7867 al = occupation & 0xf; anything but 1 (spice
+        //   prospecting) can be reassigned.
+        let occupation = troop.occupation & 0x0f;
+        if occupation != 1 {
+            self.menu_map_troop_dialog.records[1].text_id &= !CMD_GREY;
+        }
+        // = seg000:786c..7875 occupation 2 (awaiting orders) relabels the slot
+        //   SELECT TROOP OCCUPATION — the troop has no occupation to change
+        //   yet — and no other order applies.
+        if occupation == 2 {
+            self.menu_map_troop_dialog.records[1].text_id = cmd::SELECT_TROOP_OCCUPATION;
+            return;
+        }
+        // = seg000:7876..787d game_phase >= 5 ungreys MOVE TROOP.
+        if self.game_phase >= 5 {
+            self.menu_map_troop_dialog.records[3].text_id &= !CMD_GREY;
+        }
+        // = seg000:7882 cmp game_phase,4; jb ret — equipment handover only
+        //   opens up at game_phase 4.
+        if self.game_phase < 4 {
+            return;
+        }
+        // = seg000:7889 test word ptr [si+10h],200h; jnz ret — a troop busy
+        //   repairing keeps what it holds.
+        if troop.bitfield_10 & 0x200 != 0 {
+            return;
+        }
+        // = seg000:7890..789d di = [si+4]; the troop's location must be one
+        //   equipment can be handed over at: status bit 3, or an appearance
+        //   below 0x28.
+        let li = location_index_from_ptr(troop.offset_of_location);
+        let Some(location) = self.locations.get(li).copied() else {
+            return;
+        };
+        if location.status & 8 == 0 && location.appearance >= 0x28 {
+            return;
+        }
+        // = seg000:78a0..78b4 call compute_location_available_equipment (di =
+        //   the troop's location); or the 7 buffer counts together, then or in
+        //   the troop's own equipment mask ([si+19h]) — with nothing on either
+        //   side there is nothing to modify.
+        self.compute_location_available_equipment(li);
+        let available = self.available_equipment;
+        let any = available.harvesters
+            | available.ornithopters
+            | available.krys_knives
+            | available.laser_guns
+            | available.weirding_modules
+            | available.atomics
+            | available.bulbs
+            | troop.equipment;
+        if any == 0 {
+            return;
+        }
+        // = seg000:78b6 and byte ptr [data_02115],0bfh — ungrey MODIFY
+        //   EQUIPMENT.
+        self.menu_map_troop_dialog.records[2].text_id &= !CMD_GREY;
+    }
+
+    // = seg000:8751 map_troop_contact_cleanup — the cleanup func every
+    // troop-contact menu is staged with: drop the selection, its highlight
+    // ring and the contact dialogue strip. Run when the menu leaves the
+    // screen-element stack — through Cancel (menu_callback_choice_exit_menu)
+    // or through the map main menu's 0xff push popping it
+    // (map_setup_main_menu).
+    pub(crate) fn map_troop_contact_cleanup(&mut self) {
+        // = seg000:8751 cmp data_01954,0; jz ret.
+        if self.map_selected_troop_id == 0 {
+            return;
+        }
+        // = seg000:8758 call loc_069a3 — the highlight ring.
+        self.map_remove_focused_troop_icon();
+        // = seg000:875b data_01954 = 0 (data_01955 keeps the id, so the
+        //   contact verb can resume this troop); 8760 jmp
+        //   map_close_troop_contact_strip.
+        self.map_selected_troop_id = 0;
+        self.map_close_troop_contact_strip();
+    }
+
+    // = seg000:7b58 map_close_troop_contact_strip — tear down the contacted
+    // troop's dialogue strip: drop its talking-head HUD element, then (for a
+    // live contact, data_046ef) mark the contact on the troop record and
+    // repaint the strip's panel rect.
+    pub(crate) fn map_close_troop_contact_strip(&mut self) {
+        // = seg000:7b58 ui_hud_elements[18].flags = 0 — drop the contacted
+        //   troop's talking head.
+        self.ui_elements[18].flags = 0;
+        // = seg000:7b5e data_046f4 = 0 — the equipment spinners go with the
+        //   strip (not ported, see map_open_troop_contact_dialogue).
+        // = seg000:7b63..7b70 xor si,si; xchg si,[data_046ef]; jz ret — no
+        //   live contact, nothing to take down. The ds:4c reset at 7b65 runs
+        //   either way, BEFORE the exchange.
+        let was_out_of_contact = self.contacting_troops_ds_4c != 0;
+        self.contacting_troops_ds_4c = 0;
+        let Some(ti) = self.map_contact_troop.take() else {
+            return;
+        };
+        // = seg000:7b72 cmp related_to_contacting_troops_ds_4c,0; jnz — a
+        //   troop that answered from outside the visibility range was never
+        //   really reached, so the contact is not marked on it. (The compare
+        //   reads the byte 7b65 just cleared, so it tests the value the
+        //   contact ran with.)
+        if !was_out_of_contact {
+            // = seg000:7b79 call game_phase_set_to_64_if_conditions_met.
+            self.game_phase_set_to_64_if_conditions_met(ti);
+            // = seg000:7b7c/7b81 the spoken-to masks: bitfield_10 &= 0x3f0,
+            //   dissatisfaction_and_speech &= 0xe5ff — the per-contact speech
+            //   flags the dialogue conditions set are dropped again.
+            self.troops[ti].bitfield_10 &= 0x3f0;
+            self.troops[ti].dissatisfaction_and_speech &= 0xe5ff;
+            // = seg000:7b86/7b89 [si+14h] = the in-game day of this contact.
+            self.troops[ti].game_day_of_ralliement = self.get_ingame_day_in_ax() as u8;
+        }
+        // = seg000:7b8c call lip_sync_stop — stop the troop's voice.
+        self.lip_sync_stop();
+        // = seg000:7b8f..7b97 si = troop_contact_text_panel_record; clear
+        //   map_popup_ptr and the dialogue resume cursor: the next contact
+        //   starts its record over.
+        self.map_popup_ptr = 0;
+        self.dialogue_resume_entry_ptr = 0;
+        // = seg000:7b9a call troop_icons_update_dirty_rect — repaint the map
+        //   and its icons over the strip's rect.
+        let r = self.map_contact_strip_rect;
+        self.troop_icons_update_dirty_rect(r);
+        // = seg000:7b9d/7b9f al = 4; call loc_07b2b — the panel's close effect
+        //   (run_vga_effect al=4) unless data_046d8 suppresses it. Not ported,
+        //   like the al=2 open effect.
+    }
+
+    // = seg000:8763 menu_callback_choice_multiple_no_more_orders — the order
+    // menu's last slot. Cuts the contact, and — when the map view was opened
+    // from the room's troop path (loc_05a03, which bumped
+    // map_view_reentry_count) — returns to the room the orders were given
+    // from. Also called by the map's LMB miss (seg000:5cdd).
+    pub(crate) fn menu_callback_choice_multiple_no_more_orders(&mut self) {
+        // = seg000:8763 cmp map_view_reentry_count,0; jz — the count is zeroed
+        //   by the call below, so the room toggle is decided up front.
+        let reentered = self.map_view_reentry_count != 0;
+        // = seg000:8768/876a either way the contact is cut.
+        self.menu_callback_choice_map_troop_contact_no_more_orders();
+        // = seg000:876d jmp ui_toggle_room_view.
+        if reentered {
+            self.ui_toggle_room_view();
+        }
+    }
+
+    // = seg000:8770 menu_callback_choice_map_troop_contact_no_more_orders — the
+    // cycle menu's NO MORE ORDERS slot: put the map main menu back, which pops
+    // the contact menu — and with it the teardown — on the way in.
+    pub(crate) fn menu_callback_choice_map_troop_contact_no_more_orders(&mut self) {
+        // = seg000:8770 cmp data_01954,0; jz ret — no troop is selected, so
+        //   there is no contact to end.
+        if self.map_selected_troop_id == 0 {
+            return;
+        }
+        // = seg000:877a map_view_reentry_count = 0 — the map view is the
+        //   player's own again, not the room's troop detour.
+        self.map_view_reentry_count = 0;
+        // = seg000:877f call map_setup_main_menu — rebuild and push the map
+        //   main menu. Its 0xff priority pops the 0xfc contact menu beneath
+        //   it, running its map_troop_contact_cleanup.
+        self.map_setup_main_menu();
+        // = seg000:8782 ui_hud_elements[18].flags = 0.
+        self.ui_elements[18].flags = 0;
     }
 
     // = seg000:69a3 loc_069a3 — remove the selected-troop highlight ring
@@ -1100,8 +2072,9 @@ impl GameState {
             //   below 0x20. Deep inside a location (room > 2 AND appearance
             //   >= 0x20) shows the panel with no menu (seg000:5fca/5fcf jnb;
             //   the 5fd1 appearance >= 0x28 compare is subsumed by it). The
-            //   verb greys without an ornithopter at the current location.
-            self.compute_location_available_equipment();
+            //   verb greys without an ornithopter at the current location
+            //   (seg000:5fd9 di = [current_location_ptr], not the clicked one).
+            self.compute_location_available_equipment(self.current_location_index as usize);
             Some(MoveMenu::Orni)
         } else {
             None
@@ -1320,7 +2293,7 @@ impl GameState {
     fn location_battle_gauge(&mut self, li: usize) -> u8 {
         // = seg000:60fe/6118 data_0d81c = the Harkonnen population sum.
         let mut hark_pop = 0u32;
-        // = seg000:6155 bx = Σ field_e, cx = Σ field_c, dx = Σ population
+        // = seg000:6155 bx = Σ harvest_total, cx = Σ harvest_rate, dx = Σ population
         //   (occupation-6 non-0x20 troops); Harkonnen add to hark_pop.
         let (mut sum_e, mut sum_c, mut attacker_pop) = (0u32, 0u32, 0u32);
         self.for_each_troop_in_location(li, |s, ti| {
@@ -1334,12 +2307,12 @@ impl GameState {
                 if t.occupation & 0x20 == 0 {
                     attacker_pop += pop;
                 }
-                sum_c += t.field_c as u32;
-                sum_e += t.field_e as u32;
+                sum_c += t.harvest_rate as u32;
+                sum_e += t.harvest_total as u32;
             }
         });
         // = seg000:6108..6114 bx = Σfield_e / (Σfield_e's pop? ) — the DOS
-        //   `add bx,dx; div bx` averages field_e over the attacker pop.
+        //   `add bx,dx; div bx` averages harvest_total over the attacker pop.
         let avg_e = (sum_e << 8).checked_div(sum_e + attacker_pop).unwrap_or(0) as u16;
         // = seg000:6116..6126 cx = Σfield_c / (Σfield_c + hark_pop).
         let avg_c = (sum_c << 8).checked_div(sum_c + hark_pop).unwrap_or(0) as u16;
@@ -1829,7 +2802,373 @@ mod tests {
         // armed the travel pump.
         assert_eq!(game.game_screen_mode_flags & 3, 1, "orni travel mode");
         assert_eq!(game.travel_active, 0xff, "the travel pump is armed");
+        // The departure's rebuild_and_draw_room_nav_panel (through
+        // ui_draw_room_command_panel, seg000:2eec) installs the travel panel
+        // for the new mode: this flight homes on a location, so the compass
+        // clears instead of keeping the room move-direction buttons the map
+        // screen was opened over.
+        let o = crate::game_ui::NAV_PANEL_RECORD_OFFSET;
+        assert_eq!(game.travel_no_location_dest, 0, "homing on the destination");
+        for i in 0..6 {
+            assert_eq!(
+                game.ui_elements[o + i].func_ptr,
+                0x0f66,
+                "nav record {i} has no handler while homing",
+            );
+        }
     }
+    // CONTACT FREMEN TROOPS (menu_callback_choice_map_main_contact_fremen_
+    // troops): the verb selects a troop and opens its contact verb menu, NEXT
+    // TROOP cycles the selection by troop id, and CUT CONTACT puts the map
+    // main menu back — the push that pops the contact menu and runs its
+    // cleanup. Asset-gated:
+    //   cargo test -p dune --bin dune -- --ignored contact_fremen_troops
+    #[test]
+    #[ignore = "needs assets/DUNE.DAT"]
+    fn contact_fremen_troops_opens_and_cycles_the_order_menu() {
+        let dat_path = concat!(env!("CARGO_MANIFEST_DIR"), "/../../assets/DUNE.DAT");
+        let Ok(dat_file) = DatFile::open(dat_path) else {
+            eprintln!("skipping: {dat_path} not found");
+            return;
+        };
+        let (tx, rx) = mpsc::sync_channel(64);
+        let mut game = GameState::new(dat_file, tx);
+        game.set_headless();
+        game.start(true);
+        while rx.try_recv().is_ok() {}
+
+        // Two troops with icons on the map (as in see_dune_map_renders_and_
+        // exits), a rallied count so the verb is not a no-op, and a visibility
+        // distance of 4 so the map menu offers CONTACT FREMEN TROOPS over the
+        // whole planet rather than GIVE ORDERS TO TROOP at the current
+        // location.
+        game.troops[0].occupation = 0x01;
+        game.locations[13].status |= 0x10;
+        game.number_of_rallied_troops = 2;
+        game.location_visibility_distance = 4;
+        game.dispatch_command_handler(0x186b, cmd::SEE_DUNE_MAP);
+        while rx.try_recv().is_ok() {}
+        assert_eq!(
+            game.menu_map_main.records[1].text_id,
+            cmd::CONTACT_FREMEN_TROOPS,
+            "the contact slot is CONTACT FREMEN TROOPS, ungreyed with icons up"
+        );
+        // Rally the second icon's troop too, and park both at the player's own
+        // position so troop_07c63's distance stays inside the visibility range.
+        let second = game.troop_icons[1].troop_index;
+        game.troops[second].occupation = 0x00;
+        let (px, plat) = game.get_map_position();
+        for ti in [0, second] {
+            game.troops[ti].gps_coordinates_1 = px;
+            game.troops[ti].gps_coordinates_2 = plat as u16;
+        }
+        let second_id = game.troops[second].troop_id;
+
+        // The verb with nothing selected and nothing contacted yet starts the
+        // cycle from id 0, so the lowest rallied troop id wins.
+        game.dispatch_command_handler(0x86cc, cmd::CONTACT_FREMEN_TROOPS);
+        while rx.try_recv().is_ok() {}
+        assert_eq!(game.map_selected_troop_id, 1, "troop 1 contacted");
+        assert_eq!(game.map_last_selected_troop_id, 1, "latched in data_01955");
+        assert!(
+            game.troop_icon_focused[0].is_some(),
+            "the highlight ring is up over the selection"
+        );
+        assert_eq!(
+            game.get_active_screen_element(),
+            ScreenElement::MapTroopDialog,
+            "a stationary troop in range gets the full order menu"
+        );
+        // The contact strip is up over the map, opposite the troop's icon
+        // (troop 1's icon sits in the lower half, so the strip takes the top),
+        // and one dialogue line has been presented into it.
+        assert_eq!(game.map_contact_troop, Some(0), "the strip is troop 1's");
+        assert_eq!(game.map_popup_ptr, super::MAP_POPUP_TROOP_CONTACT);
+        assert_eq!(
+            game.map_contact_strip_rect,
+            crate::rect::rect(5, 5, 232, 72),
+            "the strip takes the half the icon is not in"
+        );
+        assert_eq!(game.map_contact_head_rect, crate::rect::rect(9, 8, 70, 69));
+        assert_ne!(game.current_subtitle_id, 0, "a line was presented");
+        assert_ne!(
+            game.dialogue_resume_entry_ptr, 0,
+            "the resume cursor moved into the record"
+        );
+        // The panel fill (0xfb) is on screen, and the head box carries the
+        // troop's portrait: FRM2 for a plain Fremen troop, re-anchored into
+        // the 0x3b box, so most of the box is head pixels rather than its
+        // 0xe4 fill.
+        let yoff = game.y_offset;
+        assert_eq!(game.screen.get(200, 10 + yoff), 0xfb, "the strip panel");
+        assert_eq!(
+            game.talking_head.as_ref().map(|h| h.lip_sync_resource_id),
+            Some(0x0f),
+            "the generic Fremen head speaks for the troop"
+        );
+        let box_rect = game.map_contact_head_rect;
+        let head_pixels = (box_rect.y0 + 1..box_rect.y1 - 1)
+            .flat_map(|y| (box_rect.x0 + 1..box_rect.x1 - 1).map(move |x| (x, y)))
+            .filter(|&(x, y)| game.screen.get(x as u16, (y + yoff as i16) as u16) != 0xe4)
+            .count();
+        assert!(
+            head_pixels > 1000,
+            "the head is drawn into the box (only {head_pixels} non-fill pixels)"
+        );
+        // The last slot reads CUT CONTACT while map_view_reentry_count is 0,
+        // and occupation nibble 1 (spice prospecting) keeps CHANGE TROOP
+        // OCCUPATION greyed.
+        assert_eq!(
+            game.menu_map_troop_dialog.records[4].text_id,
+            cmd::CUT_CONTACT,
+            "CUT CONTACT on a map opened from the map itself"
+        );
+        assert_eq!(
+            game.menu_map_troop_dialog.records[1].text_id,
+            CMD_GREY | cmd::CHANGE_TROOP_OCCUPATION,
+            "a prospecting troop cannot be reassigned"
+        );
+
+        // ASK FOR MORE INFORMATION asks the same troop for its next line: the
+        // strip stays this troop's and the resume cursor moves on.
+        let first_line = game.current_subtitle_id;
+        let resume = game.dialogue_resume_entry_ptr;
+        game.dispatch_command_handler(0x7bed, cmd::ASK_FOR_MORE_INFORMATION);
+        while rx.try_recv().is_ok() {}
+        assert_eq!(game.map_contact_troop, Some(0), "still troop 1's strip");
+        assert!(
+            game.dialogue_resume_entry_ptr != resume || game.current_subtitle_id != first_line,
+            "the verb moved the conversation on"
+        );
+
+        // CHANGE TROOP OCCUPATION opens the submenu for the troop's class. A
+        // prospecting troop (occupation nibble 1, class 0) gets the spice
+        // menu: GO & SEARCH FOR EQUIPMENT (greyed below game_phase 0x10),
+        // SPECIALIZE IN ARMY, SPECIALIZE IN ECOLOGY (greyed without the
+        // Paul-events 0x20 bit) and Cancel.
+        game.dispatch_command_handler(0x69b3, cmd::CHANGE_TROOP_OCCUPATION);
+        while rx.try_recv().is_ok() {}
+        assert_eq!(
+            game.get_active_screen_element(),
+            ScreenElement::MapTroopOccupationMenu,
+            "the occupation submenu is up over the order menu"
+        );
+        let occ: Vec<u16> = game
+            .menu_map_troop_occupation
+            .records
+            .iter()
+            .map(|r| r.text_id)
+            .collect();
+        assert_eq!(
+            occ,
+            vec![
+                CMD_GREY | cmd::GO_AND_SEARCH_FOR_EQUIPMENT,
+                cmd::SPECIALIZE_IN_ARMY,
+                CMD_GREY | cmd::SPECIALIZE_IN_ECOLOGY,
+                cmd::CANCEL,
+            ],
+            "the spice troop's occupation menu"
+        );
+        game.screen
+            .write_png(&game.palette, "troop_map_screen_occupation.png")
+            .unwrap();
+        // Cancel pops it back to the order menu (the contact menu is 0xfc, the
+        // submenu 0xf8, so the push deepened the stack rather than replacing).
+        game.dispatch_command_handler(0xd2e2, cmd::CANCEL);
+        while rx.try_recv().is_ok() {}
+        assert_eq!(
+            game.get_active_screen_element(),
+            ScreenElement::MapTroopDialog,
+            "Cancel returns to the order menu"
+        );
+        assert_eq!(game.map_selected_troop_id, 1, "the contact survives Cancel");
+        // An ecology troop (nibble 8, class 2) gets the ecology menu instead,
+        // and Paul's ecology knowledge ungreys SPECIALIZE IN ECOLOGY where it
+        // is offered.
+        game.troops[0].occupation = 0x08;
+        game.bitfield_paul_events |= 0x20;
+        game.game_phase = 0x10;
+        game.dispatch_command_handler(0x69b3, cmd::CHANGE_TROOP_OCCUPATION);
+        while rx.try_recv().is_ok() {}
+        let occ: Vec<u16> = game
+            .menu_map_troop_occupation
+            .records
+            .iter()
+            .map(|r| r.text_id)
+            .collect();
+        assert_eq!(
+            occ,
+            vec![
+                cmd::GO_AND_SEARCH_FOR_EQUIPMENT,
+                cmd::ASSEMBLY_WIND_TRAP,
+                cmd::SPECIALIZE_IN_SPICE,
+                cmd::SPECIALIZE_IN_ARMY,
+                cmd::CANCEL,
+            ],
+            "the ecology troop's occupation menu, GO & SEARCH ungreyed at game_phase 0x10"
+        );
+        // The occupation apply itself (troop_set_occupation): the occupation byte, the
+        // class bit in the speech word (0x2000 << class), the restarted clocks
+        // and the re-derived "working" flag.
+        game.troops[0].equipment |= 0x80;
+        game.game_time = 0x1234;
+        game.troops[0].harvest_rate = 0x1111;
+        game.troop_set_occupation(0, 4);
+        while rx.try_recv().is_ok() {}
+        assert_eq!(game.troops[0].occupation, 4, "military training");
+        assert_eq!(
+            game.troops[0].dissatisfaction_and_speech & 0x4000,
+            0x4000,
+            "the army class marked in the speech word (0x2000 << 1)"
+        );
+        assert_eq!(
+            game.troops[0].time_period_of_ralliement, 0x1234,
+            "the occupation clocks restarted"
+        );
+        assert_eq!(game.troops[0].harvest_rate, 0, "the accumulators cleared");
+        assert_eq!(
+            game.troops[0].bitfield_10 & 0x100,
+            0x100,
+            "military training has no viability test, so the troop is working"
+        );
+        // Irrigation (8) does have one: without water, the location's status
+        // bit 5 and the troop's own bulbs it cannot work here, so the working
+        // flag stays clear and occupation bit 4 (the "stopped" bit the icon
+        // script reads) goes on.
+        game.troops[0].equipment &= !2;
+        game.troop_set_occupation(0, 8);
+        while rx.try_recv().is_ok() {}
+        assert_eq!(game.troops[0].occupation, 0x18, "irrigation, but stopped");
+        assert_eq!(
+            game.troops[0].bitfield_10 & 0x100,
+            0,
+            "an unworkable occupation leaves the troop inactive"
+        );
+
+        // SPECIALIZE IN ARMY through the verb: the troop is asked, and a line
+        // whose event clears the interrupt gate is its refusal — which puts the
+        // whole occupation byte back. Either way the submenu closes to the
+        // order menu. (Which way it goes is the dialogue record's call, so the
+        // test asserts the outcome that matches the gate.)
+        game.troops[0].occupation = 0x08;
+        let before = game.troops[0].occupation;
+        game.dispatch_command_handler(0x6a83, cmd::SPECIALIZE_IN_ARMY);
+        while rx.try_recv().is_ok() {}
+        if game.dialogue_interrupt_gate == 0xff {
+            assert_eq!(game.troops[0].occupation & 0x0f, 4, "the troop agreed");
+            assert_eq!(
+                game.troops[0].equipment & 0x80,
+                0,
+                "leaving the spice class hands the harvester back"
+            );
+        } else {
+            assert_eq!(
+                game.troops[0].occupation & 0x0f,
+                before & 0x0f,
+                "a refusal puts the old occupation back"
+            );
+        }
+        assert_eq!(
+            game.get_active_screen_element(),
+            ScreenElement::MapTroopDialog,
+            "the occupation submenu closed to the order menu"
+        );
+        // An army troop's submenu is the army one, with the greys rebuilt for
+        // the new occupation.
+        game.troops[0].occupation = 0x04;
+        game.dispatch_command_handler(0x69b3, cmd::CHANGE_TROOP_OCCUPATION);
+        while rx.try_recv().is_ok() {}
+        let occ: Vec<u16> = game
+            .menu_map_troop_occupation
+            .records
+            .iter()
+            .map(|r| r.text_id)
+            .collect();
+        assert_eq!(
+            occ,
+            vec![
+                cmd::GO_AND_SEARCH_FOR_EQUIPMENT,
+                CMD_GREY | cmd::ESPIONAGE,
+                cmd::SPECIALIZE_IN_SPICE,
+                cmd::SPECIALIZE_IN_ECOLOGY,
+                cmd::CANCEL,
+            ],
+            "the army troop's occupation menu, ESPIONAGE greyed with no Harkonnen area near"
+        );
+        game.dispatch_command_handler(0xd2e2, cmd::CANCEL);
+        game.troops[0].occupation = 0x01;
+        while rx.try_recv().is_ok() {}
+
+        // NEXT TROOP walks to the next id above the selection, then wraps.
+        game.dispatch_command_handler(0x86fa, cmd::NEXT_TROOP);
+        while rx.try_recv().is_ok() {}
+        assert_eq!(
+            game.map_selected_troop_id, second_id,
+            "cycled to the next id"
+        );
+        // The second troop's occupation is 0 (spice mining), so its CHANGE
+        // TROOP OCCUPATION slot ungreys.
+        assert_eq!(
+            game.menu_map_troop_dialog.records[1].text_id,
+            cmd::CHANGE_TROOP_OCCUPATION,
+            "a mining troop can be reassigned"
+        );
+        game.dispatch_command_handler(0x86fa, cmd::NEXT_TROOP);
+        while rx.try_recv().is_ok() {}
+        assert_eq!(game.map_selected_troop_id, 1, "wrapped back to troop 1");
+
+        // CUT CONTACT: map_setup_main_menu's 0xff push pops the contact menu,
+        // whose cleanup drops the selection and the ring. data_01955 keeps the
+        // id so the verb can resume it.
+        game.dispatch_command_handler(0x8763, cmd::CUT_CONTACT);
+        while rx.try_recv().is_ok() {}
+        assert_eq!(
+            game.get_active_screen_element(),
+            ScreenElement::TroopMapScreen,
+            "back to the map main menu"
+        );
+        assert_eq!(game.map_selected_troop_id, 0, "selection dropped");
+        assert_eq!(game.map_last_selected_troop_id, 1, "data_01955 kept");
+        assert!(game.troop_icon_focused[0].is_none(), "the ring is gone");
+        assert_eq!(game.data_046eb, 0x80, "still on the map view");
+
+        // The verb again resumes the last contacted troop rather than starting
+        // the cycle over.
+        game.dispatch_command_handler(0x86cc, cmd::CONTACT_FREMEN_TROOPS);
+        while rx.try_recv().is_ok() {}
+        assert_eq!(game.map_selected_troop_id, 1, "resumed troop 1");
+        game.screen
+            .write_png(&game.palette, "troop_map_screen_contact.png")
+            .unwrap();
+
+        // A troop on the move (occupation bit 6) gets the change-destination
+        // menu instead of the order menu.
+        game.dispatch_command_handler(0x8763, cmd::CUT_CONTACT);
+        game.troops[0].occupation |= 0x40;
+        game.dispatch_command_handler(0x86cc, cmd::CONTACT_FREMEN_TROOPS);
+        while rx.try_recv().is_ok() {}
+        assert_eq!(game.map_selected_troop_id, 1);
+        assert_eq!(
+            game.get_active_screen_element(),
+            ScreenElement::MapTroopMovingMenu,
+            "a moving troop only takes a new destination"
+        );
+
+        // Out of visibility range (troop_07c63 > location_visibility_distance)
+        // only the cycle menu is offered.
+        game.dispatch_command_handler(0x8763, cmd::CUT_CONTACT);
+        game.troops[0].occupation = 0x01;
+        game.troops[0].gps_coordinates_2 = (plat + 50) as u16;
+        game.map_selected_troop_id = 1;
+        game.map_select_troop();
+        while rx.try_recv().is_ok() {}
+        assert_eq!(
+            game.get_active_screen_element(),
+            ScreenElement::MapTroopContactCycle,
+            "a troop out of visibility range can only be cycled past"
+        );
+    }
+
     // The full-planet renderer's interpolation seed reads the map cell BEFORE
     // the row's rotation offset (segvga:20a5 `add si,ax; mov al,[si-1]`), so a
     // longitude that lands the offset on cell 0 reads the byte preceding the
@@ -1876,5 +3215,74 @@ mod tests {
                 "map pixel at ({x},{y}) = {p:#04x} outside the map bank"
             );
         }
+    }
+
+    // GIVE ORDERS TO TROOP from the dialogue panel (seg000:5a03): the Fremen
+    // leader being talked to is contacted on the full-planet map instead, and
+    // the visit is marked as the room's detour so the order menu offers NO MORE
+    // ORDERS (which returns to the room) rather than CUT CONTACT. Asset-gated:
+    //   cargo test -p dune --bin dune -- --ignored give_orders_to_troop
+    #[test]
+    #[ignore = "needs assets/DUNE.DAT"]
+    fn give_orders_to_troop_opens_the_map_on_that_troop() {
+        let dat_path = concat!(env!("CARGO_MANIFEST_DIR"), "/../../assets/DUNE.DAT");
+        let Ok(dat_file) = DatFile::open(dat_path) else {
+            eprintln!("skipping: {dat_path} not found");
+            return;
+        };
+        let (tx, rx) = mpsc::sync_channel(64);
+        let mut game = GameState::new(dat_file, tx);
+        game.set_headless();
+        game.start(true);
+        while rx.try_recv().is_ok() {}
+
+        // Stand in a conversation with the room's Fremen-2 person, whose slot
+        // the room-entry classification filled with a rallied troop.
+        let ti = 0;
+        game.troops[ti].occupation = 0x01;
+        game.fremen2_troops[0] = Some(ti);
+        game.selected_fremen2 = 0;
+        game.number_of_rallied_troops = 1;
+        game.location_visibility_distance = 4;
+        // Within contact range, so the verb opens the full order menu rather
+        // than the out-of-range cycle menu.
+        let (px, plat) = game.get_map_position();
+        game.troops[ti].gps_coordinates_1 = px;
+        game.troops[ti].gps_coordinates_2 = plat as u16;
+        let troop_id = game.troops[ti].troop_id;
+
+        game.dispatch_command_handler(0x5a03, cmd::GIVE_ORDERS_TO_TROOP);
+        while rx.try_recv().is_ok() {}
+
+        // The map view owns the screen, with that troop selected and contacted.
+        assert_eq!(game.data_046eb, 0x80, "the full-map view is up");
+        assert_eq!(
+            game.map_selected_troop_id, troop_id,
+            "the troop being talked to is the map's selection"
+        );
+        assert_eq!(game.map_contact_troop, Some(ti), "its contact strip is up");
+        assert!(
+            game.troop_icon_focused[0].is_some(),
+            "the highlight ring is over it"
+        );
+        // = seg000:5a06 the re-entry count: the order menu's last slot is NO
+        //   MORE ORDERS, and choosing it goes back to the room.
+        assert_eq!(game.map_view_reentry_count, 1);
+        assert_eq!(
+            game.menu_map_troop_dialog.records[4].text_id,
+            cmd::NO_MORE_ORDERS,
+            "NO MORE ORDERS, not CUT CONTACT"
+        );
+        assert_eq!(
+            game.get_active_screen_element(),
+            ScreenElement::MapTroopDialog,
+            "the order menu is up"
+        );
+
+        // NO MORE ORDERS returns to the room it was given from.
+        game.dispatch_command_handler(0x8763, cmd::NO_MORE_ORDERS);
+        while rx.try_recv().is_ok() {}
+        assert_eq!(game.data_046eb, 0, "back in the room view");
+        assert_eq!(game.map_view_reentry_count, 0, "the detour is over");
     }
 }

@@ -152,12 +152,13 @@ const SUN_MOON_COORDS: [[(u16, u16); 2]; 16] = [
     [(  0,   0), ( 23, 183)],
 ];
 
-/// = seg001:1c76 the room-view navigation panel template — the 6 records (HUD
-/// records 12..18) of the bottom-right compass: a backing box (sprite 33) and
-/// the N/E/S/W move-direction buttons (sprites 29..32, handlers ui_click_room_*)
-/// plus the centre (sprite 36). `ui_setup_and_draw_nav_panel` copies it into place.
+/// = seg001:1c76 ui_nav_panel_room — the room-view navigation panel template:
+/// the 6 records (HUD records 12..18) of the bottom-right compass, a backing box
+/// (sprite 33) and the N/E/S/W move-direction buttons (sprites 29..32, handlers
+/// ui_click_room_*) plus the centre (sprite 36).
+/// `ui_setup_and_draw_nav_panel` copies it into place.
 #[rustfmt::skip]
-const NAV_PANEL_ROOM: [UiElement; NAV_PANEL_RECORD_COUNT] = [
+pub(crate) const NAV_PANEL_ROOM: [UiElement; NAV_PANEL_RECORD_COUNT] = [
     ui2(255, 162, 295, 192, 0x0000, 33, 0x0f66, None),                                 // 12 box
     ui2(269, 162, 279, 172, 0x0080, 29, 0x3f15, Some(GameState::ui_click_move_up)),    // 13 up
     ui2(284, 172, 294, 182, 0x0080, 30, 0x3f1a, Some(GameState::ui_click_move_right)), // 14 right
@@ -166,8 +167,8 @@ const NAV_PANEL_ROOM: [UiElement; NAV_PANEL_RECORD_COUNT] = [
     ui2(269, 173, 280, 181, 0x0080, 36, 0x18ee, Some(GameState::ui_draw_palace_plan)), // 17 centre
 ];
 
-/// = seg001:1cca the alternate (ornithopter/travel) navigation panel template,
-/// used when `data_046eb` is set: the map-scroll compass. The four arrows
+/// = seg001:1cca ui_nav_panel_map_scroll — the alternate (map/globe view)
+/// navigation panel template, used when `data_046eb` is set. The four arrows
 /// carry flag 0x4000, so a held press auto-repeats the scroll; live records
 /// 13..17 are also the pseudo records the travel-arrow cursor shapes resolve
 /// to in hit_test_ui_elements.
@@ -181,10 +182,14 @@ pub(crate) const NAV_PANEL_ALT: [UiElement; NAV_PANEL_RECORD_COUNT] = [
     ui2(266, 171, 284, 183, 0x0000, 53, 0x0f66, None),
 ];
 
-/// = seg001:1d72 the map/book-mode navigation panel template, used when
-/// `game_screen_mode_flags & 3` is set.
+/// = seg001:1d72 ui_nav_panel_flight — the in-flight navigation panel template,
+/// used when `game_screen_mode_flags & 3` is set and the flight is steerable:
+/// turn left (sprite 42, callback_ui_element_04ad0), the flight/resume button
+/// (sprite 43, menu_callback_choice_resume_flight) and turn right (sprite 44,
+/// callback_ui_element_04ad7). The two turn arrows carry flag 0x4000, so a held
+/// press auto-repeats the heading change.
 #[rustfmt::skip]
-const NAV_PANEL_MAP: [UiElement; NAV_PANEL_RECORD_COUNT] = [
+pub(crate) const NAV_PANEL_FLIGHT: [UiElement; NAV_PANEL_RECORD_COUNT] = [
     ui2(262, 168, 263, 169, 0x0200, -1, 0x0f66, None),
     ui1(258, 172, 266, 182, 0x4080, 42, 0x4ad0),
     ui1(270, 170, 279, 182, 0x0080, 43, 0x4f09),
@@ -193,14 +198,15 @@ const NAV_PANEL_MAP: [UiElement; NAV_PANEL_RECORD_COUNT] = [
     ui2(  0,   0,   0,   0, 0x0000, -1, 0x0f66, None),
 ];
 
-/// = seg001:1d1e the LOOK AT MIRROR navigation-panel template. Unlike the
-/// move/travel/map panels it carries no compass sprites and no clickable
-/// records (every sprite_id = -1, every handler = loc_00f66), so installing it
-/// blanks the bottom-right compass for the mirror still. The full game-area
-/// hotspot (record 20) that `callback_transition_look_at_mirror` arms handles
-/// the look-away click instead.
+/// = seg001:1d1e ui_nav_panel_blank — the blank navigation-panel template.
+/// Unlike the room/map-scroll/flight panels it carries no compass sprites and no
+/// clickable records (every sprite_id = -1, every handler = loc_00f66), so
+/// installing it clears the bottom-right compass. Three sites install it: the
+/// LOOK AT MIRROR still (where the full game-area hotspot, record 20, handles the
+/// look-away click instead), a staged night attack, and a travel that cannot be
+/// steered (`rebuild_and_draw_room_nav_panel`).
 #[rustfmt::skip]
-pub(crate) const NAV_PANEL_MIRROR: [UiElement; NAV_PANEL_RECORD_COUNT] = [
+pub(crate) const NAV_PANEL_BLANK: [UiElement; NAV_PANEL_RECORD_COUNT] = [
     ui2(262, 168, 263, 169, 0x0200, -1, 0x0f66, None),
     ui2(258, 172, 266, 182, 0x0000, -1, 0x0f66, None),
     ui2(270, 170, 279, 182, 0x0000, -1, 0x0f66, None),
@@ -451,7 +457,7 @@ impl GameState {
         let template = if self.data_046eb != 0 {
             &NAV_PANEL_ALT
         } else if self.game_screen_mode_flags & 3 != 0 {
-            &NAV_PANEL_MAP
+            &NAV_PANEL_FLIGHT
         } else {
             &NAV_PANEL_ROOM
         };
@@ -570,8 +576,10 @@ impl GameState {
         // The map popup gates cleared with the view (data_046f8/046fa).
         self.map_location_popup_loc = None;
         self.map_info_popup_troop = None;
-        // = seg000:5af6 data_01954 = 0 — the troop-contact selection.
+        // = seg000:5af6 data_01954 = 0 — a word write, so the troop-contact
+        //   selection and the last contacted id (data_01955) clear together.
         self.map_selected_troop_id = 0;
+        self.map_last_selected_troop_id = 0;
         // = seg000:5af9 troop_icon_draw_order_func =
         //   troop_icons_pick_next_fifo.
         self.troop_icon_draw_by_depth = false;

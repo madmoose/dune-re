@@ -12,8 +12,17 @@ pub struct Troop {
     pub gps_coordinates_1: u16,
     pub gps_coordinates_2: u16,
     pub time_period_of_ralliement: u16,
-    pub field_c: u16,
-    pub field_e: u16,
+    // = troop +0x0c/+0x0e troop_occupation_dependent_C/E — the two
+    // accumulators the current occupation writes, cleared whenever it changes
+    // (troop_set_occupation). For spice mining, the ported case, they are this
+    // period's harvest rate and the running total behind the info panel's
+    // "Current:" / "Average: N kgs/h". Other occupations reuse the same two
+    // words for their own tallies — an attacking troop keeps its losses and
+    // kills here (the "Fremen lost / Harkonnen killed" lines read ds:44/46),
+    // and an ecology troop its covered area — so read the names as "what the
+    // occupation is accumulating", not as spice specifically.
+    pub harvest_rate: u16,
+    pub harvest_total: u16,
     pub bitfield_10: u16,
     pub dissatisfaction_and_speech: u16,
     pub game_day_of_ralliement: u8,
@@ -38,8 +47,8 @@ pub(crate) const TROOPS: [Troop; 68] = [
         gps_coordinates_1: 0,
         gps_coordinates_2: 0,
         time_period_of_ralliement: 0,
-        field_c: 0,
-        field_e: 0,
+        harvest_rate: 0,
+        harvest_total: 0,
         bitfield_10: 0b0000000000000000,
         dissatisfaction_and_speech: 0x40,
         game_day_of_ralliement: 0,
@@ -60,8 +69,8 @@ pub(crate) const TROOPS: [Troop; 68] = [
         gps_coordinates_1: 0,
         gps_coordinates_2: 0,
         time_period_of_ralliement: 0,
-        field_c: 0,
-        field_e: 0,
+        harvest_rate: 0,
+        harvest_total: 0,
         bitfield_10: 0b0000000000000000,
         dissatisfaction_and_speech: 0,
         game_day_of_ralliement: 0,
@@ -82,8 +91,8 @@ pub(crate) const TROOPS: [Troop; 68] = [
         gps_coordinates_1: 0,
         gps_coordinates_2: 0,
         time_period_of_ralliement: 0,
-        field_c: 0,
-        field_e: 0,
+        harvest_rate: 0,
+        harvest_total: 0,
         bitfield_10: 0b0000000000000000,
         dissatisfaction_and_speech: 0,
         game_day_of_ralliement: 0,
@@ -104,8 +113,8 @@ pub(crate) const TROOPS: [Troop; 68] = [
         gps_coordinates_1: 0,
         gps_coordinates_2: 0,
         time_period_of_ralliement: 0,
-        field_c: 0,
-        field_e: 0,
+        harvest_rate: 0,
+        harvest_total: 0,
         bitfield_10: 0b0000000000000000,
         dissatisfaction_and_speech: 0,
         game_day_of_ralliement: 0,
@@ -126,8 +135,8 @@ pub(crate) const TROOPS: [Troop; 68] = [
         gps_coordinates_1: 0,
         gps_coordinates_2: 0,
         time_period_of_ralliement: 0,
-        field_c: 0,
-        field_e: 0,
+        harvest_rate: 0,
+        harvest_total: 0,
         bitfield_10: 0b0000000000000000,
         dissatisfaction_and_speech: 0,
         game_day_of_ralliement: 0,
@@ -148,8 +157,8 @@ pub(crate) const TROOPS: [Troop; 68] = [
         gps_coordinates_1: 0,
         gps_coordinates_2: 0,
         time_period_of_ralliement: 0,
-        field_c: 0,
-        field_e: 0,
+        harvest_rate: 0,
+        harvest_total: 0,
         bitfield_10: 0b0000000000000000,
         dissatisfaction_and_speech: 0,
         game_day_of_ralliement: 0,
@@ -170,8 +179,8 @@ pub(crate) const TROOPS: [Troop; 68] = [
         gps_coordinates_1: 0,
         gps_coordinates_2: 0,
         time_period_of_ralliement: 0,
-        field_c: 0,
-        field_e: 0,
+        harvest_rate: 0,
+        harvest_total: 0,
         bitfield_10: 0b0000000000000000,
         dissatisfaction_and_speech: 0,
         game_day_of_ralliement: 0,
@@ -192,8 +201,8 @@ pub(crate) const TROOPS: [Troop; 68] = [
         gps_coordinates_1: 0,
         gps_coordinates_2: 0,
         time_period_of_ralliement: 0,
-        field_c: 0,
-        field_e: 0,
+        harvest_rate: 0,
+        harvest_total: 0,
         bitfield_10: 0b0000000000000000,
         dissatisfaction_and_speech: 0,
         game_day_of_ralliement: 0,
@@ -214,8 +223,8 @@ pub(crate) const TROOPS: [Troop; 68] = [
         gps_coordinates_1: 0,
         gps_coordinates_2: 0,
         time_period_of_ralliement: 0,
-        field_c: 0,
-        field_e: 0,
+        harvest_rate: 0,
+        harvest_total: 0,
         bitfield_10: 0b0000000000000000,
         dissatisfaction_and_speech: 0,
         game_day_of_ralliement: 0,
@@ -236,8 +245,8 @@ pub(crate) const TROOPS: [Troop; 68] = [
         gps_coordinates_1: 0,
         gps_coordinates_2: 0,
         time_period_of_ralliement: 0,
-        field_c: 0,
-        field_e: 0,
+        harvest_rate: 0,
+        harvest_total: 0,
         bitfield_10: 0b0000000000000000,
         dissatisfaction_and_speech: 0,
         game_day_of_ralliement: 0,
@@ -258,8 +267,8 @@ pub(crate) const TROOPS: [Troop; 68] = [
         gps_coordinates_1: 0,
         gps_coordinates_2: 0,
         time_period_of_ralliement: 0,
-        field_c: 0,
-        field_e: 0,
+        harvest_rate: 0,
+        harvest_total: 0,
         bitfield_10: 0b0000000000000000,
         dissatisfaction_and_speech: 0,
         game_day_of_ralliement: 0,
@@ -280,8 +289,8 @@ pub(crate) const TROOPS: [Troop; 68] = [
         gps_coordinates_1: 0,
         gps_coordinates_2: 0,
         time_period_of_ralliement: 0,
-        field_c: 0,
-        field_e: 0,
+        harvest_rate: 0,
+        harvest_total: 0,
         bitfield_10: 0b0000000000000000,
         dissatisfaction_and_speech: 0,
         game_day_of_ralliement: 0,
@@ -302,8 +311,8 @@ pub(crate) const TROOPS: [Troop; 68] = [
         gps_coordinates_1: 0,
         gps_coordinates_2: 0,
         time_period_of_ralliement: 0,
-        field_c: 0,
-        field_e: 0,
+        harvest_rate: 0,
+        harvest_total: 0,
         bitfield_10: 0b0000000000000000,
         dissatisfaction_and_speech: 0x40,
         game_day_of_ralliement: 0,
@@ -324,8 +333,8 @@ pub(crate) const TROOPS: [Troop; 68] = [
         gps_coordinates_1: 0,
         gps_coordinates_2: 0,
         time_period_of_ralliement: 0,
-        field_c: 0,
-        field_e: 0,
+        harvest_rate: 0,
+        harvest_total: 0,
         bitfield_10: 0b0000000000000000,
         dissatisfaction_and_speech: 0x40,
         game_day_of_ralliement: 0,
@@ -346,8 +355,8 @@ pub(crate) const TROOPS: [Troop; 68] = [
         gps_coordinates_1: 0,
         gps_coordinates_2: 0,
         time_period_of_ralliement: 0,
-        field_c: 0,
-        field_e: 0,
+        harvest_rate: 0,
+        harvest_total: 0,
         bitfield_10: 0b0000000000000000,
         dissatisfaction_and_speech: 0x40,
         game_day_of_ralliement: 0,
@@ -368,8 +377,8 @@ pub(crate) const TROOPS: [Troop; 68] = [
         gps_coordinates_1: 0,
         gps_coordinates_2: 0,
         time_period_of_ralliement: 0,
-        field_c: 0,
-        field_e: 0,
+        harvest_rate: 0,
+        harvest_total: 0,
         bitfield_10: 0b0000000000000000,
         dissatisfaction_and_speech: 0,
         game_day_of_ralliement: 0,
@@ -390,8 +399,8 @@ pub(crate) const TROOPS: [Troop; 68] = [
         gps_coordinates_1: 0,
         gps_coordinates_2: 0,
         time_period_of_ralliement: 0,
-        field_c: 0,
-        field_e: 0,
+        harvest_rate: 0,
+        harvest_total: 0,
         bitfield_10: 0b0000000000000000,
         dissatisfaction_and_speech: 0,
         game_day_of_ralliement: 0,
@@ -412,8 +421,8 @@ pub(crate) const TROOPS: [Troop; 68] = [
         gps_coordinates_1: 0,
         gps_coordinates_2: 0,
         time_period_of_ralliement: 0,
-        field_c: 0,
-        field_e: 0,
+        harvest_rate: 0,
+        harvest_total: 0,
         bitfield_10: 0b0000000000000000,
         dissatisfaction_and_speech: 0,
         game_day_of_ralliement: 0,
@@ -434,8 +443,8 @@ pub(crate) const TROOPS: [Troop; 68] = [
         gps_coordinates_1: 0,
         gps_coordinates_2: 0,
         time_period_of_ralliement: 0,
-        field_c: 0,
-        field_e: 0,
+        harvest_rate: 0,
+        harvest_total: 0,
         bitfield_10: 0b0000000000000000,
         dissatisfaction_and_speech: 0x40,
         game_day_of_ralliement: 0,
@@ -456,8 +465,8 @@ pub(crate) const TROOPS: [Troop; 68] = [
         gps_coordinates_1: 0,
         gps_coordinates_2: 0,
         time_period_of_ralliement: 0,
-        field_c: 0,
-        field_e: 0,
+        harvest_rate: 0,
+        harvest_total: 0,
         bitfield_10: 0b0000000000000000,
         dissatisfaction_and_speech: 0x40,
         game_day_of_ralliement: 0,
@@ -478,8 +487,8 @@ pub(crate) const TROOPS: [Troop; 68] = [
         gps_coordinates_1: 0,
         gps_coordinates_2: 0,
         time_period_of_ralliement: 0,
-        field_c: 0,
-        field_e: 0,
+        harvest_rate: 0,
+        harvest_total: 0,
         bitfield_10: 0b0000000000000000,
         dissatisfaction_and_speech: 0,
         game_day_of_ralliement: 0,
@@ -500,8 +509,8 @@ pub(crate) const TROOPS: [Troop; 68] = [
         gps_coordinates_1: 0,
         gps_coordinates_2: 0,
         time_period_of_ralliement: 0,
-        field_c: 0,
-        field_e: 0,
+        harvest_rate: 0,
+        harvest_total: 0,
         bitfield_10: 0b0000000000000000,
         dissatisfaction_and_speech: 0,
         game_day_of_ralliement: 0,
@@ -522,8 +531,8 @@ pub(crate) const TROOPS: [Troop; 68] = [
         gps_coordinates_1: 0,
         gps_coordinates_2: 0,
         time_period_of_ralliement: 0,
-        field_c: 0,
-        field_e: 0,
+        harvest_rate: 0,
+        harvest_total: 0,
         bitfield_10: 0b0000000000000000,
         dissatisfaction_and_speech: 0,
         game_day_of_ralliement: 0,
@@ -544,8 +553,8 @@ pub(crate) const TROOPS: [Troop; 68] = [
         gps_coordinates_1: 0,
         gps_coordinates_2: 0,
         time_period_of_ralliement: 0,
-        field_c: 0,
-        field_e: 0,
+        harvest_rate: 0,
+        harvest_total: 0,
         bitfield_10: 0b0000000000000000,
         dissatisfaction_and_speech: 0,
         game_day_of_ralliement: 0,
@@ -566,8 +575,8 @@ pub(crate) const TROOPS: [Troop; 68] = [
         gps_coordinates_1: 0,
         gps_coordinates_2: 0,
         time_period_of_ralliement: 0,
-        field_c: 0,
-        field_e: 0,
+        harvest_rate: 0,
+        harvest_total: 0,
         bitfield_10: 0b0000000000000000,
         dissatisfaction_and_speech: 0,
         game_day_of_ralliement: 0,
@@ -588,8 +597,8 @@ pub(crate) const TROOPS: [Troop; 68] = [
         gps_coordinates_1: 0,
         gps_coordinates_2: 0,
         time_period_of_ralliement: 0,
-        field_c: 0,
-        field_e: 0,
+        harvest_rate: 0,
+        harvest_total: 0,
         bitfield_10: 0b0000000000000000,
         dissatisfaction_and_speech: 0,
         game_day_of_ralliement: 0,
@@ -610,8 +619,8 @@ pub(crate) const TROOPS: [Troop; 68] = [
         gps_coordinates_1: 0,
         gps_coordinates_2: 0,
         time_period_of_ralliement: 0,
-        field_c: 0,
-        field_e: 0,
+        harvest_rate: 0,
+        harvest_total: 0,
         bitfield_10: 0b0000000010010000,
         dissatisfaction_and_speech: 0,
         game_day_of_ralliement: 0,
@@ -632,8 +641,8 @@ pub(crate) const TROOPS: [Troop; 68] = [
         gps_coordinates_1: 0,
         gps_coordinates_2: 0,
         time_period_of_ralliement: 0,
-        field_c: 0,
-        field_e: 0,
+        harvest_rate: 0,
+        harvest_total: 0,
         bitfield_10: 0b0000000010010000,
         dissatisfaction_and_speech: 0,
         game_day_of_ralliement: 0,
@@ -654,8 +663,8 @@ pub(crate) const TROOPS: [Troop; 68] = [
         gps_coordinates_1: 0,
         gps_coordinates_2: 0,
         time_period_of_ralliement: 0,
-        field_c: 0,
-        field_e: 0,
+        harvest_rate: 0,
+        harvest_total: 0,
         bitfield_10: 0b0000000010010000,
         dissatisfaction_and_speech: 0,
         game_day_of_ralliement: 0,
@@ -676,8 +685,8 @@ pub(crate) const TROOPS: [Troop; 68] = [
         gps_coordinates_1: 0,
         gps_coordinates_2: 0,
         time_period_of_ralliement: 0,
-        field_c: 0,
-        field_e: 0,
+        harvest_rate: 0,
+        harvest_total: 0,
         bitfield_10: 0b0000000010010000,
         dissatisfaction_and_speech: 0,
         game_day_of_ralliement: 0,
@@ -698,8 +707,8 @@ pub(crate) const TROOPS: [Troop; 68] = [
         gps_coordinates_1: 0,
         gps_coordinates_2: 0,
         time_period_of_ralliement: 0,
-        field_c: 0,
-        field_e: 0,
+        harvest_rate: 0,
+        harvest_total: 0,
         bitfield_10: 0b0000000010010000,
         dissatisfaction_and_speech: 0,
         game_day_of_ralliement: 0,
@@ -720,8 +729,8 @@ pub(crate) const TROOPS: [Troop; 68] = [
         gps_coordinates_1: 0,
         gps_coordinates_2: 0,
         time_period_of_ralliement: 0,
-        field_c: 0,
-        field_e: 0,
+        harvest_rate: 0,
+        harvest_total: 0,
         bitfield_10: 0b0000000010010000,
         dissatisfaction_and_speech: 0,
         game_day_of_ralliement: 0,
@@ -742,8 +751,8 @@ pub(crate) const TROOPS: [Troop; 68] = [
         gps_coordinates_1: 0,
         gps_coordinates_2: 0,
         time_period_of_ralliement: 0,
-        field_c: 0,
-        field_e: 0,
+        harvest_rate: 0,
+        harvest_total: 0,
         bitfield_10: 0b0000000010010000,
         dissatisfaction_and_speech: 0,
         game_day_of_ralliement: 0,
@@ -764,8 +773,8 @@ pub(crate) const TROOPS: [Troop; 68] = [
         gps_coordinates_1: 0,
         gps_coordinates_2: 0,
         time_period_of_ralliement: 0,
-        field_c: 0,
-        field_e: 0,
+        harvest_rate: 0,
+        harvest_total: 0,
         bitfield_10: 0b0000000010010000,
         dissatisfaction_and_speech: 0,
         game_day_of_ralliement: 0,
@@ -786,8 +795,8 @@ pub(crate) const TROOPS: [Troop; 68] = [
         gps_coordinates_1: 0,
         gps_coordinates_2: 0,
         time_period_of_ralliement: 0,
-        field_c: 0,
-        field_e: 0,
+        harvest_rate: 0,
+        harvest_total: 0,
         bitfield_10: 0b0000000010010000,
         dissatisfaction_and_speech: 0,
         game_day_of_ralliement: 0,
@@ -808,8 +817,8 @@ pub(crate) const TROOPS: [Troop; 68] = [
         gps_coordinates_1: 0,
         gps_coordinates_2: 0,
         time_period_of_ralliement: 0,
-        field_c: 0,
-        field_e: 0,
+        harvest_rate: 0,
+        harvest_total: 0,
         bitfield_10: 0b0000000010010000,
         dissatisfaction_and_speech: 0,
         game_day_of_ralliement: 0,
@@ -830,8 +839,8 @@ pub(crate) const TROOPS: [Troop; 68] = [
         gps_coordinates_1: 0,
         gps_coordinates_2: 0,
         time_period_of_ralliement: 0,
-        field_c: 0,
-        field_e: 0,
+        harvest_rate: 0,
+        harvest_total: 0,
         bitfield_10: 0b0000000010010000,
         dissatisfaction_and_speech: 0,
         game_day_of_ralliement: 0,
@@ -852,8 +861,8 @@ pub(crate) const TROOPS: [Troop; 68] = [
         gps_coordinates_1: 0,
         gps_coordinates_2: 0,
         time_period_of_ralliement: 0,
-        field_c: 0,
-        field_e: 0,
+        harvest_rate: 0,
+        harvest_total: 0,
         bitfield_10: 0b0000000010010000,
         dissatisfaction_and_speech: 0,
         game_day_of_ralliement: 0,
@@ -874,8 +883,8 @@ pub(crate) const TROOPS: [Troop; 68] = [
         gps_coordinates_1: 0,
         gps_coordinates_2: 0,
         time_period_of_ralliement: 0,
-        field_c: 0,
-        field_e: 0,
+        harvest_rate: 0,
+        harvest_total: 0,
         bitfield_10: 0b0000000010010000,
         dissatisfaction_and_speech: 0,
         game_day_of_ralliement: 0,
@@ -896,8 +905,8 @@ pub(crate) const TROOPS: [Troop; 68] = [
         gps_coordinates_1: 0,
         gps_coordinates_2: 0,
         time_period_of_ralliement: 0,
-        field_c: 0,
-        field_e: 0,
+        harvest_rate: 0,
+        harvest_total: 0,
         bitfield_10: 0b0000000010010000,
         dissatisfaction_and_speech: 0,
         game_day_of_ralliement: 0,
@@ -918,8 +927,8 @@ pub(crate) const TROOPS: [Troop; 68] = [
         gps_coordinates_1: 0,
         gps_coordinates_2: 0,
         time_period_of_ralliement: 0,
-        field_c: 0,
-        field_e: 0,
+        harvest_rate: 0,
+        harvest_total: 0,
         bitfield_10: 0b0000000010010000,
         dissatisfaction_and_speech: 0,
         game_day_of_ralliement: 0,
@@ -940,8 +949,8 @@ pub(crate) const TROOPS: [Troop; 68] = [
         gps_coordinates_1: 0,
         gps_coordinates_2: 0,
         time_period_of_ralliement: 0,
-        field_c: 0,
-        field_e: 0,
+        harvest_rate: 0,
+        harvest_total: 0,
         bitfield_10: 0b0000000010010000,
         dissatisfaction_and_speech: 0,
         game_day_of_ralliement: 0,
@@ -962,8 +971,8 @@ pub(crate) const TROOPS: [Troop; 68] = [
         gps_coordinates_1: 0,
         gps_coordinates_2: 0,
         time_period_of_ralliement: 0,
-        field_c: 0,
-        field_e: 0,
+        harvest_rate: 0,
+        harvest_total: 0,
         bitfield_10: 0b0000000010010000,
         dissatisfaction_and_speech: 0,
         game_day_of_ralliement: 0,
@@ -984,8 +993,8 @@ pub(crate) const TROOPS: [Troop; 68] = [
         gps_coordinates_1: 0,
         gps_coordinates_2: 0,
         time_period_of_ralliement: 0,
-        field_c: 0,
-        field_e: 0,
+        harvest_rate: 0,
+        harvest_total: 0,
         bitfield_10: 0b0000000010010000,
         dissatisfaction_and_speech: 0,
         game_day_of_ralliement: 0,
@@ -1006,8 +1015,8 @@ pub(crate) const TROOPS: [Troop; 68] = [
         gps_coordinates_1: 0,
         gps_coordinates_2: 0,
         time_period_of_ralliement: 0,
-        field_c: 0,
-        field_e: 0,
+        harvest_rate: 0,
+        harvest_total: 0,
         bitfield_10: 0b0000000010010000,
         dissatisfaction_and_speech: 0,
         game_day_of_ralliement: 0,
@@ -1028,8 +1037,8 @@ pub(crate) const TROOPS: [Troop; 68] = [
         gps_coordinates_1: 0,
         gps_coordinates_2: 0,
         time_period_of_ralliement: 0,
-        field_c: 0,
-        field_e: 0,
+        harvest_rate: 0,
+        harvest_total: 0,
         bitfield_10: 0b0000000010010000,
         dissatisfaction_and_speech: 0,
         game_day_of_ralliement: 0,
@@ -1050,8 +1059,8 @@ pub(crate) const TROOPS: [Troop; 68] = [
         gps_coordinates_1: 0,
         gps_coordinates_2: 0,
         time_period_of_ralliement: 0,
-        field_c: 0,
-        field_e: 0,
+        harvest_rate: 0,
+        harvest_total: 0,
         bitfield_10: 0b0000000010010000,
         dissatisfaction_and_speech: 0,
         game_day_of_ralliement: 0,
@@ -1072,8 +1081,8 @@ pub(crate) const TROOPS: [Troop; 68] = [
         gps_coordinates_1: 0,
         gps_coordinates_2: 0,
         time_period_of_ralliement: 0,
-        field_c: 0,
-        field_e: 0,
+        harvest_rate: 0,
+        harvest_total: 0,
         bitfield_10: 0b0000000010010000,
         dissatisfaction_and_speech: 0,
         game_day_of_ralliement: 0,
@@ -1094,8 +1103,8 @@ pub(crate) const TROOPS: [Troop; 68] = [
         gps_coordinates_1: 0,
         gps_coordinates_2: 0,
         time_period_of_ralliement: 0,
-        field_c: 0,
-        field_e: 0,
+        harvest_rate: 0,
+        harvest_total: 0,
         bitfield_10: 0b0000000010010000,
         dissatisfaction_and_speech: 0,
         game_day_of_ralliement: 0,
@@ -1116,8 +1125,8 @@ pub(crate) const TROOPS: [Troop; 68] = [
         gps_coordinates_1: 0,
         gps_coordinates_2: 0,
         time_period_of_ralliement: 0,
-        field_c: 0,
-        field_e: 0,
+        harvest_rate: 0,
+        harvest_total: 0,
         bitfield_10: 0b0000000010010000,
         dissatisfaction_and_speech: 0,
         game_day_of_ralliement: 0,
@@ -1138,8 +1147,8 @@ pub(crate) const TROOPS: [Troop; 68] = [
         gps_coordinates_1: 0,
         gps_coordinates_2: 0,
         time_period_of_ralliement: 0,
-        field_c: 0,
-        field_e: 0,
+        harvest_rate: 0,
+        harvest_total: 0,
         bitfield_10: 0b0000000010010000,
         dissatisfaction_and_speech: 0,
         game_day_of_ralliement: 0,
@@ -1160,8 +1169,8 @@ pub(crate) const TROOPS: [Troop; 68] = [
         gps_coordinates_1: 0,
         gps_coordinates_2: 0,
         time_period_of_ralliement: 0,
-        field_c: 0,
-        field_e: 0,
+        harvest_rate: 0,
+        harvest_total: 0,
         bitfield_10: 0b0000000010010000,
         dissatisfaction_and_speech: 0,
         game_day_of_ralliement: 0,
@@ -1182,8 +1191,8 @@ pub(crate) const TROOPS: [Troop; 68] = [
         gps_coordinates_1: 0,
         gps_coordinates_2: 0,
         time_period_of_ralliement: 0,
-        field_c: 0,
-        field_e: 0,
+        harvest_rate: 0,
+        harvest_total: 0,
         bitfield_10: 0b0000000010010000,
         dissatisfaction_and_speech: 0,
         game_day_of_ralliement: 0,
@@ -1204,8 +1213,8 @@ pub(crate) const TROOPS: [Troop; 68] = [
         gps_coordinates_1: 0,
         gps_coordinates_2: 0,
         time_period_of_ralliement: 0,
-        field_c: 0,
-        field_e: 0,
+        harvest_rate: 0,
+        harvest_total: 0,
         bitfield_10: 0b0000000010010000,
         dissatisfaction_and_speech: 0,
         game_day_of_ralliement: 0,
@@ -1226,8 +1235,8 @@ pub(crate) const TROOPS: [Troop; 68] = [
         gps_coordinates_1: 0,
         gps_coordinates_2: 0,
         time_period_of_ralliement: 0,
-        field_c: 0,
-        field_e: 0,
+        harvest_rate: 0,
+        harvest_total: 0,
         bitfield_10: 0b0000000010010000,
         dissatisfaction_and_speech: 0,
         game_day_of_ralliement: 0,
@@ -1248,8 +1257,8 @@ pub(crate) const TROOPS: [Troop; 68] = [
         gps_coordinates_1: 0,
         gps_coordinates_2: 0,
         time_period_of_ralliement: 0,
-        field_c: 0,
-        field_e: 0,
+        harvest_rate: 0,
+        harvest_total: 0,
         bitfield_10: 0b0000000010010000,
         dissatisfaction_and_speech: 0,
         game_day_of_ralliement: 0,
@@ -1270,8 +1279,8 @@ pub(crate) const TROOPS: [Troop; 68] = [
         gps_coordinates_1: 0,
         gps_coordinates_2: 0,
         time_period_of_ralliement: 0,
-        field_c: 0,
-        field_e: 0,
+        harvest_rate: 0,
+        harvest_total: 0,
         bitfield_10: 0b0000000010010000,
         dissatisfaction_and_speech: 0,
         game_day_of_ralliement: 0,
@@ -1292,8 +1301,8 @@ pub(crate) const TROOPS: [Troop; 68] = [
         gps_coordinates_1: 0,
         gps_coordinates_2: 0,
         time_period_of_ralliement: 0,
-        field_c: 0,
-        field_e: 0,
+        harvest_rate: 0,
+        harvest_total: 0,
         bitfield_10: 0b0000000010010000,
         dissatisfaction_and_speech: 0,
         game_day_of_ralliement: 0,
@@ -1314,8 +1323,8 @@ pub(crate) const TROOPS: [Troop; 68] = [
         gps_coordinates_1: 0,
         gps_coordinates_2: 0,
         time_period_of_ralliement: 0,
-        field_c: 0,
-        field_e: 0,
+        harvest_rate: 0,
+        harvest_total: 0,
         bitfield_10: 0b0000000010010000,
         dissatisfaction_and_speech: 0,
         game_day_of_ralliement: 0,
@@ -1336,8 +1345,8 @@ pub(crate) const TROOPS: [Troop; 68] = [
         gps_coordinates_1: 0,
         gps_coordinates_2: 0,
         time_period_of_ralliement: 0,
-        field_c: 0,
-        field_e: 0,
+        harvest_rate: 0,
+        harvest_total: 0,
         bitfield_10: 0b0000000010010000,
         dissatisfaction_and_speech: 0,
         game_day_of_ralliement: 0,
@@ -1358,8 +1367,8 @@ pub(crate) const TROOPS: [Troop; 68] = [
         gps_coordinates_1: 0,
         gps_coordinates_2: 0,
         time_period_of_ralliement: 0,
-        field_c: 0,
-        field_e: 0,
+        harvest_rate: 0,
+        harvest_total: 0,
         bitfield_10: 0b0000000010010000,
         dissatisfaction_and_speech: 0,
         game_day_of_ralliement: 0,
@@ -1380,8 +1389,8 @@ pub(crate) const TROOPS: [Troop; 68] = [
         gps_coordinates_1: 0,
         gps_coordinates_2: 0,
         time_period_of_ralliement: 0,
-        field_c: 0,
-        field_e: 0,
+        harvest_rate: 0,
+        harvest_total: 0,
         bitfield_10: 0b0000000010010000,
         dissatisfaction_and_speech: 0,
         game_day_of_ralliement: 0,
@@ -1402,8 +1411,8 @@ pub(crate) const TROOPS: [Troop; 68] = [
         gps_coordinates_1: 0,
         gps_coordinates_2: 0,
         time_period_of_ralliement: 0,
-        field_c: 0,
-        field_e: 0,
+        harvest_rate: 0,
+        harvest_total: 0,
         bitfield_10: 0b0000000010010000,
         dissatisfaction_and_speech: 0,
         game_day_of_ralliement: 0,
@@ -1424,8 +1433,8 @@ pub(crate) const TROOPS: [Troop; 68] = [
         gps_coordinates_1: 0,
         gps_coordinates_2: 0,
         time_period_of_ralliement: 0,
-        field_c: 0,
-        field_e: 0,
+        harvest_rate: 0,
+        harvest_total: 0,
         bitfield_10: 0b0000000010010000,
         dissatisfaction_and_speech: 0,
         game_day_of_ralliement: 0,
@@ -1446,8 +1455,8 @@ pub(crate) const TROOPS: [Troop; 68] = [
         gps_coordinates_1: 0,
         gps_coordinates_2: 0,
         time_period_of_ralliement: 0,
-        field_c: 0,
-        field_e: 0,
+        harvest_rate: 0,
+        harvest_total: 0,
         bitfield_10: 0b0000000010010000,
         dissatisfaction_and_speech: 0,
         game_day_of_ralliement: 0,
@@ -1468,8 +1477,8 @@ pub(crate) const TROOPS: [Troop; 68] = [
         gps_coordinates_1: 0,
         gps_coordinates_2: 0,
         time_period_of_ralliement: 0,
-        field_c: 0,
-        field_e: 0,
+        harvest_rate: 0,
+        harvest_total: 0,
         bitfield_10: 0b0000000010010000,
         dissatisfaction_and_speech: 0,
         game_day_of_ralliement: 0,
@@ -1490,8 +1499,8 @@ pub(crate) const TROOPS: [Troop; 68] = [
         gps_coordinates_1: 0,
         gps_coordinates_2: 0,
         time_period_of_ralliement: 0,
-        field_c: 0,
-        field_e: 0,
+        harvest_rate: 0,
+        harvest_total: 0,
         bitfield_10: 0b0000000010010000,
         dissatisfaction_and_speech: 0,
         game_day_of_ralliement: 0,
@@ -1512,8 +1521,8 @@ pub(crate) const TROOPS: [Troop; 68] = [
         gps_coordinates_1: 0,
         gps_coordinates_2: 0,
         time_period_of_ralliement: 0,
-        field_c: 0,
-        field_e: 0,
+        harvest_rate: 0,
+        harvest_total: 0,
         bitfield_10: 0b0000000000000000,
         dissatisfaction_and_speech: 0,
         game_day_of_ralliement: 0,
@@ -1565,11 +1574,15 @@ pub(crate) struct TroopCondit {
     pub(crate) game_days_since_ralliement: u8,
     /// = seg001:0042 for_condit_time_periods_since_ralliement_ds_42.
     pub(crate) time_periods_since_ralliement: u16,
-    /// = seg001:0044/0046 for_condit_troop_field_C/field_E.
-    pub(crate) field_c: u16,
-    pub(crate) field_e: u16,
-    /// = seg001:0048/004a for_condit_ds_48 (the spice-harvest estimate
-    /// troop_0708a computes) and for_condit_ds_4a.
+    /// = seg001:0044/0046 for_condit_troop_field_C/field_E — the staged copy
+    /// of the troop's two occupation accumulators (see Troop::harvest_rate).
+    pub(crate) harvest_rate: u16,
+    pub(crate) harvest_total: u16,
+    /// = seg001:0048 for_condit_ds_48 — the troop's current spice production
+    /// rate (troop_update_harvest_rate, the same figure the mining callback
+    /// harvests that period), shown as "Current: N kgs/h"; and
+    /// = seg001:004a for_condit_ds_4a — the running average beside it,
+    /// harvest_total over the elapsed periods, shown as "Average: N kgs/h".
     pub(crate) ds_48: u16,
     pub(crate) ds_4a: u16,
 }
@@ -1845,9 +1858,9 @@ impl GameState {
             self.command_string_replace_number(0x73, periods >> 4);
             0x73
         };
-        // = seg000:321a/321d ds:48 = sub_0329d (the idle-troop harvest
-        //   estimate; it may clear bitfield_10 bits 2..3 and update field_c).
-        self.troop_condit.ds_48 = self.troop_condit_harvest_estimate(ti);
+        // = seg000:321a/321d ds:48 = sub_0329d (a mining troop's current
+        //   rate; it may clear bitfield_10 bits 2..3 and update harvest_rate).
+        self.troop_condit.ds_48 = self.troop_condit_stage_harvest_rates(ti);
         // = seg000:3220..322f — bitfield_10 is re-read AFTER sub_0329d.
         let t = self.troops[ti];
         self.troop_condit.bitfield_10 = t.bitfield_10;
@@ -1873,9 +1886,9 @@ impl GameState {
         // = seg000:3262..3273 field_C / field_E (field_C after sub_0329d's
         //   update); subst_id_03 = field_E's low byte + 0xe8 — the placeholder
         //   0x83 equipment name (COMMAND 0xe8.. "a spice-harvester"..).
-        self.troop_condit.field_c = t.field_c;
-        self.troop_condit.field_e = t.field_e;
-        self.string_subst_id_table[3] = (t.field_e & 0xff) + 0xe8;
+        self.troop_condit.harvest_rate = t.harvest_rate;
+        self.troop_condit.harvest_total = t.harvest_total;
+        self.string_subst_id_table[3] = (t.harvest_total & 0xff) + 0xe8;
         // = seg000:3276..327e ds:37 = the skill for the current occupation:
         //   [si + ((occupation & 0xf) >> 2) + 0x16] — spice/army/ecology (an
         //   occupation-bits value of 3 reads the equipment byte, as DOS does).
@@ -1896,12 +1909,13 @@ impl GameState {
         }
     }
 
-    // = seg000:329d troop_prepare_troop_data_for_condit_sub_0329d — the ds:48
-    // seed: a troop with an occupation clears its harvest-trend bits
-    // (bitfield_10 &= ~0x0c) and reads 0; an idle troop stages ds:4a
-    // (field_E averaged over the time periods since ralliement, rounded) and
-    // computes the fresh spice-harvest estimate (troop_0708a).
-    fn troop_condit_harvest_estimate(&mut self, ti: usize) -> u16 {
+    // = seg000:329d troop_prepare_troop_data_for_condit_sub_0329d — stage the
+    // two rates the troop info panel shows. Only a spice-mining troop
+    // (occupation 0) has them: ds:4a = harvest_total averaged over the time
+    // periods since ralliement ("Average: N kgs/h"), then ds:48 = the current
+    // rate from troop_update_harvest_rate ("Current:"). Any other occupation
+    // clears the trend bits (bitfield_10 &= ~0x0c) and reads 0.
+    fn troop_condit_stage_harvest_rates(&mut self, ti: usize) -> u16 {
         let t = self.troops[ti];
         if t.occupation != 0 {
             // = seg000:32a3/32a5.
@@ -1913,9 +1927,9 @@ impl GameState {
         // = seg000:32aa..32be — field_E averaged over the periods, rounded up
         //   when the remainder is at least half the divisor (the shl dx,1;
         //   cmp cx,dx; adc ax,0 sequence); a zero period count reads 0.
-        let avg = match t.field_e.checked_div(periods) {
+        let avg = match t.harvest_total.checked_div(periods) {
             Some(q) => {
-                q + if periods <= (t.field_e % periods) * 2 {
+                q + if periods <= (t.harvest_total % periods) * 2 {
                     1
                 } else {
                     0
@@ -1924,15 +1938,21 @@ impl GameState {
             None => 0,
         };
         self.troop_condit.ds_4a = avg;
-        // = seg000:32c4 jmp troop_0708a.
-        self.troop_update_harvest_estimate(ti)
+        // = seg000:32c4 jmp troop_update_harvest_rate.
+        self.troop_update_harvest_rate(ti)
     }
 
-    // = seg000:708a troop_0708a — compute the troop's spice-harvest estimate
-    // for its location and fold the trend into bitfield_10: bits 2..3 become
-    // 8 (falling) or 4 (rising) when the estimate changed; the new value
-    // replaces field_c (troop_occupation_dependent_C) and is returned.
-    fn troop_update_harvest_estimate(&mut self, ti: usize) -> u16 {
+    // = seg000:708a troop_update_harvest_rate — this time period's spice
+    // harvest for the troop. The mining callback adds the returned value
+    // straight into harvest_total, pays a tenth of it into spice_in_stock and
+    // takes the matching bite out of the field (seg000:6fff). The condit
+    // staging above tail-jumps here for the same figure, which is what makes it
+    // the panel's "Current: N kgs/h".
+    //
+    // Folds the trend into bitfield_10: bits 2..3 become 8 when the rate ROSE
+    // (DOS `sub dx,ax` borrows, so old < new) and 4 when it fell. The new value
+    // replaces harvest_rate (troop_occupation_dependent_C) and is returned.
+    fn troop_update_harvest_rate(&mut self, ti: usize) -> u16 {
         let t = self.troops[ti];
         // = seg000:708a..7093 al = motivation modifier + (spice_skill & 0xf0).
         let al = self
@@ -1961,9 +1981,9 @@ impl GameState {
         let swapped = product.rotate_left(8);
         let rolled = swapped.rotate_left(1);
         let value = rolled & 0x01ff;
-        // = seg000:70b1..70c8 the trend bits vs the previous field_c.
-        let old = self.troops[ti].field_c;
-        self.troops[ti].field_c = value;
+        // = seg000:70b1..70c8 the trend bits vs the previous harvest_rate.
+        let old = self.troops[ti].harvest_rate;
+        self.troops[ti].harvest_rate = value;
         if old != value {
             let trend = if old < value { 8 } else { 4 };
             let t = &mut self.troops[ti];
@@ -2030,6 +2050,299 @@ impl GameState {
         self.set_game_phase_and_trigger_callbacks(0x64);
     }
 
+    // = seg000:6c6f run_troop_occupation_events — the per-time-period walk
+    // over every troop: run the callback for its occupation (the seg001 table
+    // at 6c26), then age its skills. Called from
+    // run_events_for_current_time_period (seg000:1b70).
+    pub(crate) fn run_troop_occupation_events(&mut self) {
+        // = seg000:6c6f..6c87 data_0473c = the location room_persons[4] stands
+        //   in, then loc_06c46 — the per-period location/NPC bookkeeping. Not
+        //   ported.
+        // = seg000:6c8a data_04737 = 0 — the vegetation accumulator the walk
+        //   rebuilds (copied into vegetation_started_on_Dune at 6ccc).
+        // = seg000:6cc3..6cca add si,1bh; cmp si,troops[67]; jb — the walk
+        //   stops at the table's last entry, which is the terminator (troop id
+        //   0, no location), not a troop.
+        for ti in 0..self.troops.len() - 1 {
+            let t = self.troops[ti];
+            // = seg000:6c92 test dissatisfaction_and_speech,430h; jnz
+            //   loc_06cd3 — a troop with those speech bits is out of the
+            //   normal walk (the 6cd3 branch handles the vegetation count and
+            //   the moving case).
+            if t.dissatisfaction_and_speech & 0x430 != 0 {
+                continue;
+            }
+            // = seg000:6c99..6ca2 a troop under 20 strong may be folded into
+            //   another at its location (troop_06d19). Not ported.
+            // = seg000:6ca4..6ca9 test occupation,0a0h — captured (0x20) or
+            //   unrallied (0x80) troops do nothing.
+            if t.occupation & 0xa0 != 0 {
+                continue;
+            }
+            // = seg000:6cab test occupation,40h; jnz loc_06ced — a moving
+            //   troop takes a travel step (troop_08308) instead. Not ported.
+            if t.occupation & 0x40 != 0 {
+                continue;
+            }
+            // = seg000:6caf..6cba call the occupation's callback with si = the
+            //   troop and di = its location.
+            self.run_troop_occupation_callback(ti);
+            // = seg000:6cc0 call troop_usually_decrease_skills_every_4_days —
+            //   the every-64-period skill decay. Not ported.
+        }
+    }
+
+    // = seg000:6c26 array_callbacks_for_troop_occupation_06c26 — the per-period
+    // callback for each occupation nibble. Only spice mining is ported; the
+    // others (prospecting, military training, espionage, attacking, irrigation,
+    // wind-trap assembly, bulb growing) are their own subsystems, and slots
+    // 2/3/7/11..15 are nullsub_00f66.
+    fn run_troop_occupation_callback(&mut self, ti: usize) {
+        if self.troops[ti].occupation & 0x0f == 0 {
+            self.troop_occupation_event_spice_mining(ti);
+        }
+    }
+
+    // = seg000:6fe5 callback_troop_location_for_troop_occupation_spice_mining —
+    // one time period of spice mining: work out what the troop pulled out of
+    // the ground (troop_update_harvest_rate), add it to the troop's running
+    // total, pay a tenth of it into the player's stock and take the matching
+    // bite out of the location's spice density.
+    fn troop_occupation_event_spice_mining(&mut self, ti: usize) {
+        // = seg000:6fe5 call troop_location_do_stuff_upon_new_day_06e20 — the
+        //   per-day location discovery countdown and motivation decay. Not
+        //   ported.
+        // = seg000:6fe8 test bitfield_10,200h; jnz — a damaged harvester mines
+        //   nothing until it is repaired.
+        if self.troops[ti].bitfield_10 & 0x200 != 0 {
+            // = seg000:705c..7066 the repair comes up once a day, on the time
+            //   period whose low nibble matches the troop's id.
+            let due = (self.game_time & 0x0f) as u8 == (self.troops[ti].troop_id & 0x0f);
+            if !due {
+                // = seg000:7074/7079 harvest_rate = 0 (no rate to show) and the
+                //   troop stops working.
+                self.troops[ti].harvest_rate = 0;
+                self.troop_make_stop_working(ti);
+                return;
+            }
+            // = seg000:7068 the harvester is fixed.
+            self.troops[ti].bitfield_10 &= 0xfdff;
+            // = seg000:706d/7070 it still has to be worth mining here.
+            if self.troop_spice_mining_not_viable(ti) {
+                return;
+            }
+        } else {
+            // = seg000:6fef/6ff2 the same viability test on the normal path;
+            //   not viable clears BOTH accumulators (loc_0707b: no rate and no
+            //   running total to average) and stops the troop.
+            if self.troop_spice_mining_not_viable(ti) {
+                self.troops[ti].harvest_rate = 0;
+                self.troops[ti].harvest_total = 0;
+                self.troop_make_stop_working(ti);
+                return;
+            }
+            // = seg000:6ff7 call troop_location_events_for_spice_mining_troops_
+            //   with_harvesters — the worm / saboteur events that damage or eat
+            //   the harvester. Not ported (they queue messages).
+        }
+        // = seg000:6ffa or bitfield_10,100h — the troop is working.
+        self.troops[ti].bitfield_10 |= 0x100;
+        // = seg000:6fff call troop_update_harvest_rate — this period's
+        //   harvest, which also refreshes harvest_rate (the "Current: N kgs/h"
+        //   rate) and its trend.
+        let harvested = self.troop_update_harvest_rate(ti);
+        // = seg000:7003..7008 harvest_total += it — the running total the
+        //   info panel averages into "Average: N kgs/h".
+        let old_total = self.troops[ti].harvest_total;
+        let total = old_total.wrapping_add(harvested);
+        self.troops[ti].harvest_total = total;
+        // = seg000:700b..7016 every time that total crosses a multiple of 128
+        //   the troop gets better at mining (skill +1, marker 1).
+        if (total ^ old_total) & 0xff80 != 0 {
+            self.troop_increase_spice_skill(ti, 1, 0);
+        }
+        // = seg000:701b..702a the player's cut: a tenth of the harvest, the
+        //   remainder carried to the next period.
+        let pot = harvested.wrapping_add(self.spice_harvest_remainder);
+        self.spice_harvest_remainder = pot % 10;
+        self.spice_in_stock = self.spice_in_stock.wrapping_add(pot / 10);
+        // = seg000:702f..703a the ground's cut: (harvest + the location's
+        //   carry) / spice_amount is how much density goes, the remainder
+        //   staying in field_13 towards the next period. spice_amount is the
+        //   ground's yield per density point, so a rich field depletes slower.
+        let li = locations::location_index_from_ptr(self.troops[ti].offset_of_location);
+        let Some(loc) = self.locations.get(li).copied() else {
+            return;
+        };
+        // = seg000:702f/7032 al = the harvest's low byte + field_13, carried
+        //   into ah; 7038 div cl — an 8-bit divide, so a spice_amount of 0
+        //   would trap in DOS and the quotient is capped at 0xff.
+        let dividend = (harvested & 0xff) + loc.field_13 as u16 + (harvested & 0xff00);
+        if loc.spice_amount == 0 {
+            return;
+        }
+        let consumed = (dividend / loc.spice_amount as u16).min(0xff) as u8;
+        self.locations[li].field_13 = (dividend % loc.spice_amount as u16) as u8;
+        // = seg000:703d..704e with the spice-density overlay up, eating past
+        //   the shade the overlay currently draws marks it for a repaint.
+        if consumed > (loc.spice_density & 0x0f) && self.data_046eb & 0x40 != 0 {
+            self.spice_density_overlay_dirty = self.spice_density_overlay_dirty.wrapping_add(1);
+        }
+        // = seg000:7052..705b the density drops, clamped at 0.
+        self.locations[li].spice_density = loc.spice_density.saturating_sub(consumed);
+    }
+
+    // = seg000:6b96 troop_location_test_spice_mining_viable, called directly
+    // (the occupation is known to be 0 here). True = NOT viable, DOS's carry.
+    fn troop_spice_mining_not_viable(&mut self, ti: usize) -> bool {
+        self.troop_occupation_not_viable(ti)
+    }
+
+    // = seg000:7085 callback_troop_make_troop_stop_working — occupation bit 4,
+    // the "stopped" bit the icon script and the info panel read.
+    fn troop_make_stop_working(&mut self, ti: usize) {
+        self.troops[ti].occupation |= 0x10;
+    }
+
+    // = seg000:6edd troop_clamp_skill_and_do_something_else — raise the troop's
+    // spice skill by `by`, capped at 0x5f. When the raise carries the skill
+    // into a new rank (its high nibble changes) the rank-up is marked in
+    // bitfield_10 bits 0-1 as `marker + 1`, which the troop's dialogue reads.
+    fn troop_increase_spice_skill(&mut self, ti: usize, by: u8, marker: u8) {
+        let before = self.troops[ti].spice_skill;
+        let raised = before.wrapping_add(by).min(0x5f);
+        self.troops[ti].spice_skill = raised;
+        // = seg000:6eeb..6ef9 the rank test + the marker.
+        if (raised ^ before) & 0xf0 != 0 {
+            let t = &mut self.troops[ti];
+            t.bitfield_10 = (t.bitfield_10 & 0xfffc) | (marker as u16 + 1);
+        }
+    }
+
+    // = seg000:6acb troop_set_occupation — give the troop the occupation `new`
+    // (the low nibble; the DOS store writes the whole byte, so the 0x10..0x80
+    // bits go with it). Re-tests whether the troop can actually do the job
+    // where it stands, refreshes its map icon and the order menu, and restarts
+    // its occupation clocks. A no-op when the occupation is already `new`.
+    pub(crate) fn troop_set_occupation(&mut self, ti: usize, new: u8) {
+        // = seg000:6acb..6ad2 cmp occupation & 0xf, cl; jz ret.
+        let mut new = new;
+        if self.troops[ti].occupation & 0x0f == new {
+            return;
+        }
+        // = seg000:6ad4..6ae8 assigning ecology (8) at the one location whose
+        //   record is seg001:07c8 while it holds no bulbs makes it bulb
+        //   growing (0x0a) instead — that location grows the first bulbs.
+        let li = locations::location_index_from_ptr(self.troops[ti].offset_of_location);
+        if new == 8
+            && self.troops[ti].offset_of_location == 0x07c8
+            && self.locations[li].equipment.bulbs == 0
+        {
+            new = 0x0a;
+        }
+        // = seg000:6aea..6af1 the occupation byte, the speech bits 4-5 and
+        //   bitfield_10 bit 8 (the "working" flag re-derived just below).
+        self.troops[ti].occupation = new;
+        self.troops[ti].dissatisfaction_and_speech &= 0xffcf;
+        self.troops[ti].bitfield_10 &= 0xfeff;
+        // = seg000:6af6..6afb the viability test sets the working flag.
+        if !self.troop_occupation_not_viable(ti) {
+            self.troops[ti].bitfield_10 |= 0x100;
+        }
+        // = seg000:6b00 call troop_refresh_icon — the icon sprite follows the
+        //   occupation, so respawn it.
+        self.troop_refresh_icon(ti);
+        // = seg000:6b03 call troop_set_timePeriodOfRalliement_...
+        self.troop_reset_occupation_clocks(ti);
+        // = seg000:6b06..6b16 every occupation but "awaiting orders" (2) marks
+        //   its class in the speech word (0x2000 << class), the flag the
+        //   troop's dialogue reads to comment on its new job.
+        if self.troops[ti].occupation != 2 {
+            let class = self.troop_get_occupation_bits_2_and_3(ti);
+            self.troops[ti].dissatisfaction_and_speech |= 0x2000u16 << class;
+        }
+        // = seg000:6b19..6b21 the contacted troop's order menu greys change
+        //   with its occupation.
+        if self.troops[ti].troop_id == self.map_selected_troop_id {
+            self.map_setup_troop_dialog_menu(ti);
+        }
+    }
+
+    // = seg000:6b25 troop_set_timePeriodOfRalliement_clear_troop_occupation_
+    // dependent_fields — restart the troop's occupation clocks: the current
+    // game_time as the new baseline, and the two accumulators (the spice /
+    // battle totals the info panel reads) cleared.
+    fn troop_reset_occupation_clocks(&mut self, ti: usize) {
+        self.troops[ti].time_period_of_ralliement = self.game_time;
+        self.troops[ti].harvest_rate = 0;
+        self.troops[ti].harvest_total = 0;
+    }
+
+    // = seg000:693b troop_get_occupation_bits_2_and_3_0693b — the occupation
+    // class: 0 spice, 1 army, 2 ecology.
+    pub(crate) fn troop_get_occupation_bits_2_and_3(&self, ti: usize) -> u8 {
+        (self.troops[ti].occupation & 0x0f) >> 2
+    }
+
+    // = seg000:6c15 troop_call_callback_according_to_occupation — can the troop
+    // actually do its occupation where it stands? Dispatches on the occupation
+    // nibble through array_callbacks_for_troop_occupation_06bf5; only spice
+    // mining (0), spice prospecting (1) and irrigation (8) test anything, every
+    // other occupation is nullsub_00f66 (always viable).
+    //
+    // Returns DOS's carry: true = NOT viable. The shared tail
+    // (troop_sync_occupation_stopped_bit) syncs occupation bit 0x10 — the
+    // "stopped working" bit the icon script reads — with the answer,
+    // refreshing the icon and restarting the clocks when the troop starts
+    // working again.
+    fn troop_occupation_not_viable(&mut self, ti: usize) -> bool {
+        let t = self.troops[ti];
+        let li = locations::location_index_from_ptr(t.offset_of_location);
+        let loc = self.locations[li];
+        let not_viable = match t.occupation & 0x0f {
+            // = seg000:6b96 troop_location_test_spice_mining_viable — spice mining needs an
+            //   undamaged harvester (bitfield_10 bit 9 clear), a troop that is
+            //   not sulking (speech bits 4-5 clear), spice in the ground, and
+            //   an area that has been prospected but not exhausted (status bit
+            //   6 set, bit 0 clear).
+            0 => {
+                t.bitfield_10 & 0x200 != 0
+                    || t.dissatisfaction_and_speech & 0x30 != 0
+                    || loc.spice_density < 1
+                    || (loc.status ^ 0x40) & 0x41 != 0
+            }
+            // = seg000:6b8a troop_location_test_for_location_area_prospected —
+            //   prospecting only pays where the area is not prospected yet.
+            1 => loc.status & 0x41 != 0,
+            // = seg000:6bd7 troop_location_test_irrigation_viable — irrigation needs a
+            //   non-sulking troop, water at the location, its status bit 5, and
+            //   the troop's own bulb equipment (mask 2).
+            8 => {
+                t.dissatisfaction_and_speech & 0x30 != 0
+                    || loc.water < 1
+                    || loc.status & 0x20 == 0
+                    || t.equipment & 2 == 0
+            }
+            // = the nullsub_00f66 slots: nothing to test.
+            _ => false,
+        };
+        // = seg000:6bb6..6bd6 troop_sync_occupation_stopped_bit — the answer
+        //   lives in occupation bit 0x10; flipping it swaps the icon, and when the
+        //   troop resumes working, restarts its clocks. The carry the caller
+        //   reads is the viability answer, not the flip (DOS pushf/popf).
+        let stopped = self.troops[ti].occupation & 0x10 != 0;
+        if stopped != not_viable {
+            self.troops[ti].occupation ^= 0x10;
+            self.troop_refresh_icon(ti);
+            // = seg000:6bce/6bd2 test al,10h; jz — only the working-again
+            //   direction restarts the clocks.
+            if !not_viable {
+                self.troop_reset_occupation_clocks(ti);
+            }
+        }
+        not_viable
+    }
+
     // = seg000:913b char_to_sprite_walk_facing — the PERS sprite pair and the
     // idle expression for the walk/facing persons 0x0e..0x10: the sprite is
     // 0x0e + (troop_id % 3) (the three Fremen figures), the expression
@@ -2091,8 +2404,8 @@ impl GameState {
             // = seg000:66fb troop_set_timePeriodOfRalliement_clear_troop_
             //   occupation_dependent_fields_06b25.
             t.time_period_of_ralliement = game_time;
-            t.field_c = 0;
-            t.field_e = 0;
+            t.harvest_rate = 0;
+            t.harvest_total = 0;
             // = seg000:66fe/6701 game_day_of_ralliement = the current day.
             t.game_day_of_ralliement = day;
         }
@@ -2106,5 +2419,105 @@ impl GameState {
             self.locations[loc_index].discoverable_at_phase = 2;
             println!("troop_rally_troop: location_0644e (map influence spread) unported");
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::mpsc;
+
+    use crate::{GameState, dat_file::DatFile};
+
+    // One time period of spice mining (seg000:6fe5): the troop's running total
+    // grows by this period's rate, a tenth of it reaches the player's stock
+    // with the remainder carried, and the location's spice density is bitten
+    // into at a rate set by its spice_amount. Asset-gated:
+    //   cargo test -p dune --bin dune -- --ignored spice_mining
+    #[test]
+    #[ignore = "needs assets/DUNE.DAT"]
+    fn spice_mining_accumulates_stock_and_depletes_the_field() {
+        let dat_path = concat!(env!("CARGO_MANIFEST_DIR"), "/../../assets/DUNE.DAT");
+        let Ok(dat_file) = DatFile::open(dat_path) else {
+            eprintln!("skipping: {dat_path} not found");
+            return;
+        };
+        let (tx, rx) = mpsc::sync_channel(64);
+        let mut game = GameState::new(dat_file, tx);
+        game.set_headless();
+        game.start(true);
+        while rx.try_recv().is_ok() {}
+
+        // Troop 1 mining a prospected, spice-bearing field with a harvester.
+        let ti = 0;
+        let li = crate::locations::location_index_from_ptr(game.troops[ti].offset_of_location);
+        game.troops[ti].occupation = 0;
+        game.troops[ti].equipment |= 0x80;
+        game.troops[ti].bitfield_10 = 0;
+        game.troops[ti].dissatisfaction_and_speech = 0;
+        game.troops[ti].harvest_rate = 0;
+        game.troops[ti].harvest_total = 0;
+        game.locations[li].spice_density = 0x80;
+        game.locations[li].spice_amount = 4;
+        game.locations[li].field_13 = 0;
+        // = troop_location_test_spice_mining_viable: prospected (status bit 6
+        //   set) and not exhausted (bit 0 clear).
+        game.locations[li].status = (game.locations[li].status | 0x40) & !1;
+        game.spice_in_stock = 0;
+        game.spice_harvest_remainder = 0;
+
+        let density_before = game.locations[li].spice_density;
+        game.run_troop_occupation_events();
+
+        // The rate landed in harvest_rate (the "Current: N kgs/h" readout) and in
+        // the running total harvest_total, and the troop counts as working.
+        let rate = game.troops[ti].harvest_rate;
+        assert!(rate > 0, "the troop mined something");
+        assert_eq!(
+            game.troops[ti].harvest_total, rate,
+            "the total is this period's"
+        );
+        assert_eq!(
+            game.troops[ti].bitfield_10 & 0x100,
+            0x100,
+            "the troop is working"
+        );
+        assert_eq!(
+            game.troops[ti].occupation & 0x10,
+            0,
+            "and not marked stopped"
+        );
+        // A tenth of it reached the stock, the rest carried.
+        assert_eq!(game.spice_in_stock, rate / 10, "a tenth into the stock");
+        assert_eq!(game.spice_harvest_remainder, rate % 10, "the rest carried");
+        // The field gave up rate / spice_amount of density, the remainder held
+        // in field_13.
+        let consumed = (rate + 0) / 4;
+        assert_eq!(
+            game.locations[li].spice_density,
+            density_before.saturating_sub(consumed.min(0xff) as u8),
+            "the field is depleted at spice_amount per density point"
+        );
+        assert_eq!(game.locations[li].field_13 as u16, rate % 4, "the carry");
+
+        // A second period adds to both, and the carried remainders roll over
+        // rather than being lost.
+        let stock_after_one = game.spice_in_stock;
+        game.run_troop_occupation_events();
+        assert!(
+            game.troops[ti].harvest_total > rate,
+            "the running total keeps growing"
+        );
+        assert!(
+            game.spice_in_stock >= stock_after_one,
+            "the stock keeps growing"
+        );
+
+        // An exhausted field (status bit 0) stops the troop: both accumulators
+        // clear and occupation bit 4 goes on (loc_0707b).
+        game.locations[li].status |= 1;
+        game.run_troop_occupation_events();
+        assert_eq!(game.troops[ti].occupation & 0x10, 0x10, "stopped working");
+        assert_eq!(game.troops[ti].harvest_rate, 0, "no rate to show");
+        assert_eq!(game.troops[ti].harvest_total, 0, "no total to average");
     }
 }

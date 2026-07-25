@@ -646,6 +646,42 @@ impl GameState {
         }
     }
 
+    // = seg000:8461 troop_refresh_icon (+ troop_0846c) — refresh the troop's map
+    // icon: its sprite and animation script follow its occupation, so drop the
+    // old icon and spawn a fresh one. A stationed troop needs a visible marker
+    // at its location to have an icon at all; a moving one (occupation bit 6)
+    // sits at its gps position and always respawns.
+    pub(crate) fn troop_refresh_icon(&mut self, ti: usize) {
+        // = seg000:8461/8467 call troop_find_icon; jz -> troop_icon_remove.
+        if let Some(icon) = self.troop_find_icon(ti) {
+            self.troop_icon_remove(icon);
+        }
+        // = seg000:846c..8479 a stationed troop with no visible marker gets no
+        //   icon back.
+        let t = self.troops[ti];
+        let marker = if t.occupation & 0x40 != 0 {
+            None
+        } else {
+            let li = location_index_from_ptr(t.offset_of_location);
+            let Some(m) = self
+                .visible_location_markers
+                .iter()
+                .find(|m| m.location_index as usize == li)
+                .copied()
+            else {
+                return;
+            };
+            Some(m)
+        };
+        // = seg000:847b..8485 spawn it, then repaint its rect.
+        let before = self.troop_icons.len();
+        self.map_spawn_troop_icon(ti, marker.as_ref());
+        if self.troop_icons.len() > before {
+            let r = self.troop_icons[before].rect;
+            self.troop_icons_update_dirty_rect(r);
+        }
+    }
+
     // = the SEE DUNE MAP open/close hooks for the icon system.
 
     // = seg000:5a66..5a6c add_frame_task(troop_icon_anim_task, 15).

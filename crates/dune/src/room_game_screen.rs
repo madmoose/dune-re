@@ -13,7 +13,7 @@
 use crate::{
     Equipment, GameState, Location,
     attack::AttackState,
-    game_ui::{NAV_PANEL_MIRROR, NAV_PANEL_RECORD_OFFSET},
+    game_ui::{NAV_PANEL_BLANK, NAV_PANEL_FLIGHT, NAV_PANEL_RECORD_OFFSET},
     gfx, sprite_bank,
 };
 
@@ -392,6 +392,29 @@ pub(crate) enum ScreenElement {
     // location troop popup folds in (loc_05fb0). Its cleanup func is
     // loc_05f91 (map_close_location_popup), which closes the info panel.
     MoveToLocationMenu,
+    // = menu_map_troop_dialog (seg001:210a, priority byte 0xfc) — the contacted
+    // troop's order menu (ASK FOR MORE INFORMATION / CHANGE TROOP OCCUPATION /
+    // MODIFY EQUIPMENT / MOVE TROOP / NO MORE ORDERS), staged by
+    // map_open_troop_contact_menu
+    // for a troop within visibility range that is standing still.
+    MapTroopDialog,
+    // = menu_map_troop_contact_cycle_troops (seg001:2122, priority byte 0xfc) —
+    // the NEXT TROOP / NO MORE ORDERS menu map_open_troop_contact_menu stages
+    // for a troop out of visibility range or held prisoner: it can be cycled
+    // past, not ordered.
+    MapTroopContactCycle,
+    // = menu_map_troop_moving_change_destination_next_troop (seg001:214a,
+    // priority byte 0xfc) — the CHANGE DESTINATION / NEXT TROOP / Cancel menu
+    // map_open_troop_contact_menu stages for a troop already on the move.
+    MapTroopMovingMenu,
+    // = the five occupation submenus (seg001:215a menu_map_select_troop_
+    // occupation, 216e spice, 2182 army, 219a army-doing-espionage, 21a6
+    // ecology), all priority byte 0xf8 with the no-op cleanup nullsub_00f66.
+    // Which one applies is decided per open by the CHANGE TROOP OCCUPATION
+    // verb, so — like MoveToLocationMenu's two GO THERE variants — the port
+    // gives them one identity whose records are set at open time. Nothing
+    // compares the five buffer addresses, so the identities need not differ.
+    MapTroopOccupationMenu,
 }
 
 impl ScreenElement {
@@ -412,11 +435,15 @@ impl ScreenElement {
             | ScreenElement::TroopMapScreen => 0xff,
             ScreenElement::NpcActionsMenu
             | ScreenElement::GoTowardsThisPlace
-            | ScreenElement::MoveToLocationMenu => 0xfc,
+            | ScreenElement::MoveToLocationMenu
+            | ScreenElement::MapTroopDialog
+            | ScreenElement::MapTroopContactCycle
+            | ScreenElement::MapTroopMovingMenu => 0xfc,
             ScreenElement::MixerPanel
             | ScreenElement::PalacePlan
             | ScreenElement::TravelMapScreen
-            | ScreenElement::ChangeDestinationIgnoreWarning => 0xf8,
+            | ScreenElement::ChangeDestinationIgnoreWarning
+            | ScreenElement::MapTroopOccupationMenu => 0xf8,
             ScreenElement::ExitGameConfirmation | ScreenElement::MusicCdOrderMenu => 0xf6,
         }
     }
@@ -437,6 +464,10 @@ impl GameState {
             ScreenElement::TravelMapScreen => &self.menu_multiple_cancel,
             ScreenElement::TroopMapScreen => &self.menu_map_main,
             ScreenElement::MoveToLocationMenu => &self.map_move_menu,
+            ScreenElement::MapTroopDialog => &self.menu_map_troop_dialog,
+            ScreenElement::MapTroopContactCycle => &self.menu_map_troop_contact_cycle,
+            ScreenElement::MapTroopMovingMenu => &self.menu_map_troop_moving,
+            ScreenElement::MapTroopOccupationMenu => &self.menu_map_troop_occupation,
             ScreenElement::GoTowardsThisPlace => &self.menu_go_towards_this_place,
             ScreenElement::ChangeDestinationIgnoreWarning => {
                 &self.menu_change_destination_ignore_warning
@@ -456,6 +487,10 @@ impl GameState {
             ScreenElement::TravelMapScreen => &mut self.menu_multiple_cancel,
             ScreenElement::TroopMapScreen => &mut self.menu_map_main,
             ScreenElement::MoveToLocationMenu => &mut self.map_move_menu,
+            ScreenElement::MapTroopDialog => &mut self.menu_map_troop_dialog,
+            ScreenElement::MapTroopContactCycle => &mut self.menu_map_troop_contact_cycle,
+            ScreenElement::MapTroopMovingMenu => &mut self.menu_map_troop_moving,
+            ScreenElement::MapTroopOccupationMenu => &mut self.menu_map_troop_occupation,
             ScreenElement::GoTowardsThisPlace => &mut self.menu_go_towards_this_place,
             ScreenElement::ChangeDestinationIgnoreWarning => {
                 &mut self.menu_change_destination_ignore_warning
@@ -706,7 +741,7 @@ impl GameState {
             // = seg000:932e ui_dialogue_related_to_HarkonnenCaptains — stage
             // the captain's troop CONDIT block, then the shared tail with
             // al = 0x0c. The middle (9335..9367: the map-position recompute,
-            // troop field_c seed, subst_id_09) is not yet ported.
+            // troop harvest_rate seed, subst_id_09) is not yet ported.
             0x932e => {
                 if let Some(ti) = self.harkonnen_captain_troop {
                     self.troop_prepare_troop_data_for_condit(ti);
@@ -832,10 +867,54 @@ impl GameState {
             // (CMD_SEE_DUNE_MAP) and the map main menu's EXIT MAPS verb: both
             // sides of the room <-> full-map toggle dispatch the same handler.
             0x186b => self.ui_toggle_room_view(),
+            // = seg000:5a03 loc_05a03 — the dialogue panel's GIVE ORDERS TO
+            // TROOP verb (setup_npc_dialogue_menu gives it to the Fremen-2
+            // person, seg000:90de): leave the room for the map with this troop
+            // contacted.
+            0x5a03 => self.menu_callback_choice_give_orders_to_troop(),
+            // = seg000:86cc menu_callback_choice_map_main_contact_fremen_troops
+            // — the map main menu's contact slot, "CONTACT FREMEN TROOPS" over
+            // the whole planet or "GIVE ORDERS TO TROOP" at short visibility.
+            0x86cc => self.menu_callback_choice_map_main_contact_fremen_troops(),
+            // = the troop-contact menus' verbs (menu_map_troop_dialog /
+            // _contact_cycle_troops / _moving_change_destination_next_troop).
+            // = seg000:86fa menu_callback_choice_map_troop_contact_next_troop.
+            0x86fa => self.menu_callback_choice_map_troop_contact_next_troop(),
+            // = seg000:8763 menu_callback_choice_multiple_no_more_orders — the
+            // order menu's NO MORE ORDERS / CUT CONTACT slot.
+            0x8763 => self.menu_callback_choice_multiple_no_more_orders(),
+            // = seg000:8770 menu_callback_choice_map_troop_contact_no_more_orders
+            // — the cycle menu's NO MORE ORDERS slot.
+            0x8770 => self.menu_callback_choice_map_troop_contact_no_more_orders(),
+            // = seg000:7bed — ASK FOR MORE INFORMATION: the contacted troop's
+            // next dialogue line.
+            0x7bed => self.menu_callback_choice_map_troop_dialogue_ask_for_more_information(),
+            // = seg000:69b3 — CHANGE / SELECT TROOP OCCUPATION: the occupation
+            // submenu for the troop's current occupation class.
+            0x69b3 => self.menu_callback_choice_map_troop_dialogue_change_troop_occupation(),
+            // = the occupation submenus' verbs: each reassigns the contacted
+            // troop through troop_apply_occupation_choice (apply, let the troop react, take it back
+            // if it refuses).
+            0x6a71 => self.menu_callback_choice_troop_occupation_specialize_in_spice(),
+            0x6a83 => self.menu_callback_choice_troop_occupation_specialize_in_army(),
+            0x6a87 => self.menu_callback_choice_troop_occupation_specialize_in_ecology(),
+            0x6a2b => self.menu_callback_choice_troop_occupation_assembly_wind_trap(),
+            // = seg000:6a45/6a2f — ESPIONAGE and ATTACK reassign the troop the
+            // same way, then MOVE it onto the Harkonnen holding through the
+            // unported troop-command core (troop_location_082da / 084a6).
+            0x6a45 => println!("dispatch: ESPIONAGE (0x6a45) not ported"),
+            0x6a2f => println!("dispatch: ATTACK (0x6a2f) not ported"),
+            // = seg000:7734/775c/776d — the per-class GO & SEARCH FOR
+            // EQUIPMENT verbs.
+            0x7734 | 0x775c | 0x776d => {
+                println!("dispatch: GO & SEARCH FOR EQUIPMENT ({handler:#06x}) not ported")
+            }
+            // = seg000:7cbb — MODIFY EQUIPMENT.
+            0x7cbb => println!("dispatch: MODIFY EQUIPMENT (0x7cbb) not ported"),
+            // = seg000:8064 — MOVE TROOP / CHANGE DESTINATION.
+            0x8064 => println!("dispatch: MOVE TROOP (0x8064) not ported"),
             // = the map main menu's remaining verbs (MENU_MAP_MAIN) — the
             // troop-command flows are not ported yet.
-            // = seg000:86cc menu_callback_choice_map_main_contact_fremen_troops.
-            0x86cc => println!("dispatch: CONTACT FREMEN TROOPS (0x86cc) not ported"),
             // = seg000:53f1 menu_callback_choice_map_main_see_spice_density.
             0x53f1 => println!("dispatch: SEE SPICE DENSITY (0x53f1) not ported"),
             // = seg000:42d9 menu_callback_choice_map_main_take_an_ornithopter —
@@ -1039,7 +1118,7 @@ impl GameState {
     // (loc_0980c) re-renders the room. room_render_flags bit 7 (the dialogue-zoom
     // flag) picks between two HUD-reconciliation paths — the zoom path
     // (loc_09849) and the non-zoom path (loc_0982e); both are modelled below.
-    // TODO: 097cf also clears data_047e1 and restores the subtitle backdrop
+    // TODO: 097cf also restores the subtitle backdrop
     // (subtitle_restore_prior) — subtitle state not modelled yet. The room path's
     // pending_room_action-gated transition-reveal variant (loc_09898, a wiped
     // re-render + leave scan that lets an evicted companion speak) is not ported.
@@ -1053,6 +1132,9 @@ impl GameState {
         if self.current_lip_sync_resource_id == 0xffff {
             return;
         }
+        // = seg000:97e5 data_047e1 = 0 — the sign the speaker was holding goes
+        //   with the conversation.
+        self.head_sign_state = 0;
         // = seg000:980c call subtitle_restore_prior — take down a lingering
         //   subtitle/bubble before the room is restored.
         self.subtitle_restore_prior();
@@ -1073,10 +1155,14 @@ impl GameState {
             self.ui_elements[19].flags = 0;
             self.ui_elements[20].flags = 0;
             self.stop_lip_sync_and_remove_idle_head_task();
-            // = seg000:97fd call rebuild_and_draw_room_nav_panel (DOS holds
-            //   data_011ca at 0 around it; travel_resume_flight_view clears it
-            //   for good below).
+            // = seg000:97fb..9806 xor al,al; xchg al,[data_011ca]; push ax; call
+            //   rebuild_and_draw_room_nav_panel; pop ax; mov [data_011ca],al —
+            //   hold data_011ca at 0 across the rebuild so it re-installs the
+            //   flight panel rather than the blank one the live (nonzero) value
+            //   would pick. travel_resume_flight_view clears it for good below.
+            let held = std::mem::take(&mut self.data_011ca);
             self.rebuild_and_draw_room_nav_panel();
+            self.data_011ca = held;
             // = seg000:9809 jmp loc_04abe — reload the flight view, present it,
             //   and clear data_011ca so travel_pump resumes.
             self.travel_resume_flight_view();
@@ -1244,10 +1330,10 @@ impl GameState {
         //   so the ornament shows; at the folded index 0 only the near-invisible
         //   frame draws.
         self.ui_hud_head_draw();
-        // = seg000:0ef1 si=0x1d1e; loc_0d72b — install the mirror nav-panel
-        //   template into HUD records 12..17, blanking the bottom-right compass
-        //   (no sprites, no clickable records) for the mirror still.
-        self.ui_install_nav_panel(&NAV_PANEL_MIRROR);
+        // = seg000:0ef1 si=ui_nav_panel_blank; loc_0d72b — install the blank
+        //   nav-panel template into HUD records 12..17, clearing the bottom-right
+        //   compass (no sprites, no clickable records) for the mirror still.
+        self.ui_install_nav_panel(&NAV_PANEL_BLANK);
         // = seg000:0ef7 call main_ui_elements_clear_flags_18_19_20.
         self.main_ui_elements_clear_flags_18_19_20();
         // = seg000:0efa ui_elements[20].flags = 0x80 — enable the full game-area
@@ -1476,7 +1562,7 @@ impl GameState {
     // current_location_ptr, whose first_name/last_name bytes serve as the
     // nominal header. TODO: port; needs command_menu_list and its identity
     // compare (seg000:a2aa) to matter first. No-op stub.
-    fn set_command_menu_origin(&mut self) {}
+    pub(crate) fn set_command_menu_origin(&mut self) {}
 
     // = seg000:2efb build_room_command_records — assemble the verb-menu record
     // list for the current room into command_menu_buf (the seg001:1f0e
@@ -1513,7 +1599,7 @@ impl GameState {
                     // compute_location_available_equipment (seg000:7f27) to refresh
                     // orni_count for this location, then "TAKE AN ORNITHOPTER" greyed
                     // while orni_count < 1.
-                    self.compute_location_available_equipment();
+                    self.compute_location_available_equipment(self.current_location_index as usize);
                     recs.push(grey_if(
                         CMD_TAKE_ORNITHOPTER,
                         self.available_equipment.ornithopters < 1,
@@ -1597,15 +1683,15 @@ impl GameState {
         (self.game_time & 0xf) as u8
     }
 
-    // = seg000:7f27 compute_location_available_equipment — recompute the current
-    // location's per-type available equipment (DOS buffer at seg001:46fe,
-    // location_available_equipment); the ornithopters slot is orni_count, read
-    // just below to grey TAKE AN ORNITHOPTER.
-    pub(crate) fn compute_location_available_equipment(&mut self) {
-        // = seg000:2f3e di = [current_location_ptr] — the current location
-        // record (this call site is the location entry room's verb build, so
-        // it is always set; the guard covers the "no location" sentinel).
-        let Some(location) = self.locations.get(self.current_location_index as usize) else {
+    // = seg000:7f27 compute_location_available_equipment — recompute location
+    // `li`'s per-type available equipment into the global buffer (DOS
+    // seg001:46fe, location_available_equipment); the ornithopters slot is
+    // orni_count, read to grey TAKE AN ORNITHOPTER. DOS takes the location in
+    // di — mostly [current_location_ptr], but map_setup_troop_dialog_menu
+    // passes the contacted troop's location instead — so the port takes it as
+    // an argument.
+    pub(crate) fn compute_location_available_equipment(&mut self, li: usize) {
+        let Some(location) = self.locations.get(li) else {
             return;
         };
         self.available_equipment = self.location_available_equipment(location);
@@ -1752,6 +1838,13 @@ impl GameState {
             // = seg000:5f91 loc_05f91 — the GO THERE menu's cleanup closes
             //   the location info panel.
             ScreenElement::MoveToLocationMenu => self.map_close_location_popup(),
+            // = seg000:8751 map_troop_contact_cleanup — every troop-contact
+            //   menu is staged with the same cleanup (seg000:783e bx =
+            //   map_troop_contact_cleanup): drop the selection, its highlight
+            //   ring and the contact strip.
+            ScreenElement::MapTroopDialog
+            | ScreenElement::MapTroopContactCycle
+            | ScreenElement::MapTroopMovingMenu => self.map_troop_contact_cleanup(),
             // = seg000:8816 the SEE DUNE MAP menu is pushed with bx =
             //   nullsub_00f66 — a no-op cleanup (the view resets through
             //   reset_room_scene_state on the way back to the room).
@@ -2395,7 +2488,7 @@ impl GameState {
     // screen_element_stack_pop_and_cleanup) and reveal it with the panel fold:
     // arm the fb1 transition, push the element, fold it in, then light the
     // slot under the cursor.
-    fn stage_command_submenu(&mut self, element: ScreenElement) {
+    pub(crate) fn stage_command_submenu(&mut self, element: ScreenElement) {
         // = seg000:d323 call screen_overlay_request_transition — stage into fb1.
         self.screen_overlay_request_transition();
         // = seg000:d326 call screen_element_stack_push (bp menu, bx cleanup).
@@ -2559,24 +2652,36 @@ impl GameState {
     // four direction-exit bytes, and gate the centre palace-plan button [17]
     // on being inside the Atreides palace, then redraw HUD records 12..18.
     //
-    // The DOS routine also handles three special cases (night attack, map/book
-    // mode, sietch entrance) by re-installing alternate templates; the port
-    // leaves whatever `ui_setup_and_draw_nav_panel` already placed for those modes
-    // and only customizes the standard palace/sietch room path. The data_01cc4
-    // mirror of the centre flags is dropped — no consumer is ported yet.
+    // A staged night attack and a travel/book mode do not customize the live
+    // records at all: they re-install a whole template (blank, or the flight
+    // panel) and draw that. The data_01cc4 mirror of the centre flags is dropped
+    // — no consumer is ported yet.
     pub(crate) fn rebuild_and_draw_room_nav_panel(&mut self) {
-        // = seg000:2ffb cmp byte ptr [night_attack_stage], 0; jnz loc_0301a (alt). The
-        // night-attack path leaves the existing panel in place and just
-        // redraws.
+        // = seg000:2ffb cmp byte ptr [night_attack_stage], 0; jnz loc_0301a —
+        // the night attack clears the compass.
         if self.night_attack_stage != 0 {
-            self.ui_draw_nav_panel();
+            self.ui_install_nav_panel(&NAV_PANEL_BLANK);
             return;
         }
-        // = seg000:3002 test game_screen_mode_flags,3; jz loc_03020. Book/map
-        // mode also leaves whatever ui_setup_and_draw_nav_panel placed (the
-        // NAV_PANEL_MAP template) and just redraws.
+        // = seg000:3002 test game_screen_mode_flags,3; jz loc_03020 — a travel
+        // or book mode owns the panel.
         if self.game_screen_mode_flags & 3 != 0 {
-            self.ui_draw_nav_panel();
+            // = seg000:3009 cmp data_011ca,0; jnz loc_0301a — an overlay owns
+            //   the screen (a map screen, a fly-over dialogue), so the flight
+            //   is suspended and its controls go away.
+            // = seg000:3010 si = ui_nav_panel_flight; 3013 cmp
+            //   travel_no_location_dest,0; jnz loc_0301d — only a directional
+            //   flight is steerable. A flight homing on a location flies itself
+            //   (the command panel offers SKIP TO DESTINATION / CHANGE
+            //   DESTINATION instead), so it falls into loc_0301a and clears the
+            //   panel.
+            let steerable = self.data_011ca == 0 && self.travel_no_location_dest != 0;
+            if steerable {
+                self.ui_install_nav_panel(&NAV_PANEL_FLIGHT);
+            } else {
+                // = seg000:301a si = ui_nav_panel_blank.
+                self.ui_install_nav_panel(&NAV_PANEL_BLANK);
+            }
             return;
         }
         // = seg000:3020 mov bx,[data_00006]; cmp bl,80h; jnz loc_03073. Only
@@ -2696,7 +2801,7 @@ impl GameState {
     // system is not ported (the data_04774 branch never runs with the default
     // flags), so this is a no-op stub.
     // TODO: port the dialogue panel; no-op stub.
-    fn draw_task_list_insert(&mut self) {}
+    pub(crate) fn draw_task_list_insert(&mut self) {}
 
     // = seg000:0acd stage_28_night_attack_start. The night attack on the sietch:
     // an ATTACK.HSQ background with a particle system (bombs, debris, sky
@@ -2958,8 +3063,8 @@ impl GameState {
 mod tests {
     use std::sync::mpsc;
 
-    use super::ScreenElement;
-    use crate::{Equipment, GameState, dat_file::DatFile, gfx};
+    use super::{NAV_PANEL_RECORD_OFFSET, ScreenElement};
+    use crate::{Equipment, GameState, dat_file::DatFile, game_ui::NAV_PANEL_ROOM, gfx};
 
     // = seg000:7f27/7f2a — the location available-equipment computation: the
     // location's equipment row minus each stationed troop's held equipment, per
@@ -4133,6 +4238,78 @@ mod tests {
             game.active_menu_records()[2].handler,
             0x497a,
             "CHANGE DESTINATION"
+        );
+    }
+
+    // The travel branch of rebuild_and_draw_room_nav_panel (seg000:3002..301d):
+    // in a travel mode the routine installs a whole template rather than editing
+    // the live compass records, and only a steerable flight gets one with
+    // buttons. Both orni entry points (TAKE AN ORNITHOPTER and the map screen's
+    // GO THERE FLYING AN ORNI) land here, so the panel no longer depends on
+    // which template the closing screen happened to leave behind. Asset-gated:
+    //   cargo test -p dune --lib -- --ignored travel_nav_panel
+    #[test]
+    #[ignore = "needs assets/DUNE.DAT"]
+    fn travel_nav_panel_follows_the_flight_and_not_the_previous_screen() {
+        let dat_path = concat!(env!("CARGO_MANIFEST_DIR"), "/../../assets/DUNE.DAT");
+        let Ok(dat_file) = DatFile::open(dat_path) else {
+            eprintln!("skipping: {dat_path} not found");
+            return;
+        };
+        let (tx, _rx) = mpsc::sync_channel(64);
+        let mut game = GameState::new(dat_file, tx);
+        game.set_headless();
+
+        // The handler offsets of the live nav records 12..17.
+        let handlers = |g: &GameState| {
+            let o = NAV_PANEL_RECORD_OFFSET;
+            [
+                g.ui_elements[o].func_ptr,
+                g.ui_elements[o + 1].func_ptr,
+                g.ui_elements[o + 2].func_ptr,
+                g.ui_elements[o + 3].func_ptr,
+                g.ui_elements[o + 4].func_ptr,
+                g.ui_elements[o + 5].func_ptr,
+            ]
+        };
+        let flight = [0x0f66, 0x4ad0, 0x4f09, 0x4ad7, 0x0f66, 0x0f66];
+        let blank = [0x0f66; 6];
+
+        // Start from the room compass, as the room screen leaves it.
+        game.ui_install_nav_panel(&NAV_PANEL_ROOM);
+
+        // A directional flight (no location target, nothing holding the screen)
+        // is steerable: turn left / flight button / turn right.
+        game.game_screen_mode_flags = 5;
+        game.data_011ca = 0;
+        game.travel_no_location_dest = 0xff;
+        game.rebuild_and_draw_room_nav_panel();
+        assert_eq!(handlers(&game), flight, "directional flight steers");
+
+        // Homing on a location: the orni flies itself, so the panel clears.
+        game.travel_no_location_dest = 0;
+        game.rebuild_and_draw_room_nav_panel();
+        assert_eq!(
+            handlers(&game),
+            blank,
+            "a homing flight has nothing to steer"
+        );
+
+        // An overlay holding the screen (a map screen, a fly-over dialogue)
+        // suspends the flight and clears the panel with it.
+        game.travel_no_location_dest = 0xff;
+        game.data_011ca = 1;
+        game.rebuild_and_draw_room_nav_panel();
+        assert_eq!(handlers(&game), blank, "a suspended flight cannot steer");
+
+        // A staged night attack clears it whatever the mode flags say.
+        game.data_011ca = 0;
+        game.night_attack_stage = 1;
+        game.rebuild_and_draw_room_nav_panel();
+        assert_eq!(
+            handlers(&game),
+            blank,
+            "the night attack clears the compass"
         );
     }
 

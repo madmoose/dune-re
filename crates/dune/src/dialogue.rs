@@ -241,7 +241,9 @@ impl GameState {
     // zoom the room to them, show the talking head, then run the dialogue.
     pub(crate) fn common_dialogue(&mut self, person_index: u8) {
         // = seg000:93aa xor ah,ah — ax = the lip-sync resource index (0..0xd).
-        // = seg000:93ac data_047e1 = 0. TODO: data_047e1 not modelled.
+        // = seg000:93ac data_047e1 = 0 — a new conversation starts with no
+        //   sign held up.
+        self.head_sign_state = 0;
         // = seg000:93b3 current_lip_sync_resource_id = ax.
         self.current_lip_sync_resource_id = person_index as u16;
         // = seg000:93b9 call zoom_room_to_dialogue_speaker — zoom the room to the
@@ -452,9 +454,9 @@ impl GameState {
         loop {
             // = seg000:949a cmp si,0ffffh; jz loc_094b9 — empty slot / ended record.
             if ofs != 0xffff {
-                // = seg000:949f call loc_09b49 — the data_047e1-gated portrait
-                //   part-2 animation wait; data_047e1 (armed by the per-character
-                //   trampolines, seg000:93ac) is not modelled.
+                // = seg000:949f call loc_09b49 — a sign the speaker is still
+                //   holding up from the last line comes down before this one.
+                self.head_sign_lower();
                 // = seg000:94a2 call present_first_matching_dialogue_line.
                 let (next, presented) = self.present_first_matching_dialogue_line(ofs as usize);
 
@@ -1219,11 +1221,16 @@ impl GameState {
             }
             // = the already-spoken no-ops of 0x0b/0x0c (test [si],80h; jnz ret).
             0x0b | 0x0c => {}
+            // = seg000:a25b callback_event_dialogue_line_0a — the line wants
+            //   the speaker to hold up a sign with a number on it (Duncan's
+            //   spice stock, the smuggler's bill). Arms the overlay; the idle
+            //   animator raises the sign and draws the number onto it.
+            0x0a => self.head_sign_arm_for_current_line(),
             // = seg000:a1f7 (0x03) trigger_cutscenes, a244/a248 (0x04/0x05) the
             //   accept/refuse/argue menu, a1ed (0x0e) increase_final_attack_stage
             //   (ds:c2 not modelled), a125/a157/a172 (0x08/0x09/0x0f) the
-            //   speaker-dependent effects, a25b (0x0a) the bubble-layout tweak,
-            //   a28e (0x0d) the command-menu/PALPLAN redraw — all unported.
+            //   speaker-dependent effects, a28e (0x0d) the command-menu/PALPLAN
+            //   redraw — all unported.
             _ => println!("dispatch_dialogue_line_event: unported event 0x{event:02x}"),
         }
     }

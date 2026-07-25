@@ -443,12 +443,16 @@ impl GameState {
     // = seg000:7b36 map_dismiss_troop_popups — close any troop-contact UI over
     // the map before a redraw, bracketed by in_transition = 0x80 so the
     // repaints do not arm a panel fold: the no-more-orders teardown
-    // (menu_callback_choice_map_troop_contact_no_more_orders — TODO with the
-    // contact menu), the location popup menu exit (loc_05f79) and the troop
-    // info panel close (loc_079de).
+    // (menu_callback_choice_map_troop_contact_no_more_orders), the location
+    // popup menu exit (loc_05f79) and the troop info panel close (loc_079de).
     pub(crate) fn map_dismiss_troop_popups(&mut self) {
+        // = seg000:7b38 data_046d8 = 1 — the panels go away without their
+        //   outline scale-out; the view is about to be repainted anyway.
+        self.map_popup_anim_suppress = true;
         let saved = self.in_transition;
         self.in_transition = 0x80;
+        // = seg000:7b42 call menu_callback_choice_map_troop_contact_no_more_orders.
+        self.menu_callback_choice_map_troop_contact_no_more_orders();
         self.map_close_location_troop_popup();
         self.map_close_troop_info_popup();
         self.in_transition = saved;
@@ -2784,6 +2788,42 @@ mod tests {
                 );
             }
         }
+    }
+
+    // TAKE AN ORNITHOPTER with a bare-desert destination click: a directional
+    // flight is steerable, so the departure's rebuild_and_draw_room_nav_panel
+    // leaves the turn-left / flight / turn-right panel (ui_nav_panel_flight,
+    // seg000:3010) in HUD records 12..17. Asset-gated:
+    //   cargo test -p dune --bin dune -- --ignored directional_takeoff_nav_panel
+    #[test]
+    #[ignore = "needs assets/DUNE.DAT"]
+    fn directional_takeoff_keeps_the_steering_panel() {
+        let dat_path = concat!(env!("CARGO_MANIFEST_DIR"), "/../../assets/DUNE.DAT");
+        let Ok(dat_file) = DatFile::open(dat_path) else {
+            eprintln!("skipping: {dat_path} not found");
+            return;
+        };
+        let (tx, rx) = mpsc::sync_channel(64);
+        let mut game = GameState::new(dat_file, tx);
+        game.set_headless();
+        game.start(true);
+        while rx.try_recv().is_ok() {}
+
+        game.menu_callback_choice_map_main_take_an_ornithopter_notransition();
+        while rx.try_recv().is_ok() {}
+        // 0xfff0 = the cursor was over bare map, not a location marker.
+        game.map_confirm_travel_and_close(0xfff0, 200, 70);
+        while rx.try_recv().is_ok() {}
+        assert_eq!(game.travel_no_location_dest, 0xff, "directional flight");
+        assert_eq!(game.data_011ca, 0, "nothing holds the screen");
+
+        let o = crate::game_ui::NAV_PANEL_RECORD_OFFSET;
+        let handlers: Vec<u16> = (0..6).map(|i| game.ui_elements[o + i].func_ptr).collect();
+        assert_eq!(
+            handlers,
+            vec![0x0f66, 0x4ad0, 0x4f09, 0x4ad7, 0x0f66, 0x0f66],
+            "the steering panel survives the departure"
+        );
     }
 
     // A companion spotting a discoverable landmark during an ornithopter
