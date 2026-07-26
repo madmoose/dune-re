@@ -92,3 +92,13 @@ pub(crate) const TAKE_AN_ORNITHOPTER: u16 = 0xa7;
 /// rallied troops =   0" — the count digits are overwritten in place with the
 /// live number_of_rallied_troops.
 pub(crate) const DUNE_MAP_RALLIED_TROOPS: u16 = 0xe2;
+/// "ALL TOPICS"
+pub(crate) const ALL_TOPICS: u16 = 0xe3;
+/// " Close book"
+pub(crate) const CLOSE_BOOK: u16 = 0xe4;
+/// "TOPIC: PAUL ON DUNE"
+pub(crate) const TOPIC_PAUL_ON_DUNE: u16 = 0xe5;
+/// "TOPIC: SPICE"
+pub(crate) const TOPIC_SPICE: u16 = 0xe6;
+/// "TOPIC: THE FREMEN"
+pub(crate) const TOPIC_THE_FREMEN: u16 = 0xe7;

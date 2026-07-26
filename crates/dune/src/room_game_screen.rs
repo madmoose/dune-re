@@ -449,6 +449,12 @@ pub(crate) enum ScreenElement {
     // gives them one identity whose records are set at open time. Nothing
     // compares the five buffer addresses, so the identities need not differ.
     MapTroopOccupationMenu,
+    // = menu_book (seg001:2032, leading priority word 0xff) — THE BOOK diary
+    // screen's verb menu, pushed by callback_transition_0af26 (seg000:af38)
+    // with the no-op cleanup fn_0d917_noop. Like the SEE DUNE MAP menu its
+    // 0xff priority replaces the room base in place, and the close verb's
+    // enter_room_view re-inserts the room base the same way.
+    BookScreen,
 }
 
 impl ScreenElement {
@@ -466,7 +472,8 @@ impl ScreenElement {
         match self {
             ScreenElement::RoomCommandMenu
             | ScreenElement::LookAwayFromMirror
-            | ScreenElement::TroopMapScreen => 0xff,
+            | ScreenElement::TroopMapScreen
+            | ScreenElement::BookScreen => 0xff,
             ScreenElement::NpcActionsMenu
             | ScreenElement::GoTowardsThisPlace
             | ScreenElement::MoveToLocationMenu
@@ -500,6 +507,7 @@ impl GameState {
             ScreenElement::PalacePlan => &self.menu_done,
             ScreenElement::TravelMapScreen => &self.menu_multiple_cancel,
             ScreenElement::TroopMapScreen => &self.menu_map_main,
+            ScreenElement::BookScreen => &self.menu_book,
             ScreenElement::MoveToLocationMenu => &self.map_move_menu,
             ScreenElement::MapTroopDialog => &self.menu_map_troop_dialog,
             ScreenElement::MapTroopContactCycle => &self.menu_map_troop_contact_cycle,
@@ -525,6 +533,7 @@ impl GameState {
             ScreenElement::PalacePlan => &mut self.menu_done,
             ScreenElement::TravelMapScreen => &mut self.menu_multiple_cancel,
             ScreenElement::TroopMapScreen => &mut self.menu_map_main,
+            ScreenElement::BookScreen => &mut self.menu_book,
             ScreenElement::MoveToLocationMenu => &mut self.map_move_menu,
             ScreenElement::MapTroopDialog => &mut self.menu_map_troop_dialog,
             ScreenElement::MapTroopContactCycle => &mut self.menu_map_troop_contact_cycle,
@@ -961,6 +970,15 @@ impl GameState {
                 let slot = ((text_id & 0xfff) - 0x10f) as u8;
                 self.menu_callback_choice_globe_load_game(slot);
             }
+            // = seg000:af58/af60/af68/af70 the book's topic verbs (ALL TOPICS
+            // / TOPIC: PAUL ON DUNE / TOPIC: SPICE / TOPIC: THE FREMEN).
+            0xaf58 => self.menu_callback_choice_book_topic(0),
+            0xaf60 => self.menu_callback_choice_book_topic(1),
+            0xaf68 => self.menu_callback_choice_book_topic(2),
+            0xaf70 => self.menu_callback_choice_book_topic(3),
+            // = seg000:b18b — the " Close book" verb (also the book's close
+            // hotspots' UI-element handler).
+            0xb18b => self.callback_ui_element_book_close(),
             // TODO: the remaining mirror-menu verb (RESTART 0x0e47) and the
             // room verbs (CALL A WORM 0x42d1, ...) are not ported.
             0xd2e2 => self.menu_callback_choice_exit_menu(),

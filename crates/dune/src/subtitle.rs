@@ -143,8 +143,9 @@ impl GameState {
     }
 
     // = seg000:88e1 draw_subtitle_text_from_si — bail when the first byte has
-    // its high bit set (nothing renderable), else lay out + draw.
-    fn draw_subtitle_text(&mut self, text: &[u8]) {
+    // its high bit set (nothing renderable), else lay out + draw. Also the
+    // book page renderer's entry (seg000:b088).
+    pub(crate) fn draw_subtitle_text(&mut self, text: &[u8]) {
         if text.first().is_none_or(|b| b & 0x80 != 0) {
             return;
         }
@@ -684,10 +685,27 @@ impl GameState {
             let lines = self.layout_lines(text, rect)?;
             return Some((0x224c, rect, lines));
         }
-        // = seg000:8d1b data_000c6 != 0: the book/document layout
-        //   (seg001:2265). TODO: the BOOK background and its spread-line
-        //   flags (loc_0d082) are not ported; fall through to the plain
-        //   layouts so the text still shows.
+        // = seg000:8d1b data_000c6 != 0: the book page layout (seg001:2265 =
+        //   0,0,320,152), pads 0x3c/0x32/0xa/0xa, fg 0x64, and the book font
+        //   (loc_0d082: the drop-cap glyph func with the tall width table).
+        if self.data_000c6 != 0 {
+            self.subtitle_pad_left = 0x3c;
+            self.subtitle_pad_right = 0x32;
+            self.subtitle_pad_top = 0x0a;
+            self.subtitle_pad_bottom = 0x0a;
+            // = seg000:8d38 font_draw_fg_color = 0x64.
+            self.font_state.color = 0x64;
+            // = seg000:8d3d call loc_0d082.
+            self.font_select_book_font();
+            let rect = Rect {
+                x0: 0,
+                y0: yoff,
+                x1: 320,
+                y1: yoff + 0x98,
+            };
+            let lines = self.layout_lines(text, rect)?;
+            return Some((0x2265, rect, lines));
+        }
         // = seg000:8d43 suppress_sky != 0: the dusk narration strip
         //   (seg001:2275 = 0,153,320,47), fg 6, no padding.
         if self.data_0227d != 0 {
@@ -824,6 +842,16 @@ impl GameState {
                             0x06 => size = crate::font::TextSize::Small,
                             0x08 => size = crate::font::TextSize::Large,
                             0x01..=0x05 | 0x07 | 0x09..=0x1f => {}
+                            // = seg000:8eed..8f02 measure_word_width's book
+                            //   special case: with the book glyph func
+                            //   selected, the text's very first char (DOS
+                            //   si == data_0a6b1) measures at its drop-cap
+                            //   width when it has one.
+                            _ if i == 1 && self.font_state.book_drop_cap => {
+                                width += crate::font::drop_cap(c)
+                                    .map_or_else(|| self.font.glyph_width(c, size), |(_, w)| w)
+                                    as u16;
+                            }
                             _ => width += self.font.glyph_width(c, size) as u16,
                         }
                     }
@@ -902,6 +930,22 @@ impl GameState {
                 rect.y1 as u16,
                 0xfb,
             );
+            return false;
+        }
+        // = seg000:8f86 the book page: BOOK.HSQ sprite 3 (the ruled-page
+        //   spread) tiled across the layout rect into fb1 (loc_08ff5), no
+        //   save-under.
+        if self.data_000c6 != 0 {
+            self.subtitle_bubble = Some(SubtitleBubble {
+                strip: false,
+                layout,
+                rect,
+                saved_fb2: Vec::new(),
+            });
+            // = seg000:8ff6..9006 open BOOK.HSQ; blit_repeated_x(sprite 3,
+            //   si = data_02265) into fb1.
+            self.open_sprite_bank(crate::sprite_bank::BOOK);
+            self.blit_repeated_x(3, rect);
             return false;
         }
         // = seg000:8f8d/8f94 the dusk strip and pending room transitions

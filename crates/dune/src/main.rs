@@ -5,6 +5,7 @@
 mod attack;
 mod avi;
 mod blit;
+mod book_screen;
 mod color;
 mod command_strings;
 mod condit;

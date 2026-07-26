@@ -94,6 +94,10 @@ pub(crate) enum TaskId {
     // = seg000:6b34 troop_icon_anim_task — the troop icon animation task on
     // the full map view (interval 15).
     TroopIconAnim,
+    // = seg000:0a16 frame_task_callback_00a16 — the scrolling-credits step
+    // (one CREDITS.HNM frame per tick), armed by the book's past-the-last-
+    // page path (play_credits, seg000:09f5).
+    CreditsScroll,
 }
 
 pub(crate) struct FrameTask {
@@ -402,8 +406,27 @@ pub struct GameState {
     // preferred slot = (person_id + base) % count.
     pub(crate) person_marker_base: u8,
 
-    // = seg001:00c6 data_000c6.
+    // = seg001:00c6 data_000c6 (book_flags) — the book-screen flags, doubling
+    // as the subtitle-suppress gate (any nonzero value makes
+    // present_first_matching_dialogue_line skip show_voice_subtitle, and
+    // run_game_phase_triggers sets bit 0x80 around the phase-trigger walk).
+    // Book bits: 1 = book screen active, 2 = showing the cover, 4 = credits
+    // rolling past the last page.
     pub(crate) data_000c6: u8,
+
+    // = seg001:11bf book_bookmark_ptr (data_011bf) — the book's bookmark: the
+    // cs offset of the current page word in the dialogue-played log (0xaa =
+    // the first entry); persists while the book is closed.
+    pub(crate) book_bookmark_ptr: u16,
+
+    // = seg001:2406 book_topic_filter (data_02406) — the active book topic
+    // filter (low byte = record mask 0x1c, high byte = topic bits); 0 = all
+    // topics.
+    pub(crate) book_topic_filter: u16,
+
+    // = seg001:243e book_page_video_id (data_0243e) — the HNM resource id
+    // (0x19..0x24) of the bookmarked page's video, 0 when the page has none.
+    pub(crate) book_page_video_id: u16,
 
     // = seg001:00c8 data_000c8 — the smuggler-present flag for the smuggler-room
     // command verbs (build_room_command_records, bl==0x80 && dl==8). Inits to 0.
@@ -697,6 +720,12 @@ pub struct GameState {
     // FIND PROSPECTORS). map_setup_main_menu (seg000:878c) rewrites the ids
     // and grey bits before every push.
     pub(crate) menu_map_main: MenuBuffer,
+
+    // = seg001:2032 menu_book — the book screen's verb menu (ALL TOPICS / the
+    // three TOPIC: filters / " Close book"). book_menu_update_topic_
+    // availability rewrites the grey bits on open, the topic verbs move the
+    // 0x8000 highlight.
+    pub(crate) menu_book: MenuBuffer,
 
     // = seg001:210a menu_map_troop_dialog — the contacted troop's order menu
     // (ASK FOR MORE INFORMATION / CHANGE TROOP OCCUPATION / MODIFY EQUIPMENT /
@@ -1731,6 +1760,11 @@ impl GameState {
             night_attack_stage: 0,
             person_marker_base: 0,
             data_000c6: 0,
+            // = seg001:11bd/11bf both init dw 0aah (the log head lives in
+            // dialogue_played_log's length).
+            book_bookmark_ptr: 0xaa,
+            book_topic_filter: 0,
+            book_page_video_id: 0,
             data_000c8: 0,
             ui_hud_head_index: 0,
             data_000ea: 0,
@@ -1866,6 +1900,10 @@ impl GameState {
             menu_map_main: MenuBuffer {
                 priority: ScreenElement::TroopMapScreen.initial_priority(),
                 records: MENU_MAP_MAIN.to_vec(),
+            },
+            menu_book: MenuBuffer {
+                priority: ScreenElement::BookScreen.initial_priority(),
+                records: crate::book_screen::MENU_BOOK.to_vec(),
             },
             menu_map_troop_dialog: MenuBuffer {
                 priority: ScreenElement::MapTroopDialog.initial_priority(),
@@ -2764,6 +2802,9 @@ impl GameState {
                 }
                 TaskId::TroopIconAnim => {
                     self.tick_troop_icon_anim();
+                }
+                TaskId::CreditsScroll => {
+                    self.credits_scroll_frame_task();
                 }
             }
         }

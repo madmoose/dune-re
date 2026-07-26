@@ -92,7 +92,7 @@ pub const UI_ELEMENTS_INIT: [UiElement; 24] = [
     ui1( 22, 161,  68, 196, 0x0000, -1, 0xb8c6), //  0 loc_0b8c6
     ui2(  0, 152,   0, 152, 0x0000,  0, 0x0f66, None), //  1 loc_00f66 (date/time, mutated)
     ui2(228, 152, 300, 198, 0x0000,  3, 0x0f66, None), //  2 loc_00f66 (date/time, mutated)
-    ui1( 24, 155,  69, 176, 0x0080, -1, 0xaed6), //  3 loc_0aed6
+    ui2( 24, 155,  69, 176, 0x0080, -1, 0xaed6, Some(GameState::callback_main_ui_element_03)), //  3 loc_0aed6 (THE BOOK)
     ui2 (92, 152, 229, 159, 0x0000, 14, 0x0f66, None), //  4 loc_00f66
     ui2(  2, 154,   2, 154, 0x0000, 12, 0x0f66, None), //  5 loc_00f66
     ui2(317, 154, 317, 154, 0x0000, 12, 0x0f66, None), //  6 loc_00f66
@@ -112,7 +112,7 @@ pub const UI_ELEMENTS_INIT: [UiElement; 24] = [
     ui2(  0,   0, 320, 152, 0x0000, -1, 0x941d, Some(GameState::game_area_click)), // 20 loc_0941d
     ui2( 35, 182,  56, 196, 0x0080, 64, 0x9215, Some(GameState::callback_main_ui_element_21_22)), // 21 loc_09215
     ui2( 58, 182,  79, 196, 0x0080, 64, 0x9215, Some(GameState::callback_main_ui_element_21_22)), // 22 loc_09215
-    ui1(  0,   4,  40,  46, 0x0000, -1, 0xb1ee), // 23 loc_0b1ee
+    ui2(  0,   4,  40,  46, 0x0000, -1, 0xb1ee, Some(GameState::callback_main_ui_element_23)), // 23 loc_0b1ee (book SEE-video)
 ];
 
 pub const NAV_PANEL_RECORD_OFFSET: usize = 12; // the first record of the 6-record nav panel (HUD records 12..17)
@@ -128,6 +128,26 @@ const FRIEZE_SIDES_CLOSED_BOOK: [(u16, i16); 4] = [(0, -1), (0, 0), (0, 3), (0x8
 /// the left side shows the map-view frieze (sprite 0x0d, flags 0xc0) with the
 /// date/time area parked on sprite 6.
 const FRIEZE_SIDES_MAP: [(u16, i16); 4] = [(0xc0, 0x0d), (0, 6), (0, 3), (0, -1)];
+
+/// = seg001:1c56 hud_sides_open_book — the book screen's frieze-side template:
+/// the date/time area parks on the open-book ornament (sprite 9, whose pages
+/// the turn animation flips via ICONES sprites 0x0a/0x0b).
+const FRIEZE_SIDES_OPEN_BOOK: [(u16, i16); 4] = [(0, -1), (0, 9), (0, 3), (0, -1)];
+
+/// = seg001:1e1a ui_globe_rotation_controls[6..12] — the six records the book
+/// screen installs over the nav panel (HUD records 12..17): a dead slot, the
+/// two page-corner arrows over the open-book frieze (prev/next), the whole
+/// left frieze as a close hotspot, a dead right region, and the close button
+/// (sprite 33) in the compass corner.
+#[rustfmt::skip]
+pub(crate) const NAV_PANEL_BOOK: [UiElement; NAV_PANEL_RECORD_COUNT] = [
+    ui2(  0,   0,   0,   0, 0x0000, -1, 0x0f66, None),                                                    // 12 dead
+    ui2( 21, 161,  42, 186, 0x0080, -1, 0xafc7, Some(GameState::callback_ui_element_book_prev_page)),     // 13 prev page
+    ui2( 43, 161,  63, 186, 0x0080, -1, 0xafb5, Some(GameState::callback_ui_element_book_next_page)),     // 14 next page
+    ui2(  0, 154,  92, 200, 0x0080, -1, 0xb18b, Some(GameState::callback_ui_element_book_close)),         // 15 close (frieze)
+    ui2(228, 154, 320, 200, 0x0000, -1, 0x0f66, None),                                                    // 16 dead
+    ui2(255, 162, 295, 192, 0x0080, 33, 0xb18b, Some(GameState::callback_ui_element_book_close)),         // 17 close button
+];
 
 /// = seg001:1e7e the date/time moon/sun coordinate table, indexed by the
 /// time-of-day phase (game_time & 0xf). Each phase gives the screen position of
@@ -317,7 +337,7 @@ impl GameState {
     }
 
     // = seg000:d1f2 draw_ui_elements_list.
-    fn draw_ui_elements_list(&mut self, start: usize, count: usize) {
+    pub(crate) fn draw_ui_elements_list(&mut self, start: usize, count: usize) {
         // = seg000:d1f2 call open_icones_spritesheet.
         self.open_icones_spritesheet();
         // = seg000:d1f5 loop the records via draw_ui_element.
@@ -424,8 +444,13 @@ impl GameState {
             self.ui_show_globe_map_view();
             return;
         }
-        // = seg000:1877 loc_01877 — the enter-room path. Drain pending UI tasks,
-        // reset the scene, restore the voice/subtitle mode from its default.
+        self.enter_room_view();
+    }
+
+    // = seg000:1877 loc_01877 — the enter-room path (also jumped to straight
+    // from the book close, seg000:b1ac). Drain pending UI tasks, reset the
+    // scene, restore the voice/subtitle mode from its default.
+    pub(crate) fn enter_room_view(&mut self) {
         self.dismiss_stacked_overlays();
         self.reset_room_scene_state();
         // = seg000:187d voice_subtitle_mode = voice_subtitle_mode_default.
@@ -615,6 +640,13 @@ impl GameState {
     // template body at d795).
     pub(crate) fn ui_set_and_draw_frieze_sides_map(&mut self) {
         self.ui_set_and_draw_frieze_sides(&FRIEZE_SIDES_MAP);
+    }
+
+    // = seg000:d7ad ui_set_and_draw_frieze_sides_open_book — the book screen's
+    // frieze sides (hud_sides_open_book). Like the map entry, no date/time +
+    // companion-button tail.
+    pub(crate) fn ui_set_and_draw_frieze_sides_open_book(&mut self) {
+        self.ui_set_and_draw_frieze_sides(&FRIEZE_SIDES_OPEN_BOOK);
     }
 
     // = seg000:d763 the tail of ui_set_and_draw_frieze_sides_closed_book (also

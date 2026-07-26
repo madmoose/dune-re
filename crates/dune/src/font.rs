@@ -74,6 +74,20 @@ impl Font {
     }
 }
 
+/// = the seg000:d0d1 cs table loc_0d0e3 scans (the listing renders its
+/// address as `DNCHARx_BIN[485]` only because the values coincide): the nine
+/// characters with an illuminated drop cap, and their advance widths. A hit
+/// at index i pairs with BOOK.HSQ sprite 5+i (= seg000:d0f8 `ah = 0dh - cl`).
+const DROP_CAP_CHARS: &[u8; 9] = b"ADELOPSTU";
+const DROP_CAP_WIDTHS: [u8; 9] = [33, 30, 28, 33, 25, 24, 24, 23, 31];
+
+// = seg000:d0e3 loc_0d0e3 — probe the drop-cap table for `c`: the BOOK.HSQ
+// sprite and the advance width, or None (the DOS carry) for a plain char.
+pub(crate) fn drop_cap(c: u8) -> Option<(u16, u8)> {
+    let i = DROP_CAP_CHARS.iter().position(|&b| b == c)?;
+    Some((5 + i as u16, DROP_CAP_WIDTHS[i]))
+}
+
 pub struct TextContext<'a> {
     font: &'a Font,
     framebuffer: &'a mut FrameBuffer,
@@ -203,6 +217,11 @@ pub struct FontState {
     pub color: u16,
     // = which glyph func _off_219C8 points at: tall (d096) or small (d12f).
     pub size: TextSize,
+    // = _off_219C8 pointing at the book glyph func (seg000:d0ff,
+    // font_draw_glyph_func_book): the NEXT glyph drawn gets the BOOK.HSQ
+    // drop-cap treatment, then the func reverts to the tall one. Armed by
+    // font_select_book_font (= loc_0d082), cleared by any font select.
+    pub book_drop_cap: bool,
 }
 
 impl GameState {
@@ -223,11 +242,20 @@ impl GameState {
     // = seg000:d068 font_select_tall_font — select the 9-row font.
     pub fn font_select_tall_font(&mut self) {
         self.font_state.size = TextSize::Large;
+        self.font_state.book_drop_cap = false;
     }
 
     // = seg000:d075 font_select_small_font — select the 7-row font.
     pub fn font_select_small_font(&mut self) {
         self.font_state.size = TextSize::Small;
+        self.font_state.book_drop_cap = false;
+    }
+
+    // = seg000:d082 loc_0d082 — the book font select: the drop-cap glyph func
+    // (font_draw_glyph_func_book, seg000:d0ff) with the tall width table.
+    pub fn font_select_book_font(&mut self) {
+        self.font_state.size = TextSize::Large;
+        self.font_state.book_drop_cap = true;
     }
 
     // = seg000:d096 / d12f font_draw_glyph_func — draw glyph `c` at the pen into
@@ -235,6 +263,24 @@ impl GameState {
     // the glyph width. (DOS picks tall/small via the _off_219C8 pointer; the
     // port reads font_state.size.)
     pub fn font_draw_glyph(&mut self, c: u8) {
+        // = seg000:d0ff font_draw_glyph_func_book — only ever the first glyph
+        // after the book font select (it re-selects the tall font at entry):
+        // a char with a drop cap draws BOOK.HSQ sprite 5..13 raised 19 rows
+        // above the pen and advances by the table width; any other char falls
+        // through to the plain tall glyph (= seg000:d105 jb).
+        if std::mem::take(&mut self.font_state.book_drop_cap)
+            && let Some((sprite, width)) = drop_cap(c)
+        {
+            // = seg000:d112..d11a keep the pen, advance x by the table width.
+            let (x, y) = (self.font_state.x, self.font_state.y);
+            self.font_state.x += width as u16;
+            // = seg000:d120..d125 the sprite row, clamped at the screen top.
+            let sy = (y as i16 - 0x13).max(0);
+            // = seg000:d10c open BOOK.HSQ; d127 draw_sprite_clobbering_bx_dx.
+            self.open_sprite_bank(crate::sprite_bank::BOOK);
+            self.draw_active_bank_sprite(sprite, x as i16, sy);
+            return;
+        }
         let st = self.font_state;
         // Disjoint field borrows: &self.font and &mut the active framebuffer.
         let fb = match self.active_fb() {
