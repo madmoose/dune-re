@@ -271,6 +271,100 @@ impl GameState {
         self.set_mouse_nav_rect(self.map_view_rect);
     }
 
+    // = seg000:5d50 location_mark_map_view_dirty — a location changed in a
+    // way the map shows (revealed, battle over, ...): while a map view is up
+    // and the location is visible and not hidden, bump the data_046ec dirty
+    // counter so the next event-run refresh repaints the view. (DOS tests
+    // visibility with location_visible_on_map; the port tests the visible-
+    // marker list that predicate builds.)
+    pub(crate) fn location_mark_map_view_dirty(&mut self, li: usize) {
+        // = seg000:5d52..5d5d the hidden / no-map-view gates.
+        if self.locations[li].status & 0x80 != 0 || self.data_046eb == 0 {
+            return;
+        }
+        // = seg000:5d5f..5d66 call location_visible_on_map; jb skip.
+        if self
+            .visible_location_markers
+            .iter()
+            .any(|m| m.location_index as usize == li)
+        {
+            self.spice_density_overlay_dirty = self.spice_density_overlay_dirty.wrapping_add(1);
+        }
+    }
+
+    // = seg000:5d44 location_mark_map_and_minimap_dirty — the flight
+    // variant: while a travel mode is active (game_screen_mode_flags bits
+    // 0-1) also flag the minimap redraw.
+    pub(crate) fn location_mark_map_and_minimap_dirty(&mut self, li: usize) {
+        if self.game_screen_mode_flags & 3 != 0 {
+            self.travel_minimap_state |= 1;
+        }
+        self.location_mark_map_view_dirty(li);
+    }
+
+    // = seg000:5d6d map_view_refresh_after_events — refresh the map/globe
+    // main view after a time-period event run (the scheduler's tail, gated
+    // on the data_046ec dirty counter, which this resets). data_046eb > 0:
+    // the installed main-view redraw; bit 0x80: the full DUNE MAP recompose
+    // (loc_05d82); 0: no map view up, nothing to do.
+    pub(crate) fn map_view_refresh_after_events(&mut self) {
+        // = seg000:5d6d data_046ec = 0.
+        self.spice_density_overlay_dirty = 0;
+        // = seg000:5d72..5d79 the data_046eb routing.
+        if self.data_046eb & 0x80 == 0 {
+            if self.data_046eb == 0 {
+                return;
+            }
+            // = seg000:5d7b/5d7e restore the cursor and jump through the
+            //   installed drawing function (map_view_redraw / travel_
+            //   minimap_redraw).
+            self.call_restore_cursor();
+            let redraw = self
+                .current_main_view_drawing_function
+                .expect("map_view_refresh_after_events with no drawing function installed");
+            redraw(self);
+            return;
+        }
+        // = seg000:5d82 loc_05d82 — the full-map recompose, the same draw
+        //   sequence as ui_main_view_map_interface without the menu setup.
+        self.set_fb1_as_active_framebuffer();
+        self.call_restore_cursor();
+        // = seg000:5d88 call loc_05b8d — restore rect + sprite clip rect =
+        //   the map window; the port passes clip rects per draw call.
+        // = seg000:5d8b..5d92 force data_046eb = 0x80 around the draws and
+        //   save the contact troop (data_046ef) for the focus restore.
+        let saved_046eb = std::mem::replace(&mut self.data_046eb, 0x80);
+        let saved_contact = self.map_contact_troop;
+        // = seg000:5d96..5da2 the map, the markers, the player sprite, and
+        //   the fresh fb2 snapshot.
+        self.map_draw_zoomed_globe();
+        self.open_onmap_spritesheet();
+        self.map_build_and_draw_location_markers();
+        self.map_draw_player_position_sprite();
+        self.copy_active_framebuffer_to_framebuffer_2();
+        // = seg000:5da5..5db1 rebuild the troop icons and present the window.
+        self.troop_icons.clear();
+        self.troop_icon_focused = [None; 2];
+        self.map_spawn_troop_icons();
+        let r = self.map_view_rect;
+        self.troop_icons_update_dirty_rect(r);
+        // = seg000:5db4..5db9 re-focus the contacted troop's highlight ring.
+        if let Some(ti) = saved_contact {
+            self.map_focus_troop_icon(ti);
+        }
+        // = seg000:5dbc call loc_01c18 — the open popups' content.
+        self.redraw_period_sensitive_view_content();
+        // = seg000:5dbf/5dc0 restore the entry data_046eb.
+        self.data_046eb = saved_046eb;
+        // = seg000:5dc3..5dc7 bit 0x40 re-enters the spice-density overlay
+        //   (loc_0542f) — not ported yet. TODO.
+        if self.data_046eb & 0x40 != 0 {
+            println!("map_view_refresh_after_events: spice-density overlay (loc_0542f) not ported");
+        }
+        // = seg000:5dca jmp open_onmap_resource.
+        self.open_onmap_spritesheet();
+    }
+
     // = seg000:878c map_setup_main_menu — configure the map main verb menu's
     // ids and grey bits from the game state, push it onto the screen-element
     // stack (bx = nullsub_00f66, a no-op cleanup) and reopen ONMAP.
@@ -2002,7 +2096,7 @@ impl GameState {
     // = seg000:78e9 loc_078e9 — the troop info panel's content: the header,
     // the location name, the occupation/status lines and the equipment row,
     // all from the staged CONDIT block.
-    fn map_draw_troop_info_panel_content(&mut self, ti: usize) {
+    pub(crate) fn map_draw_troop_info_panel_content(&mut self, ti: usize) {
         // = seg000:78e9/78ee a troop that lost its icon closes the panel.
         if self.troop_find_icon(ti).is_none() {
             self.map_close_troop_info_popup();
@@ -2260,7 +2354,7 @@ impl GameState {
     // = seg000:0600e loc_0600e — draw the location info popup: place the
     // panel next to the marker (location_05ee4), the location type + name,
     // then the class-specific extras and the equipment/battle section.
-    fn map_draw_location_popup(&mut self, li: usize) {
+    pub(crate) fn map_draw_location_popup(&mut self, li: usize) {
         // = seg000:600e call set_screen_as_active_framebuffer.
         let saved = self.active_fb();
         self.set_screen_as_active_framebuffer();

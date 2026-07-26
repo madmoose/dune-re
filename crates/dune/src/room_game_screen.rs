@@ -1777,7 +1777,7 @@ impl GameState {
     }
 
     // = seg000:1ae0 get_ingame_time_of_day — the time-of-day phase, game_time & 0xf.
-    fn get_ingame_time_of_day(&self) -> u8 {
+    pub(crate) fn get_ingame_time_of_day(&self) -> u8 {
         (self.game_time & 0xf) as u8
     }
 

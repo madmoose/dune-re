@@ -177,7 +177,7 @@ impl GameState {
     // Stilgar's locations appear on the map.
     fn phase_callback_2c_met_stilgar(&mut self) {
         // = seg000:10be data_01154 = game_time.
-        self.data_01154 = self.game_time;
+        self.harkonnen_raids_armed_after_game_time = self.game_time;
         // = seg000:10c4 room_persons[4].location_and_room = 0x2006 (Gurney).
         self.room_persons[4].location_and_room = 0x2006;
         // = seg000:10ca/10d0 room_persons[2] = 0x2008, slot 0x180 (Thufir).
@@ -320,14 +320,14 @@ impl GameState {
         //   TODO: not modelled (see phase_callback_4c_leto_killed).
         println!("phase_callback_5c: troop-event pressure bumps unported");
         // = seg000:11bd..11c3 data_01156 = get_ingame_day + 3.
-        self.data_01156 = self.get_ingame_day_in_ax().wrapping_add(3);
+        self.illness_plot_armed_after_ingame_day = self.get_ingame_day_in_ax().wrapping_add(3);
     }
 
     // = seg000:11cb callback_game_phase_change_60_go_find_chani — Chani is
     // stationed in the Arrakeen (Harkonnen) palace, room 2. Also called
-    // directly from the event pump at seg000:1f0d (unported), hence the
-    // redundant phase/counter writes.
-    fn phase_callback_60_go_find_chani(&mut self) {
+    // directly by the cure step (chani_troop_cure_progress_step, seg000:1f0d)
+    // once nothing is left ill, hence the redundant phase/counter writes.
+    pub(crate) fn phase_callback_60_go_find_chani(&mut self) {
         // = seg000:11cb/11d0 ds:ff = 0; game_phase = 0x60.
         self.days_since_last_game_phase_change = 0;
         self.game_phase = 0x60;
@@ -382,8 +382,11 @@ impl GameState {
         if self.comm_sightings.len() >= 10 {
             self.comm_sightings.remove(0);
         }
-        // = seg000:270d/270f store + count.
+        // = seg000:270d/270f store + count — data_000c8 is DOS's
+        //   comm_sighting_count byte (seg001:00c8), kept in step with the
+        //   list (build_room_command_records reads it for the COMM verbs).
         self.comm_sightings.push(sighting);
+        self.data_000c8 = self.comm_sightings.len() as u8;
         // = seg000:2713 inc byte [RES_SMUG_HSQ] — the COMM unread badge
         //   (DOS keeps it in the byte the SMUG resource-table entry starts
         //   with); its reader, the COMM screen, is unported.
@@ -391,6 +394,17 @@ impl GameState {
         if self.game_phase >= 0x38 && self.current_room != 8 {
             self.queue_vision_message_without_location(0x201);
         }
+    }
+
+    // = seg000:71b2 or_message_ID_with_F00_and_queue_vision_message_with_
+    // location — the location-event messages: class byte 0x0f over the low
+    // message id, the location as the message's subject.
+    pub(crate) fn queue_vision_message_f00(&mut self, message_low: u8, loc_index: usize) {
+        // = seg000:71b2 mov ah,0fh; call queue_vision_message_with_location.
+        self.queue_vision_message(
+            0x0f00 | message_low as u16,
+            crate::locations::location_ptr_from_index(loc_index),
+        );
     }
 
     // = seg000:29ee queue_vision_message_without_location — di = 0.

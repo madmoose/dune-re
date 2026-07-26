@@ -579,7 +579,7 @@ impl GameState {
     // script: facing (the dominant axis + sign of the location-minus-gps
     // delta) plus 4 * the occupation class indexes
     // troop_icon_scripts_moving.
-    fn troop_icon_pick_script_moving(&self, troop_index: usize) -> u16 {
+    pub(crate) fn troop_icon_pick_script_moving(&self, troop_index: usize) -> u16 {
         let t = &self.troops[troop_index];
         let li = location_index_from_ptr(t.offset_of_location);
         let Some(loc) = self.locations.get(li) else {

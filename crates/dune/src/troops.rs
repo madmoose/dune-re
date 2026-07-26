@@ -20,7 +20,10 @@ pub struct Troop {
     // words for their own tallies — an attacking troop keeps its losses and
     // kills here (the "Fremen lost / Harkonnen killed" lines read ds:44/46),
     // and an ecology troop its covered area — so read the names as "what the
-    // occupation is accumulating", not as spice specifically.
+    // occupation is accumulating", not as spice specifically. A moving troop
+    // (occupation bit 6) keeps its home location ptr in +0x0c and the
+    // equipment-to-fetch word in +0x0e (slot index low, equipment bit high;
+    // the turn-around arrival at seg000:841f consumes them).
     pub harvest_rate: u16,
     pub harvest_total: u16,
     pub bitfield_10: u16,
@@ -1780,6 +1783,7 @@ impl GameState {
     // compute_location_available_equipment mask at ds:53) are not yet ported.
     pub(crate) fn prepare_location_data_for_condit(&mut self, loc_index: usize) {
         // = seg000:331e mov [data_011ce], di — the staged location.
+        self.condit_staged_location = loc_index;
         let loc = self.locations[loc_index];
         // = seg000:3324..3329 ds:4e = (first_name << 8) | last_name.
         self.location_condit.area_and_name = ((loc.first_name as u16) << 8) | loc.last_name as u16;
@@ -2066,22 +2070,38 @@ impl GameState {
         for ti in 0..self.troops.len() - 1 {
             let t = self.troops[ti];
             // = seg000:6c92 test dissatisfaction_and_speech,430h; jnz
-            //   loc_06cd3 — a troop with those speech bits is out of the
-            //   normal walk (the 6cd3 branch handles the vegetation count and
-            //   the moving case).
+            //   loc_06cd3 — a troop with the ill bit or the just-reassigned
+            //   speech bits is out of the normal walk: a moving one still
+            //   takes its travel step, and once vegetation has started on
+            //   Dune the speech bits 4-5 clear so a healthy troop rejoins
+            //   the walk (the re-test at 6ceb).
             if t.dissatisfaction_and_speech & 0x430 != 0 {
-                continue;
+                // = seg000:6cd3 test occupation,40h; jnz loc_06ced.
+                if t.occupation & 0x40 != 0 {
+                    self.troop_travel_step_unless_selected(ti);
+                    continue;
+                }
+                // = seg000:6cd9..6ce9 the vegetation-started release.
+                if self.vegetation_started_on_dune == 0 {
+                    continue;
+                }
+                self.troops[ti].dissatisfaction_and_speech &= 0xffcf;
+                if self.troops[ti].dissatisfaction_and_speech & 0x400 != 0 {
+                    continue;
+                }
             }
             // = seg000:6c99..6ca2 a troop under 20 strong may be folded into
             //   another at its location (troop_06d19). Not ported.
             // = seg000:6ca4..6ca9 test occupation,0a0h — captured (0x20) or
             //   unrallied (0x80) troops do nothing.
+            let t = self.troops[ti];
             if t.occupation & 0xa0 != 0 {
                 continue;
             }
             // = seg000:6cab test occupation,40h; jnz loc_06ced — a moving
-            //   troop takes a travel step (troop_08308) instead. Not ported.
+            //   troop takes a travel step (troop_travel_step) instead.
             if t.occupation & 0x40 != 0 {
+                self.troop_travel_step_unless_selected(ti);
                 continue;
             }
             // = seg000:6caf..6cba call the occupation's callback with si = the
@@ -2090,6 +2110,16 @@ impl GameState {
             // = seg000:6cc0 call troop_usually_decrease_skills_every_4_days —
             //   the every-64-period skill decay. Not ported.
         }
+    }
+
+    // = seg000:6ced loc_06ced — the walk's moving-troop branch: the troop
+    // whose contact UI is open (map_selected_troop_id) pauses in place, every
+    // other moving troop takes its travel step.
+    fn troop_travel_step_unless_selected(&mut self, ti: usize) {
+        if self.troops[ti].troop_id == self.map_selected_troop_id {
+            return;
+        }
+        self.troop_travel_step(ti);
     }
 
     // = seg000:6c26 array_callbacks_for_troop_occupation_06c26 — the per-period
@@ -2200,7 +2230,7 @@ impl GameState {
 
     // = seg000:7085 callback_troop_make_troop_stop_working — occupation bit 4,
     // the "stopped" bit the icon script and the info panel read.
-    fn troop_make_stop_working(&mut self, ti: usize) {
+    pub(crate) fn troop_make_stop_working(&mut self, ti: usize) {
         self.troops[ti].occupation |= 0x10;
     }
 
@@ -2226,10 +2256,20 @@ impl GameState {
     // its occupation clocks. A no-op when the occupation is already `new`.
     pub(crate) fn troop_set_occupation(&mut self, ti: usize, new: u8) {
         // = seg000:6acb..6ad2 cmp occupation & 0xf, cl; jz ret.
-        let mut new = new;
         if self.troops[ti].occupation & 0x0f == new {
             return;
         }
+        self.troop_reinit_occupation(ti, new);
+    }
+
+    // = seg000:6ad4 troop_06ad4 — the inner entry of troop_set_occupation
+    // (no same-occupation early-out): the arrival paths re-enter it to
+    // re-initialize an unchanged occupation after a move (troop_arrive_at_
+    // destination / troop_settle_into_location), and troop_06ac5 (seg000:6ac5)
+    // passes occupation & 0xfc through it to drop an espionage/attack
+    // mission's low bits.
+    pub(crate) fn troop_reinit_occupation(&mut self, ti: usize, new: u8) {
+        let mut new = new;
         // = seg000:6ad4..6ae8 assigning ecology (8) at the one location whose
         //   record is seg001:07c8 while it holds no bulbs makes it bulb
         //   growing (0x0a) instead — that location grows the first bulbs.
@@ -2374,6 +2414,422 @@ impl GameState {
     }
 }
 
+// = troop movement (seg000:8308..8684): the per-period travel step of a
+// moving troop (occupation bit 6), its arrival, and the settle/turn-around
+// machinery behind it.
+impl GameState {
+    // = seg000:8308 troop_travel_step — one time period of a moving troop:
+    // 4 sub-steps (8 with an ornithopter, equipment bit 6), each added to
+    // the gps position; a zero delta is arrival. Afterwards the map icon
+    // follows the new position: removed off-screen, recentred on-screen, or
+    // spawned fresh from the moving-icon script.
+    pub(crate) fn troop_travel_step(&mut self, ti: usize) {
+        // = seg000:8308..8311 cx = 4, 8 with equipment bit 6.
+        let steps = if self.troops[ti].equipment & 0x40 != 0 {
+            8
+        } else {
+            4
+        };
+        for _ in 0..steps {
+            // = seg000:8314..831c a zero delta = arrival (troop_08357).
+            let (dlng, dlat) = self.troop_travel_substep_delta(ti);
+            if dlng == 0 && dlat == 0 {
+                self.troop_arrive_at_destination(ti);
+                return;
+            }
+            // = seg000:831e/8321 gps += the sub-step.
+            let t = &mut self.troops[ti];
+            t.gps_coordinates_1 = t.gps_coordinates_1.wrapping_add(dlng as u16);
+            t.gps_coordinates_2 = t.gps_coordinates_2.wrapping_add(dlat as u16);
+        }
+        // = seg000:8326..8344 the icon upkeep.
+        let pos = self.troop_icon_screen_pos(ti, None);
+        let icon = self.troop_find_icon(ti);
+        match (pos, icon) {
+            // = seg000:8333/8338 scrolled off the window: drop the icon.
+            (None, Some(i)) => self.troop_icon_remove(i),
+            (None, None) => {}
+            // = seg000:8330 -> loc_0c653: recentre the icon on the projected
+            //   position (centre - the sprite half-size - the current rect).
+            (Some((x, y)), Some(i)) => {
+                self.open_onmap_spritesheet();
+                let sprite = self.troop_icons[i].sprite;
+                let (mut w, mut h) = (0i16, 0i16);
+                self.with_active_bank_sheet(|_, sheet| {
+                    if let Some(s) = sheet.get_sprite(sprite) {
+                        w = s.width() as i16;
+                        h = s.height() as i16;
+                    }
+                });
+                let r = self.troop_icons[i].rect;
+                self.troop_icon_move_and_redraw(i, x - w / 2 - r.x0, y - h / 2 - r.y0);
+            }
+            // = seg000:833c..8344 entered the window: spawn the moving icon
+            //   and repaint its rect.
+            (Some((x, y)), None) => {
+                let script = self.troop_icon_pick_script_moving(ti);
+                if script != 0 {
+                    if let Some(i) = self.troop_icon_spawn_with_anim(script, x, y, ti) {
+                        let r = self.troop_icons[i].rect;
+                        self.troop_icons_update_dirty_rect(r);
+                    }
+                }
+            }
+        }
+    }
+
+    // = seg000:8604 troop_travel_substep_delta — one sub-step toward the
+    // destination location: (dlng, dlat) to add to the gps position, (0, 0)
+    // = arrived. The longitude gap is scaled to map cells by
+    // lng_units_per_cell_table[|lat|]; arrival is a dominant-axis distance
+    // below 7. Longitude-dominant: one cell toward the target (a sub-cell
+    // remainder is snapped whole), latitude ±1 only on a set rolling rand
+    // bit; latitude-dominant: ±1 row, longitude one cell only on a set rand
+    // bit (a sub-cell longitude gap is snapped whole).
+    fn troop_travel_substep_delta(&mut self, ti: usize) -> (i16, i16) {
+        let t = self.troops[ti];
+        let li = locations::location_index_from_ptr(t.offset_of_location);
+        let loc = self.locations[li];
+        // = seg000:860b..8616 bp = lng_units_per_cell_table[|lat|] (the port
+        //   derives the same value through the tablat row length).
+        let lat = t.gps_coordinates_2 as i16;
+        let per_cell = self
+            .tablat
+            .as_ref()
+            .expect("TABLAT.BIN not loaded")
+            .lng_units_per_cell((lat + 98) as u16);
+        // = seg000:861a..8628 the latitude gap and its sign.
+        let dlat_total = loc.map_y.wrapping_sub(lat);
+        let lat_sign: i16 = if dlat_total >= 0 { 1 } else { -1 };
+        let alat = dlat_total.unsigned_abs();
+        // = seg000:8628..8637 the longitude gap (the wrapping sub takes the
+        //   short way around the planet) and its cell count.
+        let dlng_total = (loc.map_x as u16).wrapping_sub(t.gps_coordinates_1) as i16;
+        let cells = dlng_total.unsigned_abs() / per_cell;
+        let lng_step = if dlng_total >= 0 {
+            per_cell as i16
+        } else {
+            -(per_cell as i16)
+        };
+        // = seg000:863b/863d the dominant-axis split.
+        if cells >= alat {
+            // = seg000:863f the arrival radius.
+            if cells < 7 {
+                return (0, 0);
+            }
+            // = seg000:8644..8648 no latitude gap left: no latitude step.
+            let dlat_step = if alat == 0 { 0 } else { lat_sign };
+            // = seg000:8650/8652 the sub-cell snap (unreachable here: cells
+            //   >= 7 survives the halving; kept for the DOS shape).
+            if cells >> 1 == 0 {
+                return (dlng_total, dlat_step);
+            }
+            // = seg000:8654..865c one cell across, diagonal on a rand bit.
+            let diagonal = self.roll_rand_bit();
+            (lng_step, if diagonal { dlat_step } else { 0 })
+        } else {
+            // = seg000:8666/8669 the arrival radius.
+            if alat < 7 {
+                return (0, 0);
+            }
+            // = seg000:866b/866d a sub-cell longitude gap snaps whole.
+            if cells == 0 {
+                return (dlng_total, lat_sign);
+            }
+            // = seg000:8675/8677 (unreachable: alat >= 7; the DOS shape).
+            if alat >> 1 == 0 {
+                return (dlng_total, lat_sign);
+            }
+            // = seg000:8679..8683 one row down/up, a cell across on a rand
+            //   bit.
+            let diagonal = self.roll_rand_bit();
+            (if diagonal { lng_step } else { 0 }, lat_sign)
+        }
+    }
+
+    // = seg000:8357 troop_arrive_at_destination — a moving troop reached its
+    // destination: snap the gps onto the location, then settle or resolve
+    // the arrival by owner and occupation.
+    pub(crate) fn troop_arrive_at_destination(&mut self, ti: usize) {
+        // = seg000:8357..8365 the prospector troop (troops[2]) arriving at
+        //   the head of its destination queue shifts it.
+        if ti == 2 && self.prospector_destinations[0] == self.troops[ti].offset_of_location {
+            self.shift_prospector_destinations();
+        }
+        // = seg000:8368..836b al = the occupation nibble (read before the
+        //   settle path re-initializes it).
+        let occ_low = self.troops[ti].occupation & 0x0f;
+        let li = locations::location_index_from_ptr(self.troops[ti].offset_of_location);
+        // = seg000:836d..8379 gps = the location's coordinates.
+        self.troops[ti].gps_coordinates_1 = self.locations[li].map_x as u16;
+        self.troops[ti].gps_coordinates_2 = self.locations[li].map_y as u16;
+        // = seg000:837c..8385 a battle-flagged (status bit 1) or Atreides
+        //   location settles the troop.
+        if self.locations[li].status & 2 != 0 || self.location_is_atreides(li) {
+            self.troop_settle_into_location(ti);
+            if occ_low == 5 {
+                // = seg000:839a..83a4 an espionage arrival at a hidden
+                //   location reveals it.
+                if self.locations[li].status & 0x80 != 0 {
+                    self.locations[li].status &= 0x7f;
+                    self.location_mark_map_and_minimap_dirty(li);
+                } else {
+                    self.troop_location_notify_residents(li);
+                }
+            } else if self.troops[ti].troop_id == self.locations[li].troop_id {
+                // = seg000:8390..8397 settling as the chain head is the
+                //   battle won (troop_location_07429): the messages, the
+                //   post-battle troop callbacks, the Harkonnen enslaving and
+                //   the final-attack staging. Not ported. TODO.
+                println!("troop_arrive_at_destination: battle won (seg000:7429) not ported");
+            } else {
+                self.troop_location_notify_residents(li);
+            }
+            return;
+        }
+        // = seg000:83a7 the non-Atreides arrival.
+        let mut class = occ_low;
+        if (5..=6).contains(&occ_low) {
+            // = seg000:83af..83b4 espionage/attack drop the mission's low
+            //   bits (troop_06ac5: occupation & 0xfc through the
+            //   set-occupation reinit).
+            let new = self.troops[ti].occupation & 0xfc;
+            self.troop_reinit_occupation(ti, new);
+            class = 0;
+        }
+        // = seg000:83b6..83ba occupation low bits 11b turn around for home;
+        //   everyone else settles.
+        if class & 3 == 3 {
+            self.troop_turn_around_home(ti);
+        } else {
+            self.troop_settle_into_location(ti);
+        }
+    }
+
+    // = seg000:8347 shift_prospector_troop_destinations_array — drop the
+    // head of the 4-entry queue (the tail entry stays).
+    fn shift_prospector_destinations(&mut self) {
+        self.prospector_destinations.copy_within(1..4, 0);
+    }
+
+    // = seg000:83bc troop_location_finish_troop_motion_and_settle_it_into_
+    // location — link the troop into its destination, clear the moving bit,
+    // fold its equipment into the location and restart its occupation; an
+    // arrival at the current location's audience room (room 1 during the
+    // night attack) requests a room redraw.
+    fn troop_settle_into_location(&mut self, ti: usize) {
+        let li = locations::location_index_from_ptr(self.troops[ti].offset_of_location);
+        // = seg000:83bc call troop_link_into_location_and_assign_position.
+        self.troop_link_into_location(ti, li);
+        // = seg000:83bf and occupation,0bfh — the moving bit ends here.
+        self.troops[ti].occupation &= 0xbf;
+        // = seg000:83c3 call troop_location_085cc.
+        self.troop_fix_position_bank(ti, li);
+        // = seg000:83c6 call troop_location_register_troop_equipment_...
+        self.troop_register_equipment_into_location(ti, li);
+        // = seg000:83c9..83ce an unrallied troop (occupation bit 7) is done.
+        let occ = self.troops[ti].occupation;
+        if occ & 0x80 != 0 {
+            return;
+        }
+        // = seg000:83d0/83d3 re-init the occupation from its low nibble
+        //   (troop_06ad4 — refreshes the working flag, the icon and the
+        //   clocks).
+        self.troop_reinit_occupation(ti, occ & 0x0f);
+        // = seg000:83d6..83f7 arriving at the current location while the
+        //   room verb menu is up, with the player in the audience room
+        //   (room 1 during the night attack): request the room redraw.
+        if li != self.current_location_index as usize {
+            return;
+        }
+        if self.get_active_screen_element()
+            != crate::room_game_screen::ScreenElement::RoomCommandMenu
+        {
+            return;
+        }
+        let room = if self.night_attack_stage == 0 { 2 } else { 1 };
+        if self.current_room == room {
+            self.room_redraw_request |= 1;
+        }
+    }
+
+    // = seg000:851f troop_link_into_location_and_assign_position — append
+    // the troop to the location's chain: an empty chain takes it as the head
+    // at position 1 (9 for a Harkonnen troop, the mirrored slot bank);
+    // otherwise it links after the tail and takes the first free position
+    // from a 30-slot occupancy scan (Harkonnen troops scan from slot 9).
+    fn troop_link_into_location(&mut self, ti: usize, li: usize) {
+        let id = self.troops[ti].troop_id;
+        let harkonnen = self.troops[ti].bitfield_10 & 0x80 != 0;
+        // = seg000:8521..853f the empty chain.
+        let head = self.locations[li].troop_id;
+        if head == 0 {
+            self.locations[li].troop_id = id;
+            self.troops[ti].position = if harkonnen { 9 } else { 1 };
+            return;
+        }
+        // = seg000:8540..8565 the occupancy bitmap over the chain, tracking
+        //   the tail.
+        let mut used = [false; 0x1e];
+        let mut cur = head;
+        let tail = loop {
+            let t = &self.troops[(cur - 1) as usize];
+            let p = t.position as usize;
+            if (1..=0x1e).contains(&p) {
+                used[p - 1] = true;
+            }
+            if t.next_troop_id == 0 {
+                break cur;
+            }
+            cur = t.next_troop_id;
+        };
+        // = seg000:8567 link after the tail.
+        self.troops[(tail - 1) as usize].next_troop_id = id;
+        // = seg000:856a..8588 the first free slot; Harkonnen troops scan the
+        //   mirrored bank (9..30). A full bank falls out at position 0x1e.
+        let start = if harkonnen { 8 } else { 0 };
+        let position = (start..0x1e)
+            .find(|&k| !used[k])
+            .map_or(0x1e, |k| k as u8 + 1);
+        self.troops[ti].position = position;
+    }
+
+    // = seg000:85cc troop_location_085cc — a non-Harkonnen troop that landed
+    // in the Harkonnen slot bank (position > 8) re-rolls: unlink it, remove
+    // the chain's first captured non-Harkonnen troop from play to free a
+    // slot, and assign a position again.
+    fn troop_fix_position_bank(&mut self, ti: usize, li: usize) {
+        // = seg000:85cc..85d7 the gates.
+        if self.troops[ti].bitfield_10 & 0x80 != 0 || self.troops[ti].position <= 8 {
+            return;
+        }
+        // = seg000:85d9 call troop_unlink_from_location_chain.
+        self.troop_unlink_from_location_chain(ti);
+        // = seg000:85dd..85fc the first non-Harkonnen captured troop
+        //   (bitfield_10 bit 7 clear, occupation bit 5) leaves play.
+        let mut id = self.locations[li].troop_id;
+        while id != 0 {
+            let tj = (id - 1) as usize;
+            id = self.troops[tj].next_troop_id;
+            if self.troops[tj].bitfield_10 & 0x80 == 0 && self.troops[tj].occupation & 0x20 != 0 {
+                self.troop_remove_from_play(tj);
+                break;
+            }
+        }
+        // = seg000:8600 assign a position again.
+        self.troop_link_into_location(ti, li);
+    }
+
+    // = seg000:858c troop_unlink_from_location_chain — take the troop out of
+    // its location's chain (the head moves to its next, a middle entry's
+    // predecessor takes it) and clear its next id. A still-moving troop
+    // (occupation bit 6) is not in any chain.
+    pub(crate) fn troop_unlink_from_location_chain(&mut self, ti: usize) {
+        let id = self.troops[ti].troop_id;
+        let li = locations::location_index_from_ptr(self.troops[ti].offset_of_location);
+        if self.troops[ti].occupation & 0x40 == 0 {
+            if self.locations[li].troop_id == id {
+                // = seg000:85c2 the head.
+                self.locations[li].troop_id = self.troops[ti].next_troop_id;
+            } else {
+                // = seg000:85a4..85b7 the predecessor walk.
+                let mut cur = self.locations[li].troop_id;
+                while cur != 0 {
+                    let tj = (cur - 1) as usize;
+                    cur = self.troops[tj].next_troop_id;
+                    if cur == id {
+                        self.troops[tj].next_troop_id = self.troops[ti].next_troop_id;
+                        break;
+                    }
+                }
+            }
+        }
+        // = seg000:85ba/85bc.
+        self.troops[ti].next_troop_id = 0;
+    }
+
+    // = seg000:66b1 troop_remove_from_play — unlink the troop, drop its map
+    // icon, and park it at the troops-table terminator sentinel: gone from
+    // the game but still a record.
+    pub(crate) fn troop_remove_from_play(&mut self, ti: usize) {
+        self.troop_unlink_from_location_chain(ti);
+        if let Some(icon) = self.troop_find_icon(ti) {
+            self.troop_icon_remove(icon);
+        }
+        // = seg000:66c0..66c9 the location word points at troops[67]+1
+        //   (seg001:0fbc) — NOT a valid location record; occupation 0xa0
+        //   keeps every walk away from it, so nothing converts the sentinel
+        //   back to an index.
+        self.troops[ti].offset_of_location = 0x0fbc;
+        self.troops[ti].occupation = 0xa0;
+        self.troops[ti].population = 0;
+    }
+
+    // = seg000:7f5f troop_location_register_troop_equipment_into_location_
+    // equipment — fold the troop's held-equipment bits into the location's
+    // equipment counts (bit 7 = harvesters .. bit 1 = bulbs).
+    fn troop_register_equipment_into_location(&mut self, ti: usize, li: usize) {
+        let eq = self.troops[ti].equipment;
+        for slot in 0..7 {
+            if eq & (0x80 >> slot) != 0 {
+                let s = self.locations[li].equipment.slot_mut(slot);
+                *s = s.wrapping_add(1);
+            }
+        }
+    }
+
+    // = seg000:83fd troop_location_083fd (+ callback_troop_08403) — the
+    // arrival notification for the location's hired residents: spice miners
+    // stop working, captured troops and those already defending are left
+    // alone, everyone else switches to occupation 6 (defending).
+    fn troop_location_notify_residents(&mut self, li: usize) {
+        self.for_each_hired_troop_in_location(li, |s, tj| {
+            let occ = s.troops[tj].occupation;
+            if occ & 0x20 != 0 {
+                return;
+            }
+            match occ & 0x0f {
+                1 => s.troop_make_stop_working(tj),
+                6 => {}
+                _ => s.troop_set_occupation(tj, 6),
+            }
+        });
+    }
+
+    // = seg000:841f loc_0841f — the turn-around arrival (occupation low bits
+    // 11b at a hostile location): away from home the troop picks up the
+    // equipment it came for (the +0x0e word: slot low, troop equipment bit
+    // high; only while the location has a free unit) and re-targets home
+    // (+0x0c); at home it drops the mission bits and settles.
+    fn troop_turn_around_home(&mut self, ti: usize) {
+        let home = self.troops[ti].harvest_rate;
+        let dest = self.troops[ti].offset_of_location;
+        if dest != home {
+            let li = locations::location_index_from_ptr(dest);
+            // = seg000:8428 refresh the location's free equipment.
+            self.compute_location_available_equipment(li);
+            // = seg000:842c..8442 take a free unit: the location loses one,
+            //   the troop gains the equipment bit, the word's high byte
+            //   clears (consumed).
+            let word = self.troops[ti].harvest_total;
+            let slot = (word & 0xff) as usize;
+            if slot < 7 && self.available_equipment.slot(slot) != 0 {
+                let s = self.locations[li].equipment.slot_mut(slot);
+                *s = s.wrapping_sub(1);
+                self.troops[ti].equipment |= (word >> 8) as u8;
+                self.troops[ti].harvest_total = word & 0xff;
+            }
+            // = seg000:8445..844b head home.
+            self.troops[ti].offset_of_location = home;
+            self.troop_refresh_icon(ti);
+        } else {
+            // = seg000:844d..8451 home: drop the mission bits and settle.
+            self.troops[ti].occupation &= 0xfc;
+            self.troop_settle_into_location(ti);
+        }
+    }
+}
+
 impl GameState {
     // = seg000:66ce troop_rally_troop_066ce — rally the chief's troop to the
     // Atreides cause. Only an un-rallied Fremen troop qualifies (occupation
@@ -2427,6 +2883,80 @@ mod tests {
     use std::sync::mpsc;
 
     use crate::{GameState, dat_file::DatFile};
+
+    // A moving troop (occupation bit 6) travels toward its destination one
+    // period at a time (seg000:8308, 8 sub-steps with an ornithopter) and on
+    // arrival settles into the location (seg000:8357/83bc): chained in, a
+    // position slot assigned, the moving bit dropped, its equipment folded
+    // into the location and the occupation re-initialized. Asset-gated:
+    //   cargo test -p dune --bin dune -- --ignored troop_moves
+    #[test]
+    #[ignore = "needs assets/DUNE.DAT"]
+    fn troop_moves_across_the_map_and_settles() {
+        let dat_path = concat!(env!("CARGO_MANIFEST_DIR"), "/../../assets/DUNE.DAT");
+        let Ok(dat_file) = DatFile::open(dat_path) else {
+            eprintln!("skipping: {dat_path} not found");
+            return;
+        };
+        let (tx, rx) = mpsc::sync_channel(64);
+        let mut game = GameState::new(dat_file, tx);
+        game.set_headless();
+        game.start(true);
+        while rx.try_recv().is_ok() {}
+
+        // An Atreides-held destination with an empty troop chain.
+        let li = 20;
+        game.locations[li].appearance = 0x28;
+        game.locations[li].status = 0x08;
+        game.locations[li].troop_id = 0;
+        let dest_ptr = crate::locations::location_ptr_from_index(li);
+        let (mx, my) = (game.locations[li].map_x, game.locations[li].map_y);
+        // Troop 1: moving (bit 6) toward it, class 2 (awaiting orders), an
+        // ornithopter aboard (8 sub-steps per period), starting 40 latitude
+        // rows south on the destination's meridian.
+        let ti = 0;
+        game.troops[ti].occupation = 0x42;
+        game.troops[ti].bitfield_10 = 0;
+        game.troops[ti].dissatisfaction_and_speech = 0;
+        game.troops[ti].equipment = 0x40;
+        game.troops[ti].offset_of_location = dest_ptr;
+        game.troops[ti].gps_coordinates_1 = mx as u16;
+        game.troops[ti].gps_coordinates_2 = my.wrapping_sub(40) as u16;
+        let orni_before = game.locations[li].equipment.ornithopters;
+
+        // One period: 8 rows closer, still en route.
+        game.run_events_for_n_time_periods(1);
+        assert_eq!(
+            game.troops[ti].gps_coordinates_2,
+            my.wrapping_sub(32) as u16,
+            "8 latitude rows per period with an ornithopter"
+        );
+        assert_ne!(game.troops[ti].occupation & 0x40, 0, "still moving");
+
+        // Four more periods reach the arrival radius (|dlat| < 7) and settle.
+        game.run_events_for_n_time_periods(4);
+        while rx.try_recv().is_ok() {}
+        assert_eq!(game.troops[ti].occupation, 2, "settled, moving bit gone");
+        assert_eq!(
+            (
+                game.troops[ti].gps_coordinates_1,
+                game.troops[ti].gps_coordinates_2
+            ),
+            (mx as u16, my as u16),
+            "the gps snapped onto the location"
+        );
+        assert_eq!(
+            game.locations[li].troop_id, game.troops[ti].troop_id,
+            "chained in as the head"
+        );
+        assert_eq!(game.troops[ti].next_troop_id, 0);
+        assert_eq!(game.troops[ti].position, 1, "the first free slot");
+        assert_eq!(
+            game.locations[li].equipment.ornithopters,
+            orni_before + 1,
+            "the ornithopter folded into the location"
+        );
+    }
 
     // One time period of spice mining (seg000:6fe5): the troop's running total
     // grows by this period's rate, a tenth of it reaches the player's stock

@@ -12,6 +12,12 @@ pub(crate) fn location_ptr(index: u16) -> u16 {
     LOCATION_PTR_BASE + LOCATION_RECORD_SIZE * index
 }
 
+// = the inverse of location_index_from_ptr: a locations[] index back into
+// the DOS record-pointer encoding.
+pub(crate) fn location_ptr_from_index(index: usize) -> u16 {
+    LOCATION_PTR_BASE + index as u16 * LOCATION_RECORD_SIZE
+}
+
 pub(crate) fn location_index_from_ptr(ptr: u16) -> usize {
     ((ptr - LOCATION_PTR_BASE) / LOCATION_RECORD_SIZE) as usize
 }
@@ -25,6 +31,38 @@ pub struct Equipment {
     pub weirding_modules: u8,
     pub atomics: u8,
     pub bulbs: u8,
+}
+
+impl Equipment {
+    // = the DOS equipment row layout (Location +0x14..+0x1a and the
+    // seg001:46fe availability buffer): slot 0 = harvesters .. 6 = bulbs,
+    // for the sites that index the row by slot number.
+    pub(crate) fn slot(&self, slot: usize) -> u8 {
+        *[
+            &self.harvesters,
+            &self.ornithopters,
+            &self.krys_knives,
+            &self.laser_guns,
+            &self.weirding_modules,
+            &self.atomics,
+            &self.bulbs,
+        ][slot]
+    }
+
+    pub(crate) fn slot_mut(&mut self, slot: usize) -> &mut u8 {
+        [
+            &mut self.harvesters,
+            &mut self.ornithopters,
+            &mut self.krys_knives,
+            &mut self.laser_guns,
+            &mut self.weirding_modules,
+            &mut self.atomics,
+            &mut self.bulbs,
+        ]
+        .into_iter()
+        .nth(slot)
+        .unwrap()
+    }
 }
 
 #[derive(Clone, Copy)]

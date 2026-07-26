@@ -390,14 +390,76 @@ pub struct GameState {
     // in spice_harvest_remainder.
     pub(crate) spice_in_stock: u16,
 
-    // = seg001:00ac data_000ac — total population of the allegiance-flagged
-    // troops (the loc_0c049 scan sums troop byte +0x1a into ds:ac for troops
-    // with byte +0x10 bit 0x80, else into ds:aa); static init 0x1b58 (7000).
-    // Gates the Fremen WORK WITH ME charisma check (seg000:95c4). Its
-    // updaters — loc_0c02e from the new-day tick (seg000:1ca0) and the
-    // CHOAM/globe stats path (seg000:bee0) — are not yet ported, so the
-    // value keeps the DOS static initial.
+    // = seg001:00a2/00a4 for_condit_area_controlled_by_Atreides/Harkonnen —
+    // the map-wide territory percentages compute_area_controlled_percentages
+    // (seg000:bfe3) derives from the vegetation-stage bits each new day.
+    pub(crate) area_controlled_by_atreides: u16,
+    pub(crate) area_controlled_by_harkonnen: u16,
+
+    // = seg001:00a6 for_condit_todays_spice_production_ds_a6 — today's spice
+    // production: stock + spice_spent_today - stock_at_last_new_day, clamped
+    // at 0 (seg000:1c6e); recompute_condit_statistics keeps the running max
+    // within the day.
+    pub(crate) todays_spice_production: u16,
+
+    // = seg001:00a8 for_condit_potential_spice_harvest_ds_a8 — sum of
+    // spice_density/8 over Atreides locations + rand_iterated(sum/16)
+    // (seg000:1cda).
+    pub(crate) potential_spice_harvest: u16,
+
+    // = seg001:00aa data_000aa — total population of the troops that are
+    // neither Harkonnen nor captured/unrallied (the recompute_condit_
+    // statistics scan, seg000:c049).
+    pub(crate) data_000aa: u16,
+
+    // = seg001:00ac data_000ac — total population of the Harkonnen-flagged
+    // troops (the seg000:c049 scan sums troop byte +0x1a into ds:ac for
+    // troops with byte +0x10 bit 0x80, else into ds:aa); static init 0x1b58
+    // (7000). Gates the Fremen WORK WITH ME charisma check (seg000:95c4).
+    // recompute_condit_statistics refreshes it each new day.
     pub(crate) data_000ac: u16,
+
+    // = seg001:00ae for_condit_previous_day_spice_production_ds_ae — the
+    // previous day's production total, exchanged out by the new-day hook
+    // (seg000:1c87) to derive the better/lower pair.
+    pub(crate) previous_day_spice_production: u16,
+
+    // = seg001:00b0/00b2 for_condit_spice_production_better/lower_than_
+    // previous_day — |production - previous|, one of the pair, the other 0
+    // (seg000:1c96).
+    pub(crate) spice_production_better_than_previous_day: u16,
+    pub(crate) spice_production_lower_than_previous_day: u16,
+
+    // = seg001:00bc/00be/00bf the Emperor's spice-shipment demand state:
+    // ds:bc the demanded quantity, ds:be the fulfilment fraction (bit 7 =
+    // none paid), ds:bf the flags (bit 7 = the shipment plot armed, bit 4 =
+    // a demand pending). actions_time_in_day_3 (seg000:20a4) rolls the
+    // demands; the payment flow (Duncan/CHOAM dialogue) is unported.
+    pub(crate) spice_shipment_quantity: u16,
+    pub(crate) spice_shipment_fulfilment: u8,
+    pub(crate) spice_shipment_flags: u8,
+
+    // = seg001:00c2 final_attack_stage_ds_c2 — the endgame attack-on-the-
+    // Harkonnen staging counter; from stage 7 the per-period troop and
+    // location event walks stop (seg000:1b5e). The endgame that advances it
+    // is unported.
+    pub(crate) final_attack_stage: u8,
+
+    // = seg001:00c3 spice_shipment_sequence_number_ds_c3 — counts the
+    // Emperor's demands; the quantity formula scales with it (seg000:20d2).
+    pub(crate) spice_shipment_sequence_number: u8,
+
+    // = seg001:00c4 number_of_sietches_attacked_by_Harkonnen_ds_c4.
+    pub(crate) number_of_sietches_attacked_by_harkonnen: u8,
+
+    // = seg001:00cf days_left_until_spice_shipment — the CONDIT day counter
+    // actions_time_in_day_3 maintains while a demand date is ahead.
+    pub(crate) days_left_until_spice_shipment: u8,
+
+    // = seg001:00d5 contact_distance_related_ds_d5 — incremented once per
+    // day, but only stored back from 2 up (seg000:1c62), so it stays at its
+    // initial value until something else moves it to 1.
+    pub(crate) contact_distance_related_ds_d5: u8,
 
     // = seg001:00c5 person_marker_base — random base offset for arranging the
     // people standing in a room. Set to rand() at room setup (the arrival
@@ -428,8 +490,9 @@ pub struct GameState {
     // (0x19..0x24) of the bookmarked page's video, 0 when the page has none.
     pub(crate) book_page_video_id: u16,
 
-    // = seg001:00c8 data_000c8 — the smuggler-present flag for the smuggler-room
-    // command verbs (build_room_command_records, bl==0x80 && dl==8). Inits to 0.
+    // = seg001:00c8 data_000c8 — DOS's comm_sighting_count byte, kept in
+    // step with comm_sightings (comm_add_person_sighting); the COMM-room
+    // verbs read it (build_room_command_records, dl==8). Inits to 0.
     pub(crate) data_000c8: u8,
 
     // = seg001:00c8 comm_sighting_count + seg001:1179 comm_sighting_list —
@@ -461,6 +524,27 @@ pub struct GameState {
     // desert.
     pub(crate) desert_walk_counter: u8,
 
+    // = seg001:00f5 for_condit_desert_walk_related_ds_f5 — cleared with the
+    // counter when the per-period countdown drops below 0x10 (seg000:1b36);
+    // Jessica's desert dialogue reads it.
+    pub(crate) for_condit_desert_walk_ds_f5: u8,
+
+    // = seg001:00f8 number_of_locations_with_illness / seg001:00f9
+    // Chani_troop_illness_cure_progress / seg001:11db PTR_Location_latest_
+    // location_with_illness — the phase-5c/5d illness-cure subplot state:
+    // the picker (seg000:1e43) makes the strongest non-fortress ill, Chani
+    // parked there advances the cure by 8 per period until it wraps to 0
+    // (seg000:1eda). The latest-ill pointer keeps the DOS location-ptr
+    // encoding (0 = none).
+    pub(crate) number_of_locations_with_illness: u8,
+    pub(crate) chani_troop_illness_cure_progress: u8,
+    pub(crate) latest_location_with_illness: u16,
+
+    // = seg001:00fe game_phase_copy_ds_fe — the new-day hook's copy of
+    // game_phase; a mismatch resets days_since_last_game_phase_change
+    // (seg000:1c46).
+    pub(crate) game_phase_copy_ds_fe: u8,
+
     // = seg001:00fb data_000fb — toggle between the room/dialogue view and the
     // globe/map view (static init 0xff). ui_toggle_room_view negs it each call:
     // a non-negative result shows the room view, a negative one the map.
@@ -473,8 +557,8 @@ pub struct GameState {
 
     // = seg001:00ff number_of_days_since_last_game_phase_change_ds_ff — zeroed
     // on every phase change (the event-0x0b callback and
-    // set_game_phase_and_trigger_callbacks); the day-change hook that
-    // increments it (seg000:1c46) is not yet ported.
+    // set_game_phase_and_trigger_callbacks) and incremented by the new-day
+    // hook (run_events_new_day, seg000:1c46).
     pub(crate) days_since_last_game_phase_change: u8,
 
     // = seg001:0100 locations.
@@ -512,6 +596,18 @@ pub struct GameState {
     // prepare_location_data_for_condit.
     pub(crate) location_condit: crate::troops::LocationCondit,
 
+    // = seg001:11d3 ARRAY_PTR_Location_prospector_destinations — the
+    // prospector troop's (troops[2]) queue of destination location ptrs;
+    // its arrival at the head shifts the queue (seg000:8347). The FIND
+    // PROSPECTORS flow that fills it is not yet ported.
+    pub(crate) prospector_destinations: [u16; 4],
+
+    // = seg001:11ce data_011ce — the locations[] index whose CONDIT block is
+    // currently staged (prepare_location_data_for_condit records it; static
+    // init 0x100 = locations[0]). The event scheduler re-stages it after the
+    // per-period events may have staged other locations (seg000:1b85).
+    pub(crate) condit_staged_location: usize,
+
     // = seg001:114e current_location_ptr — the locations[] index of the
     // location the player is currently inside. Recomputed on every scene open
     // (loc_008f0, the port's draw_location_room) and set on walk-in arrival
@@ -533,14 +629,48 @@ pub struct GameState {
     pub(crate) companion_1: i16,
     pub(crate) companion_2: i16,
 
-    // = seg001:1154 data_01154 — game_time snapshot taken by the phase-0x2c
-    // (met Stilgar) callback; the time-of-day event pump reads it
-    // (seg000:1f6e, unported).
-    pub(crate) data_01154: u16,
+    // = seg001:1154 harkonnen_raids_armed_after_game_time — game_time
+    // snapshot taken by the phase-0x2c (met Stilgar) callback; the raid
+    // scheduler (actions_time_in_day_4, seg000:1f6e) arms once game_time has
+    // passed it by 0x70.
+    pub(crate) harkonnen_raids_armed_after_game_time: u16,
 
-    // = seg001:1156 data_01156 — an in-game-day deadline (day + 3) armed by
-    // the phase-0x5c callback; its reader is unported.
-    pub(crate) data_01156: u16,
+    // = seg001:1156 illness_plot_armed_after_ingame_day — an in-game-day
+    // deadline (day + 3) armed by the phase-0x5c callback; the illness
+    // picker (seg000:1e43) fires from that day on.
+    pub(crate) illness_plot_armed_after_ingame_day: u16,
+
+    // = seg001:1170 spice_stock_at_last_new_day / seg001:1172
+    // spice_spent_today — the new-day production diff pair (seg000:1c6e):
+    // production = stock + spent - stock at last new day. Smuggler purchases
+    // and shipments add what they deduct from the stock to ds:1172.
+    pub(crate) spice_stock_at_last_new_day: u16,
+    pub(crate) spice_spent_today: u16,
+
+    // = seg001:118d ingame_day_of_last_spice_shipment_event — the day the
+    // current shipment demand was rolled; the day-3 action measures the
+    // reminder/consequence days from it.
+    pub(crate) ingame_day_of_last_spice_shipment_event: u16,
+
+    // = seg001:11bb data_011bb — the unpaid-shipment flag: nonzero routes
+    // the day-3 action straight to the room-screen type-7 consequence
+    // (seg000:20bc). Its writers (the payment flow) are unported.
+    pub(crate) spice_shipment_unpaid: u8,
+
+    // = seg001:11bc harkonnen_raid_suppress_once — nonzero suppresses the
+    // next raid check; consumed (cleared) by actions_time_in_day_4
+    // (seg000:1f83).
+    pub(crate) harkonnen_raid_suppress_once: u8,
+
+    // = seg000:65b4 ecology_lfsr_state — the persistent 16-bit LFSR state
+    // (taps 0x402, static init 1) of the daily vegetation-promotion walk
+    // (seg000:65b6).
+    pub(crate) ecology_lfsr_state: u16,
+
+    // = seg001:10d8 smugglers — the six smuggler inventories (region,
+    // haggling, stock and prices); the new-day hook restocks them
+    // (seg000:1cae).
+    pub(crate) smugglers: [crate::smugglers::Smuggler; 6],
 
     // = seg001:1178 number_of_rallied_troops_for_Leto_being_killed — the
     // rallied-troop threshold armed by the phase-0x48 (met Chani) callback
@@ -947,10 +1077,24 @@ pub struct GameState {
     // cleared back to 0 by map_screen_cleanup for the plain room view.
     pub(crate) data_046eb: u8,
 
-    // = seg001:46ec data_046ec — bumped when a mining troop eats through more
-    // than the spice-density overlay's current shade while that overlay is up
-    // (data_046eb bit 6), so it repaints.
+    // = seg001:46da data_046da — nonzero while the WAIT-verb / travel event
+    // pump (run_events_for_n_time_periods) owns the screen; the scheduler's
+    // refresh tail skips the room redraw while it is set (seg000:1bbf).
+    pub(crate) events_pump_active: u8,
+
+    // = seg001:46ec data_046ec — the map-view dirty counter: bumped when a
+    // mining troop eats through more than the spice-density overlay's
+    // current shade while that overlay is up (data_046eb bit 6), and by the
+    // daily vegetation promotion while the full map is up (seg000:65fe);
+    // the scheduler's refresh tail consumes it via
+    // map_view_refresh_after_events (seg000:1b97).
     pub(crate) spice_density_overlay_dirty: u8,
+
+    // = seg001:473b data_0473b — the scheduler tail's room-redraw request
+    // (seg000:1ba9): bit 7 = re-present the whole room screen (dismissing
+    // stacked overlays), else nonzero = draw_room_game_screen; cleared by
+    // the tail (seg000:1bb2).
+    pub(crate) room_redraw_request: u8,
 
     // = seg001:46ed _word_23B9D_current_main_view_drawing_function — the
     // installed main-view redraw the map/globe dispatch sites call
@@ -1743,12 +1887,44 @@ impl GameState {
             data_0001b: 0,
             pending_room_action: 0,
             spice_in_stock: 0,
+            area_controlled_by_atreides: 0,
+            area_controlled_by_harkonnen: 0,
+            todays_spice_production: 0,
+            potential_spice_harvest: 0,
+            data_000aa: 0,
             data_000ac: 0x1b58,
+            previous_day_spice_production: 0,
+            spice_production_better_than_previous_day: 0,
+            spice_production_lower_than_previous_day: 0,
+            spice_shipment_quantity: 0,
+            spice_shipment_fulfilment: 0,
+            spice_shipment_flags: 0,
+            final_attack_stage: 0,
+            spice_shipment_sequence_number: 0,
+            number_of_sietches_attacked_by_harkonnen: 0,
+            days_left_until_spice_shipment: 0,
+            contact_distance_related_ds_d5: 0,
             number_of_sietches_visited: 0,
             number_of_rallied_troops: 0,
             number_of_rallied_troops_for_leto_killed: 0xff,
-            data_01154: 0,
-            data_01156: 0,
+            // = seg001:1154/1156 both static init 0xffff — disarmed until
+            // their phase callbacks stamp them.
+            harkonnen_raids_armed_after_game_time: 0xffff,
+            illness_plot_armed_after_ingame_day: 0xffff,
+            spice_stock_at_last_new_day: 0,
+            spice_spent_today: 0,
+            ingame_day_of_last_spice_shipment_event: 0,
+            spice_shipment_unpaid: 0,
+            harkonnen_raid_suppress_once: 0,
+            ecology_lfsr_state: 1,
+            smugglers: crate::smugglers::SMUGGLERS,
+            for_condit_desert_walk_ds_f5: 0,
+            number_of_locations_with_illness: 0,
+            chani_troop_illness_cure_progress: 0,
+            latest_location_with_illness: 0,
+            game_phase_copy_ds_fe: 0,
+            events_pump_active: 0,
+            room_redraw_request: 0,
             vision_messages: Vec::new(),
             comm_sightings: Vec::new(),
             scene_records: crate::room_scene::SCENE_RECORDS,
@@ -1783,6 +1959,8 @@ impl GameState {
             vegetation_started_on_dune: 0,
             troop_condit: Default::default(),
             location_condit: Default::default(),
+            prospector_destinations: [0; 4],
+            condit_staged_location: 0,
             current_location_index: 0xffff,
             last_location_index: 0,
             companion_1: -1,
@@ -2548,14 +2726,18 @@ impl GameState {
     // = seg000:0fd9 run_events_for_n_time_periods — advance the game clock by
     // `count` time periods, firing one period of scheduled events per step. Used
     // by the WAIT verbs (seg000:0f95) and the travel step clock (seg000:4b4a).
-    // DOS marks the pump active with [46da]=1 for the duration; that guard is
-    // only read by run_events_for_current_time_period (seg000:1bbf/1bdc), which
-    // is not yet ported, so it is not modelled here.
+    // [46da] = 1 marks the pump active for the duration; the scheduler's
+    // refresh tail (seg000:1bbf/1bdc) skips the room redraw while it is set —
+    // the pump's caller presents once at the end instead.
     pub(crate) fn run_events_for_n_time_periods(&mut self, count: i16) {
+        // = seg000:0fd9 data_046da = 1.
+        self.events_pump_active = 1;
         // = seg000:0fde call reset_game_suspend — the pump runs the clock.
         self.reset_game_suspend();
-        // = seg000:0fe1 or cx,cx; jle — nothing to do for a non-positive count.
+        // = seg000:0fe1 or cx,cx; jle — nothing to do for a non-positive
+        //   count (loc_01005 still clears the pump flag).
         if count <= 0 {
+            self.events_pump_active = 0;
             return;
         }
         for _ in 0..count {
@@ -2573,54 +2755,8 @@ impl GameState {
             self.new_time_period_pending = 1;
             self.run_events_for_current_time_period();
         }
-    }
-
-    // = seg000:1b23 run_events_for_current_time_period — fire the scheduled
-    // events for the current game_time (the per-time-of-day action tables, the
-    // new-day iteration over locations, the Chani-in-room check, ...). Consuming
-    // new_time_period_pending is modelled; the event dispatch itself is the game's
-    // core scheduler and is not yet ported.
-    pub(crate) fn run_events_for_current_time_period(&mut self) {
-        // = seg000:1b23 cmp [new_hour_flag],0; jz loc_01b0c — only refresh on a
-        //   newly-entered time period; the loc_01b0c path (no new period) is the
-        //   unported event-poll branch.
-        if self.new_time_period_pending == 0 {
-            return;
-        }
-        // = seg000:1b2a new_hour_flag = 0 — consume the flag.
-        self.new_time_period_pending = 0;
-        // = seg000:1b40 call loc_01a0f — repaint the date/time indicator for the
-        //   new time-of-day.
-        self.ui_redraw_date_and_time_indicator();
-        // = seg000:1b43 call loc_038e1 — cross-fade the sky to the new
-        //   time-of-day sub-palette if it changed. This arms the SkyFade frame
-        //   task (it does not step the palette here); the fade then runs in the
-        //   game loop *after* the caller's present. On a WAIT FOR EVENING/MORNING
-        //   skip this is the sky palette fade that follows the spiral transition:
-        //   run_events_for_n_time_periods advances game_time to evening (re-aiming
-        //   the fade target each period), the spiral reveals the room in the old
-        //   palette, then the SkyFade task morphs the sky to the new time-of-day.
-        self.loc_038e1_sky_refresh();
-        // = seg000:1b46..1b56 new_day_flag = the day part of game_time minus
-        //   the day part the last run saw (data_01174) — non-zero on the first
-        //   period of a new day, which the per-day troop and location hooks
-        //   read.
-        let previous = std::mem::replace(&mut self.last_event_game_time, self.game_time);
-        self.new_day_flag = (self.game_time as u8 & 0xf0).wrapping_sub(previous as u8 & 0xf0);
-        // = seg000:1b5b call run_events_for_current_time_period_new_day_01c46 —
-        //   the new-day hook. Not ported.
-        // = seg000:1b5e/1b63 cmp final_attack_stage_ds_c2,7; jnb loc_01bb2 —
-        //   from stage 7 of the final attack the troop and location walks stop
-        //   running. That stage counter (seg001:00c2) is not modelled, and the
-        //   port cannot reach the endgame yet, so the walk always runs. TODO.
-        // = seg000:1b65 call test_for_Chani_in_room_and_do_stuff_if_true — not
-        //   ported.
-        // = seg000:1b70 call run_troop_occupation_events — one period of every troop's
-        //   occupation: the spice mining accumulation is the ported part.
-        self.run_troop_occupation_events();
-        // TODO: the rest (seg000:1b73..1c45) — iterate_over_all_locations_upon_
-        // new_day, the time-of-day action tables at data_01db3 and
-        // prepare_location_data_for_condit — is not ported.
+        // = seg000:1005 data_046da = 0.
+        self.events_pump_active = 0;
     }
 
     // = seg000:390a drain_sky_fade — drain an in-flight sky cross-fade to completion,

@@ -46,6 +46,26 @@ fn condit_var_name(addr: u16) -> Option<(&'static str, bool)> {
         0x51 => ("location.status", false),
         0x52 => ("location.spice_density", false),
         0x54 => ("location.water", false),
+        0xa2 => ("area_controlled_by_atreides", true),
+        0xa4 => ("area_controlled_by_harkonnen", true),
+        0xa6 => ("todays_spice_production", true),
+        0xa8 => ("potential_spice_harvest", true),
+        0xaa => ("data_000aa", true),
+        0xae => ("previous_day_spice_production", true),
+        0xb0 => ("spice_production_better_than_previous_day", true),
+        0xb2 => ("spice_production_lower_than_previous_day", true),
+        0xbc => ("spice_shipment_quantity", true),
+        0xbe => ("spice_shipment_fulfilment", false),
+        0xbf => ("spice_shipment_flags", false),
+        0xc2 => ("final_attack_stage", false),
+        0xc3 => ("spice_shipment_sequence_number", false),
+        0xc4 => ("number_of_sietches_attacked_by_harkonnen", false),
+        0xcf => ("days_left_until_spice_shipment", false),
+        0xd5 => ("contact_distance_related_ds_d5", false),
+        0xf5 => ("for_condit_desert_walk_ds_f5", false),
+        0xf8 => ("number_of_locations_with_illness", false),
+        0xf9 => ("chani_troop_illness_cure_progress", false),
+        0xfe => ("game_phase_copy_ds_fe", false),
         0x25 => ("number_of_sietches_visited", false),
         0x26 => ("entering_new_sietch", false),
         0x27 => ("discovered_sietch_count", false),
@@ -146,11 +166,22 @@ impl GameState {
             0x53 => self.location_condit.unused_equipment,
             0x54 => self.location_condit.water,
             0x55..=0x5b => self.location_condit.equipment[(addr - 0x55) as usize],
+            // = seg001:00be/00bf the spice-shipment fulfilment fraction and
+            // flags (events.rs).
+            0xbe => self.spice_shipment_fulfilment,
+            0xbf => self.spice_shipment_flags,
+            // = seg001:00c2 final_attack_stage_ds_c2.
+            0xc2 => self.final_attack_stage,
+            // = seg001:00c3 spice_shipment_sequence_number_ds_c3.
+            0xc3 => self.spice_shipment_sequence_number,
+            // = seg001:00c4 number_of_sietches_attacked_by_Harkonnen_ds_c4.
+            0xc4 => self.number_of_sietches_attacked_by_harkonnen,
             // = seg001:00c5 person_marker_base.
             0xc5 => self.person_marker_base,
             // = seg001:00c6 data_000c6.
             0xc6 => self.data_000c6,
-            // = seg001:00c8 data_000c8 — the smuggler-present flag.
+            // = seg001:00c8 data_000c8 — DOS's comm_sighting_count byte,
+            // kept in step with comm_sightings.
             0xc8 => self.data_000c8,
             // = seg001:00e1 data_000e1 — the fly-over side flag.
             0xe1 => self.data_000e1,
@@ -160,12 +191,23 @@ impl GameState {
             0xea => self.data_000ea as u8,
             // = seg001:00ed data_000ed — the overpower-captain condit byte.
             0xed => self.data_000ed,
+            // = seg001:00cf days_left_until_spice_shipment.
+            0xcf => self.days_left_until_spice_shipment,
+            // = seg001:00d5 contact_distance_related_ds_d5.
+            0xd5 => self.contact_distance_related_ds_d5,
             // = seg001:00f4 desert_walk_counter.
             0xf4 => self.desert_walk_counter,
+            // = seg001:00f5 for_condit_desert_walk_related_ds_f5.
+            0xf5 => self.for_condit_desert_walk_ds_f5,
+            // = seg001:00f8/00f9 the illness-plot counters (events.rs).
+            0xf8 => self.number_of_locations_with_illness,
+            0xf9 => self.chani_troop_illness_cure_progress,
             // = seg001:00fb room_view_toggle.
             0xfb => self.room_view_toggle,
             // = seg001:00fc data_000fc.
             0xfc => self.data_000fc,
+            // = seg001:00fe game_phase_copy_ds_fe.
+            0xfe => self.game_phase_copy_ds_fe,
             // = seg001:00ff number_of_days_since_last_game_phase_change_ds_ff.
             0xff => self.days_since_last_game_phase_change,
             _ => return None,
@@ -205,9 +247,22 @@ impl GameState {
             0x4e => self.location_condit.area_and_name,
             // = seg001:00a0 spice_in_stock — the player's spice.
             0xa0 => self.spice_in_stock,
+            // = seg001:00a2..00b2 the daily statistics block (events.rs).
+            0xa2 => self.area_controlled_by_atreides,
+            0xa4 => self.area_controlled_by_harkonnen,
+            0xa6 => self.todays_spice_production,
+            0xa8 => self.potential_spice_harvest,
+            // = seg001:00aa data_000aa — total population of the loyal
+            // troops.
+            0xaa => self.data_000aa,
             // = seg001:00ac data_000ac — total population of the
             // allegiance-flagged troops.
             0xac => self.data_000ac,
+            0xae => self.previous_day_spice_production,
+            0xb0 => self.spice_production_better_than_previous_day,
+            0xb2 => self.spice_production_lower_than_previous_day,
+            // = seg001:00bc spice_shipment_quantity.
+            0xbc => self.spice_shipment_quantity,
             // = seg001:00ee data_000ee — the overpower-captain condit word.
             0xee => self.data_000ee,
             _ => return None,

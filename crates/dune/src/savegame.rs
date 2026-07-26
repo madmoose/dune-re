@@ -318,21 +318,41 @@ impl GameState {
         b[0x0055..0x005c].copy_from_slice(&lc.equipment);
 
         w16(b, 0x00a0, self.spice_in_stock);
+        w16(b, 0x00a2, self.area_controlled_by_atreides);
+        w16(b, 0x00a4, self.area_controlled_by_harkonnen);
+        w16(b, 0x00a6, self.todays_spice_production);
+        w16(b, 0x00a8, self.potential_spice_harvest);
+        w16(b, 0x00aa, self.data_000aa);
         w16(b, 0x00ac, self.data_000ac);
+        w16(b, 0x00ae, self.previous_day_spice_production);
+        w16(b, 0x00b0, self.spice_production_better_than_previous_day);
+        w16(b, 0x00b2, self.spice_production_lower_than_previous_day);
+        w16(b, 0x00bc, self.spice_shipment_quantity);
+        w8(b, 0x00be, self.spice_shipment_fulfilment);
+        w8(b, 0x00bf, self.spice_shipment_flags);
+        w8(b, 0x00c2, self.final_attack_stage);
+        w8(b, 0x00c3, self.spice_shipment_sequence_number);
+        w8(b, 0x00c4, self.number_of_sietches_attacked_by_harkonnen);
         w8(b, 0x00c5, self.person_marker_base);
         w8(b, 0x00c6, self.data_000c6);
         // = seg001:00c8 — one byte in DOS: the comm sighting count (and the
         // comms-room "message queued" flag the port carries as data_000c8).
         w8(b, 0x00c8, self.comm_sightings.len() as u8);
+        w8(b, 0x00cf, self.days_left_until_spice_shipment);
+        w8(b, 0x00d5, self.contact_distance_related_ds_d5);
         w8(b, 0x00e1, self.data_000e1);
         w8(b, 0x00e8, self.ui_hud_head_index);
         w8(b, 0x00ea, self.data_000ea as u8);
         w8(b, 0x00ed, self.data_000ed);
         w16(b, 0x00ee, self.data_000ee);
         w8(b, 0x00f4, self.desert_walk_counter);
+        w8(b, 0x00f5, self.for_condit_desert_walk_ds_f5);
+        w8(b, 0x00f8, self.number_of_locations_with_illness);
+        w8(b, 0x00f9, self.chani_troop_illness_cure_progress);
         w8(b, 0x00fa, self.vegetation_started_on_dune);
         w8(b, 0x00fb, self.room_view_toggle);
         w8(b, 0x00fc, self.data_000fc);
+        w8(b, 0x00fe, self.game_phase_copy_ds_fe);
         w8(b, 0x00ff, self.days_since_last_game_phase_change);
 
         // = seg001:0100 locations[70], 0x1c bytes each.
@@ -397,7 +417,17 @@ impl GameState {
             w8(b, o + 0x0f, p.flags);
         }
 
-        // seg001:10d8 smugglers[6] — not yet ported, left zero.
+        // = seg001:10d8 smugglers[6].
+        for (k, s) in self.smugglers.iter().enumerate() {
+            let o = 0x10d8 + k * 0x11;
+            w8(b, o, s.region);
+            w8(b, o + 1, s.willingness_to_haggle);
+            w8(b, o + 2, s.field_2);
+            w8(b, o + 3, s.field_3);
+            b[o + 4..o + 9].copy_from_slice(&s.stock);
+            b[o + 9..o + 0xe].copy_from_slice(&s.prices);
+            b[o + 0xe..o + 0x11].copy_from_slice(&s.not_just_padding);
+        }
 
         w16(
             b,
@@ -411,8 +441,11 @@ impl GameState {
         );
         w8(b, 0x1152, self.companion_1 as u8);
         w8(b, 0x1153, self.companion_2 as u8);
-        w16(b, 0x1154, self.data_01154);
-        w16(b, 0x1156, self.data_01156);
+        w16(b, 0x1154, self.harkonnen_raids_armed_after_game_time);
+        w16(b, 0x1156, self.illness_plot_armed_after_ingame_day);
+        w16(b, 0x1170, self.spice_stock_at_last_new_day);
+        w16(b, 0x1172, self.spice_spent_today);
+        w16(b, 0x1174, self.last_event_game_time);
         w16(b, 0x1176, self.location_visibility_distance);
         w8(b, 0x1178, self.number_of_rallied_troops_for_leto_killed);
 
@@ -433,12 +466,25 @@ impl GameState {
         let log_len = self.dialogue_played_log.len().min(0x50) as u16;
         w16(b, 0x11bd, 0xaa + 2 * log_len);
 
+        w16(b, 0x118d, self.ingame_day_of_last_spice_shipment_event);
+        w8(b, 0x11bb, self.spice_shipment_unpaid);
+        w8(b, 0x11bc, self.harkonnen_raid_suppress_once);
+
         w16(b, 0x11c5, self.travel_destination_ptr);
         w8(b, 0x11c7, self.travel_heading);
         w8(b, 0x11c8, self.travel_heading_mode);
         w8(b, 0x11c9, self.game_screen_mode_flags);
         w8(b, 0x11cb, self.travel_no_location_dest);
         w16(b, 0x11cc, self.travel_step_accum);
+        w16(
+            b,
+            0x11ce,
+            location_ptr_from_index(self.condit_staged_location as u16),
+        );
+        for (k, ptr) in self.prospector_destinations.iter().enumerate() {
+            w16(b, 0x11d3 + 2 * k, *ptr);
+        }
+        w16(b, 0x11db, self.latest_location_with_illness);
 
         // = seg001:11eb string_subst_id_table (entries 1-2 double as
         // command_menu_x/y).
@@ -509,20 +555,40 @@ impl GameState {
         lc.equipment.copy_from_slice(&b[0x0055..0x005c]);
 
         self.spice_in_stock = r16(b, 0x00a0);
+        self.area_controlled_by_atreides = r16(b, 0x00a2);
+        self.area_controlled_by_harkonnen = r16(b, 0x00a4);
+        self.todays_spice_production = r16(b, 0x00a6);
+        self.potential_spice_harvest = r16(b, 0x00a8);
+        self.data_000aa = r16(b, 0x00aa);
         self.data_000ac = r16(b, 0x00ac);
+        self.previous_day_spice_production = r16(b, 0x00ae);
+        self.spice_production_better_than_previous_day = r16(b, 0x00b0);
+        self.spice_production_lower_than_previous_day = r16(b, 0x00b2);
+        self.spice_shipment_quantity = r16(b, 0x00bc);
+        self.spice_shipment_fulfilment = r8(b, 0x00be);
+        self.spice_shipment_flags = r8(b, 0x00bf);
+        self.final_attack_stage = r8(b, 0x00c2);
+        self.spice_shipment_sequence_number = r8(b, 0x00c3);
+        self.number_of_sietches_attacked_by_harkonnen = r8(b, 0x00c4);
         self.person_marker_base = r8(b, 0x00c5);
         self.data_000c6 = r8(b, 0x00c6);
         let comm_count = r8(b, 0x00c8);
         self.data_000c8 = comm_count;
+        self.days_left_until_spice_shipment = r8(b, 0x00cf);
+        self.contact_distance_related_ds_d5 = r8(b, 0x00d5);
         self.data_000e1 = r8(b, 0x00e1);
         self.ui_hud_head_index = r8(b, 0x00e8);
         self.data_000ea = r8(b, 0x00ea) as i8;
         self.data_000ed = r8(b, 0x00ed);
         self.data_000ee = r16(b, 0x00ee);
         self.desert_walk_counter = r8(b, 0x00f4);
+        self.for_condit_desert_walk_ds_f5 = r8(b, 0x00f5);
+        self.number_of_locations_with_illness = r8(b, 0x00f8);
+        self.chani_troop_illness_cure_progress = r8(b, 0x00f9);
         self.vegetation_started_on_dune = r8(b, 0x00fa);
         self.room_view_toggle = r8(b, 0x00fb);
         self.data_000fc = r8(b, 0x00fc);
+        self.game_phase_copy_ds_fe = r8(b, 0x00fe);
         self.days_since_last_game_phase_change = r8(b, 0x00ff);
 
         for (i, l) in self.locations.iter_mut().enumerate() {
@@ -580,12 +646,27 @@ impl GameState {
             p.flags = r8(b, o + 0x0f);
         }
 
+        // = seg001:10d8 smugglers[6].
+        for (k, s) in self.smugglers.iter_mut().enumerate() {
+            let o = 0x10d8 + k * 0x11;
+            s.region = r8(b, o);
+            s.willingness_to_haggle = r8(b, o + 1);
+            s.field_2 = r8(b, o + 2);
+            s.field_3 = r8(b, o + 3);
+            s.stock.copy_from_slice(&b[o + 4..o + 9]);
+            s.prices.copy_from_slice(&b[o + 9..o + 0xe]);
+            s.not_just_padding.copy_from_slice(&b[o + 0xe..o + 0x11]);
+        }
+
         self.current_location_index = location_index_from_ptr(r16(b, 0x114e));
         self.last_location_index = location_index_from_ptr(r16(b, 0x1150)) as usize;
         self.companion_1 = (r8(b, 0x1152) as i8) as i16;
         self.companion_2 = (r8(b, 0x1153) as i8) as i16;
-        self.data_01154 = r16(b, 0x1154);
-        self.data_01156 = r16(b, 0x1156);
+        self.harkonnen_raids_armed_after_game_time = r16(b, 0x1154);
+        self.illness_plot_armed_after_ingame_day = r16(b, 0x1156);
+        self.spice_stock_at_last_new_day = r16(b, 0x1170);
+        self.spice_spent_today = r16(b, 0x1172);
+        self.last_event_game_time = r16(b, 0x1174);
         self.location_visibility_distance = r16(b, 0x1176);
         self.number_of_rallied_troops_for_leto_killed = r8(b, 0x1178);
 
@@ -600,12 +681,21 @@ impl GameState {
                 .push((r16(b, 0x1191 + 4 * k), r16(b, 0x1193 + 4 * k)));
         }
 
+        self.ingame_day_of_last_spice_shipment_event = r16(b, 0x118d);
+        self.spice_shipment_unpaid = r8(b, 0x11bb);
+        self.harkonnen_raid_suppress_once = r8(b, 0x11bc);
+
         self.travel_destination_ptr = r16(b, 0x11c5);
         self.travel_heading = r8(b, 0x11c7);
         self.travel_heading_mode = r8(b, 0x11c8);
         self.game_screen_mode_flags = r8(b, 0x11c9);
         self.travel_no_location_dest = r8(b, 0x11cb);
         self.travel_step_accum = r16(b, 0x11cc);
+        self.condit_staged_location = location_index_from_ptr(r16(b, 0x11ce)) as usize;
+        for (k, ptr) in self.prospector_destinations.iter_mut().enumerate() {
+            *ptr = r16(b, 0x11d3 + 2 * k);
+        }
+        self.latest_location_with_illness = r16(b, 0x11db);
 
         for (k, id) in self.string_subst_id_table.iter_mut().enumerate() {
             *id = r16(b, 0x11eb + 2 * k);
