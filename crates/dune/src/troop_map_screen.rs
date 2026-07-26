@@ -17,7 +17,7 @@
 //! The CONTACT FREMEN TROOPS / GIVE ORDERS TO TROOP verb
 //! (menu_callback_choice_map_main_contact_fremen_troops) selects a troop, opens
 //! its contact verb menu (map_open_troop_contact_menu) and puts the contact
-//! dialogue strip up over the map (map_open_troop_contact_dialogue): a panel
+//! dialogue popup up over the map (map_open_troop_contact_dialogue): a panel
 //! opposite the troop's icon, the speaker's portrait re-anchored into the head
 //! box on the left (talking_head.rs draw_talking_head_in_box) and the troop's
 //! dialogue line, spoken and subtitled, on the right (the seg001:2244 subtitle
@@ -115,14 +115,14 @@ pub(crate) const MAP_POPUP_TROOP_INFO: u16 = 0x18df;
 pub(crate) const MAP_POPUP_LOCATION: u16 = 0x1668;
 
 /// = seg001:18e9 troop_contact_text_panel_record — the contact dialogue
-/// strip's panel record, frame colour 0xf5 (+8), fill 0xfb (+9). The record's
+/// popup's panel record, frame colour 0xf5 (+8), fill 0xfb (+9). The record's
 /// seg001 offset is the popup identity in map_popup_ptr.
 pub(crate) const MAP_POPUP_TROOP_CONTACT: u16 = 0x18e9;
 
 /// = the compiled-in rect of that record: (5,5)-(232,72). Only the y pair is
-/// rewritten per open (map_draw_troop_contact_strip picks the half of the
+/// rewritten per open (map_draw_troop_contact_popup picks the half of the
 /// screen the troop's icon is not in).
-pub(crate) const TROOP_CONTACT_STRIP_RECT: Rect = rect(5, 5, 232, 72);
+pub(crate) const TROOP_CONTACT_POPUP_RECT: Rect = rect(5, 5, 232, 72);
 
 /// = seg001:2244 — the contact subtitle's layout descriptor: 153x63, its
 /// origin written per open. subtitle_setup_layout picks it for every line
@@ -695,9 +695,9 @@ impl GameState {
         self.map_popup_anim_suppress = true;
         // = seg000:868a call loc_069a3 — remove the old highlight ring.
         self.map_remove_focused_troop_icon();
-        // = seg000:868d call map_close_troop_contact_strip — tear down the
-        //   previous troop's contact dialogue strip.
-        self.map_close_troop_contact_strip();
+        // = seg000:868d call map_close_troop_contact_popup — tear down the
+        //   previous troop's contact dialogue popup.
+        self.map_close_troop_contact_popup();
         // = seg000:8690/8693/8696 close the location popup menu (loc_05f79,
         //   not ported), the info panel (loc_079de) and the spice sub-mode
         //   (loc_058fa, not ported).
@@ -721,18 +721,18 @@ impl GameState {
         // = seg000:86ae call map_open_troop_contact_menu — the contact verb menu.
         self.map_open_troop_contact_menu(ti);
         // = seg000:86b2/86b5 di = the troop's location; call
-        //   map_open_troop_contact_dialogue — the strip and its first line.
+        //   map_open_troop_contact_dialogue — the popup and its first line.
         self.map_open_troop_contact_dialogue(ti);
     }
 
     // = seg000:7c02 map_open_troop_contact_dialogue — the contacted troop's
-    // dialogue: (re)build the strip over the map, stage its CONDIT block, then present one
+    // dialogue: (re)build the popup over the map, stage its CONDIT block, then present one
     // line into it (subtitle + voice). Re-entered for every further line the
     // contact menu's verbs ask for.
     pub(crate) fn map_open_troop_contact_dialogue(&mut self, ti: usize) {
-        // = seg000:7c02 call map_setup_troop_contact_strip — the strip,
+        // = seg000:7c02 call map_setup_troop_contact_popup — the popup,
         //   unless it is already up for this troop.
-        self.map_setup_troop_contact_strip(ti);
+        self.map_setup_troop_contact_popup(ti);
         // = seg000:7c05 call troop_prepare_troop_data_for_condit — stage the
         //   troop's block so the record's conditions can read it.
         self.troop_prepare_troop_data_for_condit(ti);
@@ -765,14 +765,14 @@ impl GameState {
         // = seg000:7c36 call loc_09efd — load and play the line's voice.
         self.play_dialogue_voc();
         // = seg000:7c3b data_046f4 = 0; 7c40..7c53 with the interrupt gate at
-        //   0x80 (a line whose event armed the equipment hand-over) the strip
+        //   0x80 (a line whose event armed the equipment hand-over) the popup
         //   also shows the equipment spinners: data_046f4 = 1,
         //   troop_unpack_equipment_flags, loc_07e1e. Not ported — the spinner
         //   panel and its two mouse handlers (loc_07e97/loc_07eb8) are the
         //   MODIFY EQUIPMENT verb's UI. TODO.
         // = seg000:7c56..7c5d on the map view (data_046eb bit 7) drop the
         //   bubble layout pointer without restoring under it (loc_09901): the
-        //   strip owns those pixels and takes them down itself.
+        //   popup owns those pixels and takes them down itself.
         if self.data_046eb & 0x80 != 0 {
             self.subtitle_bubble = None;
         }
@@ -998,12 +998,12 @@ impl GameState {
     // = seg000:7bb9 troop_present_reaction_line (+ loc_07bbe) — present one
     // dialogue line for the troop with `action` in pending_room_action, the code the line's
     // conditions read to pick the reaction. The line is spoken by the Fremen-2
-    // room person (0x0f), so on the map view it lands in the contact strip.
+    // room person (0x0f), so on the map view it lands in the contact popup.
     fn map_present_troop_reaction_line(&mut self, ti: usize, action: u8) {
         // = seg000:7bb9 call troop_prepare_troop_data_for_condit.
         self.troop_prepare_troop_data_for_condit(ti);
         // = seg000:7bbe/7bc2 data_046f1 = si; pending_room_action = al —
-        //   data_046f1 is what subtitle_setup_layout rebuilds the strip from.
+        //   data_046f1 is what subtitle_setup_layout rebuilds the popup from.
         self.map_contact_troop_pending = Some(ti);
         self.pending_room_action = action;
         // = seg000:7bc5 dialogue_resume_entry_ptr = 0 — the reaction starts at
@@ -1056,43 +1056,43 @@ impl GameState {
             .map(|_| (id - 1) as usize)
     }
 
-    // = seg000:7ba3 map_setup_troop_contact_strip — put the contact strip up
+    // = seg000:7ba3 map_setup_troop_contact_popup — put the contact popup up
     // for `ti`, unless it is already this troop's: a further line only
     // repaints the text.
-    fn map_setup_troop_contact_strip(&mut self, ti: usize) {
-        // = seg000:7ba3 call set_screen_as_active_framebuffer — the strip
+    fn map_setup_troop_contact_popup(&mut self, ti: usize) {
+        // = seg000:7ba3 call set_screen_as_active_framebuffer — the popup
         //   draws straight to the visible screen, over the map.
         self.set_screen_as_active_framebuffer();
         // = seg000:7ba6 cmp si,[data_046ef]; jz ret.
         if self.map_contact_troop == Some(ti) {
             return;
         }
-        // = seg000:7bad data_046f1 = si — the troop the strip is being built
+        // = seg000:7bad data_046f1 = si — the troop the popup is being built
         //   for, which subtitle_setup_layout rebuilds from.
         self.map_contact_troop_pending = Some(ti);
-        // = seg000:7bb1 call map_draw_troop_contact_strip.
-        self.map_draw_troop_contact_strip(ti);
+        // = seg000:7bb1 call map_draw_troop_contact_popup.
+        self.map_draw_troop_contact_popup(ti);
         // = seg000:7bb4 call loc_09f40 — the per-presentation setup. On the
         //   map view its only effect is the subtitle font (loc_09f82 below);
         //   the fb1 redirect and the in-room pads are gated on data_046eb == 0
-        //   and map_draw_troop_contact_strip set the strip's own pads.
+        //   and map_draw_troop_contact_popup set the popup's own pads.
         self.font_state.color = 0x00f0;
         self.font_select_tall_font();
     }
 
-    // = seg000:79ee map_draw_troop_contact_strip — draw the contact dialogue
-    // strip: a panel in the half of the screen the troop's icon is not in, with the head box on
+    // = seg000:79ee map_draw_troop_contact_popup — draw the contact dialogue
+    // popup: a panel in the half of the screen the troop's icon is not in, with the head box on
     // the left and the subtitle box on the right. Also reached from
     // subtitle_setup_layout (seg000:8cee) when a line is presented with no
-    // strip up.
-    pub(crate) fn map_draw_troop_contact_strip(&mut self, ti: usize) {
+    // popup up.
+    pub(crate) fn map_draw_troop_contact_popup(&mut self, ti: usize) {
         // = seg000:79ee data_046ef = si — the contact is live from here.
         self.map_contact_troop = Some(ti);
         // = seg000:79f2/79f8 call troop_find_icon; jnz loc_07a1e — without an
         //   icon on the map the record keeps whatever rect it last had.
-        let mut r = self.map_contact_strip_rect;
+        let mut r = self.map_contact_popup_rect;
         if let Some(icon) = self.troop_find_icon(ti) {
-            // = seg000:79fa..7a09 the strip goes opposite the icon: with the
+            // = seg000:79fa..7a09 the popup goes opposite the icon: with the
             //   icon in the lower half (y0 >= 76) at the top (y0 = 5), else at
             //   the bottom (y0 = 80). ax rides along as the occupation panel's
             //   y (data_04712).
@@ -1106,9 +1106,9 @@ impl GameState {
             //   readout (seg000:5c22) and the spice sub-mode. Neither is
             //   ported, so the rect is not modelled. TODO.
         }
-        self.map_contact_strip_rect = r;
-        // = seg000:7a1e map_popup_ptr = si — the strip is the open popup, so a
-        //   click inside it routes to the strip, not to the map.
+        self.map_contact_popup_rect = r;
+        // = seg000:7a1e map_popup_ptr = si — this popup becomes the open one,
+        //   so a click inside it routes here, not to the map.
         self.map_popup_ptr = MAP_POPUP_TROOP_CONTACT;
         // = seg000:7a22/7a24 al = 2; call loc_07b0f — data_046d8 = 0 then the
         //   panel's open effect (run_vga_effect al=2, the segvga effect
@@ -1117,7 +1117,7 @@ impl GameState {
         // = the panel fill (0xfb) + frame (0xf5) from the record.
         self.map_draw_panel_record(r, 0xfb, 0xf5);
         // = seg000:7a32..7a50 the subtitle descriptor's origin (the panel
-        //   origin + (0x49, 3)) and the strip's own text insets.
+        //   origin + (0x49, 3)) and the popup's own text insets.
         self.map_contact_subtitle_pos = (r.x0 + 0x49, r.y0 + 3);
         self.subtitle_pad_left = 0;
         self.subtitle_pad_right = 5;
@@ -1134,9 +1134,9 @@ impl GameState {
         self.open_onmap_spritesheet();
     }
 
-    // = seg000:7a6a..7b0c — the strip's talking head: pick the head the troop
+    // = seg000:7a6a..7b0c — the popup's talking head: pick the head the troop
     // speaks through, load its portrait sheet, and draw one frame into the
-    // strip's head box (inset one pixel, 0x3b square).
+    // popup's head box (inset one pixel, 0x3b square).
     fn map_draw_troop_contact_head(&mut self, ti: usize, head_box: Rect) {
         let troop = self.troops[ti];
         // = seg000:7a6e..7a80 a captured troop (occupation bit 5) at a
@@ -1173,10 +1173,10 @@ impl GameState {
         };
         // = seg000:7ac1..7acd si = data_022b9 + ax; the two words into
         //   data_046d2/046d4 — the anchor draw_head_image_group_in_box subtracts.
-        self.head_strip_anchor = crate::talking_head::strip_anchor(anchor);
+        self.head_popup_anchor = crate::talking_head::popup_anchor(anchor);
         // = seg000:7adc..7afd data_047d4 = the head box inset one pixel, 0x3b
         //   square — the draw origin and the clip.
-        self.head_strip_box = rect(
+        self.head_popup_box = rect(
             head_box.x0 + 1,
             head_box.y0 + 1,
             head_box.x0 + 1 + 0x3b,
@@ -1185,7 +1185,7 @@ impl GameState {
         // = seg000:7ad9/7b02 si = the animation's first frame; call draw_talking_head_in_box.
         self.draw_talking_head_in_box(anim, 0);
         // = seg000:7b06/7b09 si = data_047d4; call gfx_copy_rect_to_screen —
-        //   the strip drew into the screen buffer, so publish it.
+        //   the popup drew into the screen buffer, so publish it.
         if !self.front_buffer_is_fb1() {
             self.send_frame_to_display();
         }
@@ -1270,7 +1270,7 @@ impl GameState {
         // = seg000:5a14 call ui_show_globe_map_view.
         self.ui_show_globe_map_view();
         // = seg000:5a17 jmp map_select_troop — the ring, the contact menu and
-        //   the troop's dialogue strip, exactly as a click on its icon.
+        //   the troop's dialogue popup, exactly as a click on its icon.
         self.map_select_troop();
     }
 
@@ -1511,7 +1511,7 @@ impl GameState {
 
     // = seg000:8751 map_troop_contact_cleanup — the cleanup func every
     // troop-contact menu is staged with: drop the selection, its highlight
-    // ring and the contact dialogue strip. Run when the menu leaves the
+    // ring and the contact dialogue popup. Run when the menu leaves the
     // screen-element stack — through Cancel (menu_callback_choice_exit_menu)
     // or through the map main menu's 0xff push popping it
     // (map_setup_main_menu).
@@ -1524,21 +1524,21 @@ impl GameState {
         self.map_remove_focused_troop_icon();
         // = seg000:875b data_01954 = 0 (data_01955 keeps the id, so the
         //   contact verb can resume this troop); 8760 jmp
-        //   map_close_troop_contact_strip.
+        //   map_close_troop_contact_popup.
         self.map_selected_troop_id = 0;
-        self.map_close_troop_contact_strip();
+        self.map_close_troop_contact_popup();
     }
 
-    // = seg000:7b58 map_close_troop_contact_strip — tear down the contacted
-    // troop's dialogue strip: drop its talking-head HUD element, then (for a
+    // = seg000:7b58 map_close_troop_contact_popup — tear down the contacted
+    // troop's dialogue popup: drop its talking-head HUD element, then (for a
     // live contact, data_046ef) mark the contact on the troop record and
-    // repaint the strip's panel rect.
-    pub(crate) fn map_close_troop_contact_strip(&mut self) {
+    // repaint the popup's panel rect.
+    pub(crate) fn map_close_troop_contact_popup(&mut self) {
         // = seg000:7b58 ui_hud_elements[18].flags = 0 — drop the contacted
         //   troop's talking head.
         self.ui_elements[18].flags = 0;
         // = seg000:7b5e data_046f4 = 0 — the equipment spinners go with the
-        //   strip (not ported, see map_open_troop_contact_dialogue).
+        //   popup (not ported, see map_open_troop_contact_dialogue).
         // = seg000:7b63..7b70 xor si,si; xchg si,[data_046ef]; jz ret — no
         //   live contact, nothing to take down. The ds:4c reset at 7b65 runs
         //   either way, BEFORE the exchange.
@@ -1571,8 +1571,8 @@ impl GameState {
         self.map_popup_ptr = 0;
         self.dialogue_resume_entry_ptr = 0;
         // = seg000:7b9a call troop_icons_update_dirty_rect — repaint the map
-        //   and its icons over the strip's rect.
-        let r = self.map_contact_strip_rect;
+        //   and its icons over the popup's rect.
+        let r = self.map_contact_popup_rect;
         self.troop_icons_update_dirty_rect(r);
         // = seg000:7b9d/7b9f al = 4; call loc_07b2b — the panel's close effect
         //   (run_vga_effect al=4) unless data_046d8 suppresses it. Not ported,
@@ -2879,15 +2879,15 @@ mod tests {
             ScreenElement::MapTroopDialog,
             "a stationary troop in range gets the full order menu"
         );
-        // The contact strip is up over the map, opposite the troop's icon
-        // (troop 1's icon sits in the lower half, so the strip takes the top),
+        // The contact popup is up over the map, opposite the troop's icon
+        // (troop 1's icon sits in the lower half, so the popup takes the top),
         // and one dialogue line has been presented into it.
-        assert_eq!(game.map_contact_troop, Some(0), "the strip is troop 1's");
+        assert_eq!(game.map_contact_troop, Some(0), "the popup is troop 1's");
         assert_eq!(game.map_popup_ptr, super::MAP_POPUP_TROOP_CONTACT);
         assert_eq!(
-            game.map_contact_strip_rect,
+            game.map_contact_popup_rect,
             crate::rect::rect(5, 5, 232, 72),
-            "the strip takes the half the icon is not in"
+            "the popup takes the half the icon is not in"
         );
         assert_eq!(game.map_contact_head_rect, crate::rect::rect(9, 8, 70, 69));
         assert_ne!(game.current_subtitle_id, 0, "a line was presented");
@@ -2900,7 +2900,7 @@ mod tests {
         // the 0x3b box, so most of the box is head pixels rather than its
         // 0xe4 fill.
         let yoff = game.y_offset;
-        assert_eq!(game.screen.get(200, 10 + yoff), 0xfb, "the strip panel");
+        assert_eq!(game.screen.get(200, 10 + yoff), 0xfb, "the popup panel");
         assert_eq!(
             game.talking_head.as_ref().map(|h| h.lip_sync_resource_id),
             Some(0x0f),
@@ -2930,12 +2930,12 @@ mod tests {
         );
 
         // ASK FOR MORE INFORMATION asks the same troop for its next line: the
-        // strip stays this troop's and the resume cursor moves on.
+        // popup stays this troop's and the resume cursor moves on.
         let first_line = game.current_subtitle_id;
         let resume = game.dialogue_resume_entry_ptr;
         game.dispatch_command_handler(0x7bed, cmd::ASK_FOR_MORE_INFORMATION);
         while rx.try_recv().is_ok() {}
-        assert_eq!(game.map_contact_troop, Some(0), "still troop 1's strip");
+        assert_eq!(game.map_contact_troop, Some(0), "still troop 1's popup");
         assert!(
             game.dialogue_resume_entry_ptr != resume || game.current_subtitle_id != first_line,
             "the verb moved the conversation on"
@@ -3260,7 +3260,7 @@ mod tests {
             game.map_selected_troop_id, troop_id,
             "the troop being talked to is the map's selection"
         );
-        assert_eq!(game.map_contact_troop, Some(ti), "its contact strip is up");
+        assert_eq!(game.map_contact_troop, Some(ti), "its contact popup is up");
         assert!(
             game.troop_icon_focused[0].is_some(),
             "the highlight ring is over it"

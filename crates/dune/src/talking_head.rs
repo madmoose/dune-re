@@ -160,22 +160,22 @@ static HEAD_SIGN_TABLE: [HeadSign; 28] = [
     sign(0x0909, 0x38, 151, 119, 0x0037),
 ];
 
-// = seg001:22b9 — the troop-contact strip's per-head anchor: the point in
-// head-rect-relative coordinates that the strip's head box origin lines up
+// = seg001:22b9 — the troop-contact popup's per-head anchor: the point in
+// head-rect-relative coordinates that the popup's head box origin lines up
 // with, so heads of different sizes all frame the face in the same 59x59 box
 // (seg000:7ac1 reads the pair into data_046d2/046d4 and draw_head_image_group_in_box subtracts
 // it). Entries 0..2 are the generic Fremen heads FRM1..FRM3 (indexed by the
 // head sprite index - 0x0e); the HARK head reaches entry 3 through the
 // hard-coded 0x0c byte offset at seg000:7a8e.
-const TALKING_HEAD_STRIP_ANCHOR: [(i16, i16); 4] =
+const TALKING_HEAD_POPUP_ANCHOR: [(i16, i16); 4] =
     [(0x48, 0x3d), (0x54, 0x1d), (0x38, 0x1a), (0x2f, 0x08)];
 
 /// The seg001:22b9 entry `index`, clamped like the DOS read cannot be.
-pub(crate) fn strip_anchor(index: usize) -> (i16, i16) {
-    TALKING_HEAD_STRIP_ANCHOR
+pub(crate) fn popup_anchor(index: usize) -> (i16, i16) {
+    TALKING_HEAD_POPUP_ANCHOR
         .get(index)
         .copied()
-        .unwrap_or(TALKING_HEAD_STRIP_ANCHOR[3])
+        .unwrap_or(TALKING_HEAD_POPUP_ANCHOR[3])
 }
 
 // = lip_sync_frame_task (seg000:a7c2) advance cadence. The per-frame time is
@@ -666,7 +666,7 @@ impl GameState {
         // room (active = fb1 during init) into fb2, the clean backdrop the head
         // is composited over and restored from each frame. DOS does this in the
         // room render around the setup, not inside seg000:91a0 — which is why
-        // the troop-contact strip (map_draw_troop_contact_strip) loads its head
+        // the troop-contact popup (map_draw_troop_contact_popup) loads its head
         // through open_talking_head_resource alone: on the map view fb2 holds
         // the clean map snapshot the troop icons repaint from.
         self.copy_active_framebuffer_to_framebuffer_2();
@@ -718,8 +718,8 @@ impl GameState {
     ///
     /// The room dialogue reaches this through setup_talking_head, which adds
     /// the backdrop save, the first idle render and the idle task; the
-    /// troop-contact strip calls it directly and draws its own frame into the
-    /// strip's head box (draw_talking_head_in_box).
+    /// troop-contact popup calls it directly and draws its own frame into the
+    /// popup's head box (draw_talking_head_in_box).
     pub(crate) fn open_talking_head_resource(&mut self, lip_sync_resource_id: u8, dx: i16) -> bool {
         // = character_id_to_sprite (seg000:9123) + open_talking_head_resource.
         let (head, facing) = self.character_id_to_sprite(lip_sync_resource_id);
@@ -1168,8 +1168,8 @@ impl GameState {
         };
 
         if changed {
-            // = seg000:9df1 cmp data_046eb,0; js lip_sync_stamp_troop_strip —
-            // while the full-map view owns the screen the head lives in the strip's
+            // = seg000:9df1 cmp data_046eb,0; js lip_sync_stamp_troop_popup —
+            // while the full-map view owns the screen the head lives in the popup's
             // box, so the stamp goes there instead: the same lip frame
             // (9e79..9e8a banks it by idle expression exactly like the room
             // path, minus the SMUG stride), re-anchored into the box and
@@ -1179,7 +1179,7 @@ impl GameState {
             // (seg000:9eb1) and sends multi-image groups to fb1 with an
             // fb1->screen present of the box, single-image ones straight to
             // the screen buffer. On the map view fb1 holds the plain map — the
-            // strip is only ever painted into the screen buffer — so the fb1
+            // popup is only ever painted into the screen buffer — so the fb1
             // variant would publish map pixels over the head. The port draws
             // both into the screen buffer and publishes.
             if self.data_046eb & 0x80 != 0 {
@@ -1187,7 +1187,7 @@ impl GameState {
                 // = seg000:9e92..9e96 restore_mouse_if_rect_intersects
                 //   (data_047d4), 9ec3 present, 9ec6 draw_mouse_cursor_if_needed.
                 let yoff = self.y_offset as i16;
-                let boxr = self.head_strip_box;
+                let boxr = self.head_popup_box;
                 let published = Rect {
                     y0: boxr.y0 + yoff,
                     y1: boxr.y1 + yoff,
@@ -1374,24 +1374,24 @@ impl GameState {
         clip
     }
 
-    // = seg000:7ac1..7b09 (the tail of map_draw_troop_contact_strip) driving
+    // = seg000:7ac1..7b09 (the tail of map_draw_troop_contact_popup) driving
     // draw_talking_head_in_box -> draw_head_image_group_in_box — draw one
-    // (anim, frame) of the live head into the troop-contact strip's head box
+    // (anim, frame) of the live head into the troop-contact popup's head box
     // instead of at the head's own rect.
     //
     // Every image lands at `image.xy + head.rect.origin - anchor + box.origin`
     // (draw_head_image_group_in_box's `add [1bf0]; sub [46d2]; add [47d4]`), i.e. the head is
-    // shifted so its per-head anchor point (TALKING_HEAD_STRIP_ANCHOR, staged in
-    // head_strip_anchor) sits on the box origin, and everything is clipped to
+    // shifted so its per-head anchor point (TALKING_HEAD_POPUP_ANCHOR, staged in
+    // head_popup_anchor) sits on the box origin, and everything is clipped to
     // the box. Unlike the room path this draws into the SCREEN buffer (DOS es =
-    // _word_2D088_screen_buffer_seg), where the rest of the strip is painted —
+    // _word_2D088_screen_buffer_seg), where the rest of the popup is painted —
     // fb1/fb2 hold the map view and must not be touched.
     pub(crate) fn draw_talking_head_in_box(&mut self, anim: usize, frame_idx: usize) {
         let Some(head) = self.talking_head.as_ref() else {
             return;
         };
-        let (ax, ay) = self.head_strip_anchor;
-        let boxr = self.head_strip_box;
+        let (ax, ay) = self.head_popup_anchor;
+        let boxr = self.head_popup_box;
         let yoff = self.y_offset as i16;
         // = the draw_head_image_group_in_box clip rect is the box itself (DOS bp = 47d4h).
         let clip = Rect {

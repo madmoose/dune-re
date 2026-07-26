@@ -977,29 +977,29 @@ pub struct GameState {
     // open (a troop ptr in DOS, the table index here; None = closed).
     pub(crate) map_info_popup_troop: Option<usize>,
 
-    // = seg001:46ef data_046ef — the troop whose contact dialogue strip is up
+    // = seg001:46ef data_046ef — the troop whose contact dialogue popup is up
     // (a troop ptr in DOS, the table index here; None = no live contact).
-    // map_close_troop_contact_strip marks the contact on it and clears it.
+    // map_close_troop_contact_popup marks the contact on it and clears it.
     pub(crate) map_contact_troop: Option<usize>,
-    // = seg001:46f1 data_046f1 — the troop the strip is being built for.
-    // map_setup_troop_contact_strip latches it before
-    // map_draw_troop_contact_strip, and
-    // subtitle_setup_layout rebuilds the strip from it (seg000:8cea) when a
-    // line is presented with no strip up.
+    // = seg001:46f1 data_046f1 — the troop the popup is being built for.
+    // map_setup_troop_contact_popup latches it before
+    // map_draw_troop_contact_popup, and
+    // subtitle_setup_layout rebuilds the popup from it (seg000:8cea) when a
+    // line is presented with no popup up.
     pub(crate) map_contact_troop_pending: Option<usize>,
     // = the troop_contact_text_panel_record's runtime rect (seg001:18e9: x
     // (5,232) compiled in, the y pair rewritten per open) and the head box
     // (seg001:18f3, written per open) inside it.
-    pub(crate) map_contact_strip_rect: Rect,
+    pub(crate) map_contact_popup_rect: Rect,
     pub(crate) map_contact_head_rect: Rect,
     // = seg001:2244/2246 — the x/y words of the contact subtitle's layout
     // descriptor (seg001:2244, size 153x63), written per open by
-    // map_draw_troop_contact_strip.
+    // map_draw_troop_contact_popup.
     pub(crate) map_contact_subtitle_pos: (i16, i16),
     // = seg001:004c related_to_contacting_troops_ds_4c — 0xff while the
     // contacted troop answers from outside the visibility range, so the
     // dialogue record's conditions pick its "out of contact" lines; cleared
-    // by map_close_troop_contact_strip.
+    // by map_close_troop_contact_popup.
     pub(crate) contacting_troops_ds_4c: u8,
 
     // = seg001:00e2 distance_to_closest_Harkonnen_area_ds_e2 — how far the
@@ -1011,12 +1011,12 @@ pub struct GameState {
     pub(crate) distance_to_closest_harkonnen_area: u16,
 
     // = seg001:46d2/46d4 data_046d2/046d4 — the head-rect-relative anchor point
-    // the troop-contact strip re-anchors the talking head on (staged from
-    // TALKING_HEAD_STRIP_ANCHOR by map_draw_troop_contact_strip), and
-    // = seg001:47d4 data_047d4 — the strip's head draw box: both the
+    // the troop-contact popup re-anchors the talking head on (staged from
+    // TALKING_HEAD_POPUP_ANCHOR by map_draw_troop_contact_popup), and
+    // = seg001:47d4 data_047d4 — the popup's head draw box: both the
     // destination origin and the clip rect draw_head_image_group_in_box uses.
-    pub(crate) head_strip_anchor: (i16, i16),
-    pub(crate) head_strip_box: Rect,
+    pub(crate) head_popup_anchor: (i16, i16),
+    pub(crate) head_popup_box: Rect,
 
     // = the data_018df panel record's runtime rect (loc_05f25 writes the
     // record's +0..+7 next to the clicked icon each open).
@@ -1767,13 +1767,13 @@ impl GameState {
             map_info_popup_troop: None,
             map_contact_troop: None,
             map_contact_troop_pending: None,
-            map_contact_strip_rect: crate::troop_map_screen::TROOP_CONTACT_STRIP_RECT,
+            map_contact_popup_rect: crate::troop_map_screen::TROOP_CONTACT_POPUP_RECT,
             map_contact_head_rect: Rect::default(),
             map_contact_subtitle_pos: (0, 0),
             contacting_troops_ds_4c: 0,
             distance_to_closest_harkonnen_area: 0xffff,
-            head_strip_anchor: (0, 0),
-            head_strip_box: Rect::default(),
+            head_popup_anchor: (0, 0),
+            head_popup_box: Rect::default(),
             map_info_panel_rect: Rect::default(),
             map_popup_anim_src: (0, 0),
             map_popup_anim_rect: Rect::default(),

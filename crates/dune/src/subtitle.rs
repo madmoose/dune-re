@@ -63,8 +63,8 @@ impl GameState {
             }
             // = seg001:223c the mode-0 strip layout.
             0x223c => (0, 0, 320, 0x47),
-            // = seg001:2244 the troop-contact strip's text box; its origin is
-            // written per open by map_draw_troop_contact_strip.
+            // = seg001:2244 the troop-contact popup's text box; its origin is
+            // written per open by map_draw_troop_contact_popup.
             0x2244 => {
                 let (x, y) = self.map_contact_subtitle_pos;
                 let (w, h) = crate::troop_map_screen::TROOP_CONTACT_SUBTITLE_SIZE;
@@ -646,15 +646,15 @@ impl GameState {
         self.font_state.color = 0x00f0;
         let yoff = self.y_offset as i16;
         // = seg000:8cd8 data_046eb != 0: a line spoken while the full-map view
-        //   owns the screen goes into the troop-contact strip's text box
-        //   (seg001:2244), whose origin map_draw_troop_contact_strip wrote.
-        //   The strip keeps the pads it set (0/5/0/1) and its own colour.
+        //   owns the screen goes into the troop-contact popup's text box
+        //   (seg001:2244), whose origin map_draw_troop_contact_popup wrote.
+        //   The popup keeps the pads it set (0/5/0/1) and its own colour.
         if self.data_046eb != 0 {
             // = seg000:8cdf..8cf2 cmp data_046ef,0; jnz — a line presented
-            //   with no strip up rebuilds it for data_046f1 first.
+            //   with no popup up rebuilds it for data_046f1 first.
             if self.map_contact_troop.is_none() {
                 if let Some(ti) = self.map_contact_troop_pending {
-                    self.map_draw_troop_contact_strip(ti);
+                    self.map_draw_troop_contact_popup(ti);
                 }
             }
             let (x, y) = self.map_contact_subtitle_pos;
@@ -880,8 +880,8 @@ impl GameState {
             ..rect
         };
         // = seg000:8f7f cmp data_046eb,0; jnz loc_08fd1 — the troop-contact
-        //   strip's text box: no save-under and no balloon tile, just a fill
-        //   in the strip panel's own colour (seg001:18f2 = 0xfb) two pixels
+        //   popup's text box: no save-under and no balloon tile, just a fill
+        //   in the popup panel's own colour (seg001:18f2 = 0xfb) two pixels
         //   above the box, so each line wipes the one before it. HUD element
         //   18 also takes the ASK FOR MORE INFORMATION handler here, making
         //   the text box itself clickable — the port has no clickable HUD
