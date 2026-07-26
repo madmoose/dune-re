@@ -1091,12 +1091,14 @@ impl GameState {
         // = seg000:79f2/79f8 call troop_find_icon; jnz loc_07a1e — without an
         //   icon on the map the record keeps whatever rect it last had.
         let mut r = self.map_contact_popup_rect;
-        if let Some(icon) = self.troop_find_icon(ti) {
+        let icon_pos = self
+            .troop_find_icon(ti)
+            .map(|i| (self.troop_icons[i].rect.x0, self.troop_icons[i].rect.y0));
+        if let Some((_, icon_y)) = icon_pos {
             // = seg000:79fa..7a09 the popup goes opposite the icon: with the
             //   icon in the lower half (y0 >= 76) at the top (y0 = 5), else at
             //   the bottom (y0 = 80). ax rides along as the occupation panel's
             //   y (data_04712).
-            let icon_y = self.troop_icons[icon].rect.y0;
             let y0 = if icon_y >= 0x4c { 5 } else { 0x50 };
             // = seg000:7a0c/7a12 [si+2] = bx; [si+6] = bx + 0x43.
             r.y0 = y0;
@@ -1110,10 +1112,16 @@ impl GameState {
         // = seg000:7a1e map_popup_ptr = si — this popup becomes the open one,
         //   so a click inside it routes here, not to the map.
         self.map_popup_ptr = MAP_POPUP_TROOP_CONTACT;
-        // = seg000:7a22/7a24 al = 2; call loc_07b0f — data_046d8 = 0 then the
-        //   panel's open effect (run_vga_effect al=2, the segvga effect
-        //   dispatcher's entry 1; not ported), falling into loc_07b1b.
+        // = seg000:7a22/7a24 al = 2; call loc_07b0f — data_046d8 = 0, then the
+        //   popup's open effect (run_vga_effect al=2 = xor_bracket_zoom_to_panel,
+        //   ds:si = the icon rect after the xchg): the XOR box trail from the
+        //   icon to the panel centre and the expanding corner brackets, before
+        //   the panel is drawn (loc_07b1b). DOS runs the effect even with no
+        //   icon on the map (si is then stale); the port skips it.
         self.map_popup_anim_suppress = false;
+        if let Some(src) = icon_pos {
+            self.xor_bracket_zoom_to_panel(r, src);
+        }
         // = the panel fill (0xfb) + frame (0xf5) from the record.
         self.map_draw_panel_record(r, 0xfb, 0xf5);
         // = seg000:7a32..7a50 the subtitle descriptor's origin (the panel
@@ -1574,9 +1582,13 @@ impl GameState {
         //   and its icons over the popup's rect.
         let r = self.map_contact_popup_rect;
         self.troop_icons_update_dirty_rect(r);
-        // = seg000:7b9d/7b9f al = 4; call loc_07b2b — the panel's close effect
-        //   (run_vga_effect al=4) unless data_046d8 suppresses it. Not ported,
-        //   like the al=2 open effect.
+        // = seg000:7b9d/7b9f al = 4; call loc_07b2b — the popup's close effect
+        //   (run_vga_effect al=4 = xor_bracket_zoom_from_panel) unless data_046d8
+        //   suppresses it: the brackets shrink back and the box trail returns
+        //   to the icon, over the freshly repainted map.
+        if !self.map_popup_anim_suppress {
+            self.xor_bracket_zoom_from_panel();
+        }
     }
 
     // = seg000:8763 menu_callback_choice_multiple_no_more_orders — the order
@@ -1839,6 +1851,146 @@ impl GameState {
         for py in y0 + 1..y1 {
             toggle(x0, py);
             toggle(x1, py);
+        }
+    }
+
+    // = segvga:36b0 xor_bracket_anim_setup — stage the bracket-zoom animation
+    // from the panel rect (es:di, the record's +0..+7) and the target point
+    // (data_035f2/035f4): the origin of a 20x20 box centred on the panel
+    // (data_035f6/035f8), the per-frame bracket expand step (half the panel
+    // extent less 20, / 8 — data_035ee/035f0) and the per-frame trail step
+    // from the target to that centre (/ 8, signed — data_035ea/035ec).
+    fn xor_bracket_anim_setup(&mut self, panel: Rect, target: (i16, i16)) {
+        // = segvga:36b0..36e7 per axis: ax = (extent - 20) / 2; centre origin
+        //   = panel origin + ax; expand step = ax / 8.
+        let half_w = (panel.x1 - panel.x0 - 0x14) >> 1;
+        let half_h = (panel.y1 - panel.y0 - 0x14) >> 1;
+        let center = (panel.x0 + half_w, panel.y0 + half_h);
+        self.xor_bracket_anim_center = center;
+        self.xor_bracket_anim_expand_step = (half_w >> 3, half_h >> 3);
+        // = segvga:36eb..371e the trail step: (centre - target) / 8, the shift
+        //   run on |value| with the sign restored (truncation toward zero).
+        let step = |d: i16| (d.abs() >> 3) * d.signum();
+        self.xor_bracket_anim_move_step = (step(center.0 - target.0), step(center.1 - target.1));
+    }
+
+    // = segvga:3602 xor_bracket_zoom_to_panel — the troop-contact popup's open
+    // effect (vga_effect_dispatch al=2): a 20x20 XOR box stepping from the
+    // troop icon to the panel centre (8 frames), then the corner brackets
+    // expanding from a centred 20x20 out to the panel rect (8 frames). Each
+    // phase runs twice with identical frames — the XOR draws accumulate over
+    // the first pass and the second pass erases them — pacing one present
+    // interval (loc_segvga_02572) per frame.
+    fn xor_bracket_zoom_to_panel(&mut self, panel: Rect, icon_pos: (i16, i16)) {
+        // The animation is a foreground timing effect; headless runs skip it.
+        if self.is_headless() {
+            return;
+        }
+        // = segvga:3603..361e the target: the icon point, x clamped to
+        //   [0, 300], y to >= 0.
+        let target = (icon_pos.0.clamp(0, 0x12c), icon_pos.1.max(0));
+        self.xor_bracket_anim_setup(panel, target);
+        // = segvga:362a..3652 the box trail: 2 passes x 8 frames from the
+        //   target, advancing by the trail step after each frame's box
+        //   (vga_xor_box_20 = the outline at fixed size 20).
+        let (dx, dy) = self.xor_bracket_anim_move_step;
+        for _ in 0..2 {
+            let (mut x, mut y) = target;
+            for _ in 0..8 {
+                self.xor_rect_outline(x, y, 0x14, 0x14);
+                self.present_transition_frame();
+                x += dx;
+                y += dy;
+            }
+        }
+        // = segvga:3654..36ac the brackets: 2 passes x 8 frames from a centred
+        //   20x20, growing by the expand step after each frame; every frame
+        //   drawn is latched in data_035fa..03600 for the close to shrink
+        //   back from.
+        let (ex, ey) = self.xor_bracket_anim_expand_step;
+        for _ in 0..2 {
+            let (mut x, mut y) = self.xor_bracket_anim_center;
+            let (mut w, mut h) = (0x14, 0x14);
+            for _ in 0..8 {
+                self.xor_bracket_anim_shape = (x, y, w, h);
+                self.xor_corner_brackets(x, y, w, h);
+                self.present_transition_frame();
+                x -= ex;
+                w += 2 * ex;
+                y -= ey;
+                h += 2 * ey;
+            }
+        }
+    }
+
+    // = segvga:3841 xor_bracket_zoom_from_panel — the troop-contact popup's close
+    // effect (vga_effect_dispatch al=4), the open played backwards from the
+    // state xor_bracket_zoom_to_panel staged: the brackets shrink from the last
+    // latched shape back towards a centred 20x20 (2 passes x 8 frames, the
+    // second pass erasing the first), then the box trail steps from the panel
+    // centre back to the icon (2 passes x 8 frames).
+    fn xor_bracket_zoom_from_panel(&mut self) {
+        if self.is_headless() {
+            return;
+        }
+        // = segvga:3847..388c the brackets, shrinking by the expand step
+        //   after each frame.
+        let (ex, ey) = self.xor_bracket_anim_expand_step;
+        for _ in 0..2 {
+            let (mut x, mut y, mut w, mut h) = self.xor_bracket_anim_shape;
+            for _ in 0..8 {
+                self.xor_corner_brackets(x, y, w, h);
+                self.present_transition_frame();
+                x += ex;
+                w -= 2 * ex;
+                y += ey;
+                h -= 2 * ey;
+            }
+        }
+        // = segvga:388e..38bc the trail, stepping back from the centre before
+        //   each frame's box.
+        let (dx, dy) = self.xor_bracket_anim_move_step;
+        for _ in 0..2 {
+            let (mut x, mut y) = self.xor_bracket_anim_center;
+            for _ in 0..8 {
+                x -= dx;
+                y -= dy;
+                self.xor_rect_outline(x, y, 0x14, 0x14);
+                self.present_transition_frame();
+            }
+        }
+    }
+
+    // = segvga:37b1 vga_xor_corner_brackets — XOR-draw the corner
+    // brackets at (x, y), size (w, h), into the visible screen with colour
+    // 0x0f: a 10-pixel horizontal edge segment and a 9-pixel vertical spine
+    // at each corner. DOS writes the framebuffer offsets unclamped; the port
+    // skips off-screen pixels.
+    fn xor_corner_brackets(&mut self, x: i16, y: i16, w: i16, h: i16) {
+        let yoff = self.y_offset as i16;
+        let scr = &mut self.screen;
+        let mut toggle = |px: i16, py: i16| {
+            let py = py + yoff;
+            if (0..320).contains(&px) && (0..200).contains(&py) {
+                let (px, py) = (px as u16, py as u16);
+                scr.set(px, py, scr.get(px, py) ^ 0x0f);
+            }
+        };
+        // = segvga:37ba/37cc the top and segvga:37fe/3810 the bottom edge
+        //   segments (5 word XORs each = 10 pixels per corner).
+        for i in 0..10 {
+            toggle(x + i, y);
+            toggle(x + w - 10 + i, y);
+            toggle(x + i, y + h - 1);
+            toggle(x + w - 10 + i, y + h - 1);
+        }
+        // = segvga:37d7/37f1 the right and segvga:381d/3837 the left spine
+        //   segments (9 byte XORs each).
+        for j in 1..10 {
+            toggle(x + w - 1, y + j);
+            toggle(x + w - 1, y + h - 1 - j);
+            toggle(x, y + h - 1 - j);
+            toggle(x, y + j);
         }
     }
 
@@ -2729,6 +2881,36 @@ mod tests {
             game.screen.get(probe.0, probe.1),
             before,
             "a second XOR erases the outline"
+        );
+        // The contact popup's zoom brackets (vga_xor_corner_brackets): corner
+        // segments only — a 10-px edge piece and a 9-px spine per corner —
+        // leaving gaps mid-edge and mid-spine, and self-erasing like the
+        // outline.
+        let yoff = game.y_offset;
+        let corner = game.screen.get(59, 30 + yoff);
+        let edge_gap = game.screen.get(65, 30 + yoff);
+        let spine_gap = game.screen.get(50, 45 + yoff);
+        game.xor_corner_brackets(50, 30, 40, 30);
+        assert_ne!(
+            game.screen.get(59, 30 + yoff),
+            corner,
+            "the corner segment toggled"
+        );
+        assert_eq!(
+            game.screen.get(65, 30 + yoff),
+            edge_gap,
+            "the mid-edge gap is untouched"
+        );
+        assert_eq!(
+            game.screen.get(50, 45 + yoff),
+            spine_gap,
+            "the mid-spine gap is untouched"
+        );
+        game.xor_corner_brackets(50, 30, 40, 30);
+        assert_eq!(
+            game.screen.get(59, 30 + yoff),
+            corner,
+            "a second XOR erases the brackets"
         );
         // Overlay three grow frames (near the marker, mid, at the panel rect)
         // to visualise the scale from the marker point to the info-panel rect.

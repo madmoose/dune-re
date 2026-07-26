@@ -1031,6 +1031,18 @@ pub struct GameState {
     pub(crate) map_popup_anim_rect: Rect,
     pub(crate) map_popup_anim_suppress: bool,
 
+    // = segvga data 035ea..03600 — the bracket-zoom XOR animation state, staged
+    // by xor_bracket_anim_setup / xor_bracket_zoom_to_panel (the troop-contact
+    // popup's open effect, al=2) and read back by xor_bracket_zoom_from_panel (its
+    // close effect, al=4): the per-frame box-trail step (035ea/035ec), the
+    // bracket expand step (035ee/035f0), the origin of a 20x20 box centred on
+    // the panel (035f6/035f8) and the last bracket drawn (035fa..03600),
+    // which the close shrinks back from.
+    pub(crate) xor_bracket_anim_move_step: (i16, i16),
+    pub(crate) xor_bracket_anim_expand_step: (i16, i16),
+    pub(crate) xor_bracket_anim_center: (i16, i16),
+    pub(crate) xor_bracket_anim_shape: (i16, i16, i16, i16),
+
     // = seg001:46f8 data_046f8 — the location whose info popup is open
     // (a location ptr in DOS, the table index here; None = closed), the
     // re-click gate. = seg001:46f7 data_046f7 — its class+1 (0 = closed).
@@ -1778,6 +1790,10 @@ impl GameState {
             map_popup_anim_src: (0, 0),
             map_popup_anim_rect: Rect::default(),
             map_popup_anim_suppress: false,
+            xor_bracket_anim_move_step: (0, 0),
+            xor_bracket_anim_expand_step: (0, 0),
+            xor_bracket_anim_center: (0, 0),
+            xor_bracket_anim_shape: (0, 0, 0, 0),
             map_location_popup_loc: None,
             map_location_popup_class: 0,
             map_location_popup_rect: Rect::default(),
