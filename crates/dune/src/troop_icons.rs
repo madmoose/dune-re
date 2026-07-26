@@ -10,10 +10,7 @@
 //! byte 0 doubling as the spawn sprite; they live in the seg001:1672..1935
 //! data block embedded below. troop_icon_anim_task steps them.
 
-use crate::{
-    GameState, Rect, TaskId, locations::location_index_from_ptr, rect::rect,
-    troop_map_screen::MAP_POPUP_RALLIED,
-};
+use crate::{GameState, Rect, TaskId, locations::location_index_from_ptr, rect::rect};
 
 // = seg001:1672..1935 — the troop icon data block: the 16 marker-slot
 // offsets (troop_icon_slot_offsets, 1672), the anim scripts, and the three
@@ -337,10 +334,9 @@ impl GameState {
     // sprite clip rect (the map window while the map view is up), restore the
     // clipped rect from the fb2 snapshot, draw the intersecting icons back
     // over it in troop_icon_draw_order_func order (fifo, or back-to-front by
-    // depth on the map), then redraw the HUD head and any open popup the rect
-    // touches. DOS composes on the front buffer and preserves the popup by
-    // copying its pixels back from the visible screen (loc_0c7d4); the port
-    // redraws the popup panel instead.
+    // depth on the map), then redraw the HUD head and preserve any open popup
+    // the rect touches by copying its pixels back over the compose
+    // (loc_0c7d4).
     pub(crate) fn troop_icons_update_dirty_rect(&mut self, r: Rect) {
         // = seg000:c6ad call open_onmap_resource.
         self.open_onmap_spritesheet();
@@ -362,6 +358,30 @@ impl GameState {
             self.draw_mouse_cursor_if_needed();
             return;
         }
+        // = seg000:c7a2..c7bd + loc_0c7d4 the open-popup preservation: DOS
+        //   composes in fb1 and, before the fb1-to-screen publish, copies the
+        //   open popup's rect back from the still-intact visible screen. The
+        //   port composes in place on the front buffer, so it grabs the
+        //   popup's pixels before the fb2 restore and lays them back after
+        //   the icon draws. map_popup2_ptr (seg000:c7b0) never opens in the
+        //   port (its writer, the give-equipment panel seg000:7de2, is not
+        //   ported).
+        let popup_save = self.map_open_popup_rect().and_then(|p| {
+            let pr = rect(
+                p.x0.max(clipped.x0),
+                (p.y0 + yoff).max(clipped.y0),
+                p.x1.min(clipped.x1),
+                (p.y1 + yoff).min(clipped.y1),
+            );
+            if pr.x1 <= pr.x0 || pr.y1 <= pr.y0 {
+                return None;
+            }
+            let src = match self.screen_buffer {
+                crate::FbId::Fb1 => &self.framebuffer,
+                _ => &self.screen,
+            };
+            Some((pr, crate::gfx::vga_grab_rect(src, pr)))
+        });
         // = seg000:c718 call copy_clip_rect_to_screen_from_fb2 — restore the
         //   clipped rect from the fb2 snapshot; the front buffer honours the
         //   fb1 redirection like every screen push.
@@ -416,17 +436,13 @@ impl GameState {
         if self.data_0227d == 0 && clipped.y1 >= 137 && clipped.x1 >= 126 && clipped.x0 < 194 {
             self.ui_hud_head_draw();
         }
-        // = seg000:c7a2..c7bd the open-popup preservation (loc_0c7d4): the
-        //   port redraws the rallied-troops panel when the rect touches it.
-        if self.map_popup_ptr == MAP_POPUP_RALLIED {
-            let p = crate::troop_map_screen::RALLIED_POPUP_RECT;
-            if p.x0 < clipped.x1
-                && p.y0 + yoff < clipped.y1
-                && p.x1 > clipped.x0
-                && p.y1 + yoff > clipped.y0
-            {
-                self.map_draw_rallied_troops_popup();
-            }
+        // = seg000:c7a2..c7bd lay the preserved popup pixels back on top.
+        if let Some((pr, pixels)) = popup_save {
+            let dst = match self.screen_buffer {
+                crate::FbId::Fb1 => &mut self.framebuffer,
+                _ => &mut self.screen,
+            };
+            crate::gfx::vga_put_rect(dst, &pixels, pr);
         }
         self.active_fb = saved;
         // Close the cursor bracket, then publish the touched screen (DOS

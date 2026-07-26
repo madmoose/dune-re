@@ -344,19 +344,6 @@ impl GameState {
         self.set_screen_as_active_framebuffer();
         // = seg000:5bb3/5bb6 map_popup_ptr = data_0194a.
         self.map_popup_ptr = MAP_POPUP_RALLIED;
-        self.map_draw_rallied_troops_popup();
-        // = seg000:5be8 jmp set_fb1_as_active_framebuffer.
-        self.set_fb1_as_active_framebuffer();
-        // DOS drew straight to the visible A000 buffer; the port publishes the
-        // touched screen.
-        self.send_frame_to_display();
-    }
-
-    // = seg000:5bba..5be5 the popup's panel + text draw, onto the active
-    // framebuffer. Split out so troop_icons_update_dirty_rect can re-draw the
-    // panel over a repainted rect (the port's stand-in for DOS's screen-pixel
-    // grab at loc_0c7d4).
-    pub(crate) fn map_draw_rallied_troops_popup(&mut self) {
         // = seg000:5bba call loc_07b1b — fill the panel rect with its fill
         //   colour ([rec+9] = 0xfb), then outline it in the frame colour
         //   ([rec+8] = 0xf5) inset one pixel (loc_0c551 -> draw_rect_outline).
@@ -398,6 +385,11 @@ impl GameState {
         self.font_state.color = 0x00f0;
         self.font_set_draw_position(r.x0 as u16 + 10, r.y0 as u16 + 8);
         self.font_draw_string(&text);
+        // = seg000:5be8 jmp set_fb1_as_active_framebuffer.
+        self.set_fb1_as_active_framebuffer();
+        // DOS drew straight to the visible A000 buffer; the port publishes the
+        // touched screen.
+        self.send_frame_to_display();
     }
 
     // = seg000:5beb map_dismiss_rallied_troops_popup — when the open popup is
@@ -607,14 +599,16 @@ impl GameState {
         }
     }
 
-    // = the open popup panel's rect (seg000:5c7c/5c95 rect_contains against
-    // map_popup_ptr / map_popup2_ptr): the rallied-troops title panel, the
-    // troop info panel or the location info panel. None when no popup is up.
-    fn map_open_popup_rect(&self) -> Option<Rect> {
+    // = the open popup panel's rect (the record rect DOS reads through
+    // map_popup_ptr, e.g. seg000:5c7c rect_contains, loc_0c7d4): the
+    // rallied-troops title panel, the troop info panel, the location info
+    // panel or the troop contact dialogue panel. None when no popup is up.
+    pub(crate) fn map_open_popup_rect(&self) -> Option<Rect> {
         match self.map_popup_ptr {
             MAP_POPUP_RALLIED => Some(RALLIED_POPUP_RECT),
             MAP_POPUP_TROOP_INFO => Some(self.map_info_panel_rect),
             MAP_POPUP_LOCATION => Some(self.map_location_popup_rect),
+            MAP_POPUP_TROOP_CONTACT => Some(self.map_contact_popup_rect),
             _ => None,
         }
     }
@@ -3146,6 +3140,29 @@ mod tests {
         assert!(
             head_pixels > 1000,
             "the head is drawn into the box (only {head_pixels} non-fill pixels)"
+        );
+        // An icon-animation repaint under the popup (troop_icon_anim_task ->
+        // troop_icons_update_dirty_rect) preserves the popup's pixels
+        // (loc_0c7d4): repaint a rect straddling the whole panel, then step
+        // the anim task itself, and check the panel fill and the head are
+        // still on screen.
+        game.troop_icons_update_dirty_rect(crate::rect::rect(0, 0, 260, 100));
+        for _ in 0..4 {
+            game.tick_troop_icon_anim();
+        }
+        while rx.try_recv().is_ok() {}
+        assert_eq!(
+            game.screen.get(200, 10 + yoff),
+            0xfb,
+            "the popup panel survives an icon repaint beneath it"
+        );
+        let head_pixels_after = (box_rect.y0 + 1..box_rect.y1 - 1)
+            .flat_map(|y| (box_rect.x0 + 1..box_rect.x1 - 1).map(move |x| (x, y)))
+            .filter(|&(x, y)| game.screen.get(x as u16, (y + yoff as i16) as u16) != 0xe4)
+            .count();
+        assert!(
+            head_pixels_after > 1000,
+            "the head survives an icon repaint beneath it (only {head_pixels_after} pixels)"
         );
         // The last slot reads CUT CONTACT while map_view_reentry_count is 0,
         // and occupation nibble 1 (spice prospecting) keeps CHANGE TROOP
