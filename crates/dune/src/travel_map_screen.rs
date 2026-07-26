@@ -175,11 +175,33 @@ pub(crate) struct MapLocationMarker {
 }
 
 impl GameState {
+    // = seg000:42d9 menu_callback_choice_map_main_take_an_ornithopter — the map
+    // main menu's (MENU_MAP_MAIN) TAKE AN ORNITHOPTER slot, reached from the SEE
+    // DUNE MAP view: board from the current location's outdoor room 1, leave the
+    // full-planet map for the room view, then fall through into the notransition
+    // tail that opens the cockpit map.
+    pub(crate) fn menu_callback_choice_map_main_take_an_ornithopter(&mut self) {
+        // = seg000:42d9/42dd dx = location_and_room, bx = location_appearance;
+        //   42e1 dl = 1 — the orni boards from the location's outdoor room 1
+        //   (the pad), whatever room the map was opened from.
+        let new_room = (self.location_and_room & 0xff00) | 1;
+        let new_appearance = self.location_appearance;
+        // = seg000:42e3 call callback_transition_04057 — commit the room move
+        //   (state only here: the full-map view's data_046eb bit 7 skips its
+        //   room redraw).
+        self.commit_room_move(new_room, new_appearance);
+        // = seg000:42e6 call ui_toggle_room_view — tear the full-planet map
+        //   down and re-enter the room view.
+        self.ui_toggle_room_view();
+        // = seg000:42e9 falls through into the notransition entry.
+        self.menu_callback_choice_map_main_take_an_ornithopter_notransition();
+    }
+
     // = seg000:42e9 menu_callback_choice_map_main_take_an_ornithopter_notransition
     // — the TAKE AN ORNITHOPTER room verb (command record seg001:21dc): open the
     // map screen in ornithopter (cockpit) mode. Also reached from the room
     // ornithopter click (callback_main_ui_element_21_22, seg000:9282) and as the
-    // fall-through tail of the map-main-menu entry (seg000:42d9, not ported).
+    // fall-through tail of the map-main-menu entry (seg000:42d9).
     pub(crate) fn menu_callback_choice_map_main_take_an_ornithopter_notransition(&mut self) {
         // = seg000:42e9 call tear_down_prior_talking_head_overlay.
         self.tear_down_prior_talking_head_overlay();

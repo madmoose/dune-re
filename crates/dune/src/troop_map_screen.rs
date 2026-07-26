@@ -2999,6 +2999,56 @@ mod tests {
             );
         }
     }
+
+    // The map main menu's TAKE AN ORNITHOPTER slot (seg000:42d9): commits the
+    // player into the current location's outdoor room 1, leaves the full-map
+    // view through ui_toggle_room_view, and opens the travel map in
+    // ornithopter (cockpit) mode via the shared notransition tail. Asset-gated:
+    //   cargo test -p dune --bin dune -- --ignored map_menu_take_an_ornithopter
+    #[test]
+    #[ignore = "needs assets/DUNE.DAT"]
+    fn map_menu_take_an_ornithopter_boards_from_the_pad() {
+        let dat_path = concat!(env!("CARGO_MANIFEST_DIR"), "/../../assets/DUNE.DAT");
+        let Ok(dat_file) = DatFile::open(dat_path) else {
+            eprintln!("skipping: {dat_path} not found");
+            return;
+        };
+        let (tx, rx) = mpsc::sync_channel(64);
+        let mut game = GameState::new(dat_file, tx);
+        game.set_headless();
+        game.start(true);
+        while rx.try_recv().is_ok() {}
+
+        // Stand in an inner room (room 6) so the room-1 commit is observable.
+        let inner_room = (game.location_and_room & 0xff00) | 6;
+        game.commit_room_move(inner_room, game.location_appearance);
+        while rx.try_recv().is_ok() {}
+        assert_eq!(game.current_room, 6, "standing in an inner room");
+
+        // SEE DUNE MAP, then the map menu's TAKE AN ORNITHOPTER.
+        game.dispatch_command_handler(0x186b, cmd::SEE_DUNE_MAP);
+        while rx.try_recv().is_ok() {}
+        assert_eq!(game.data_046eb, 0x80, "full-map mode owns the screen");
+        game.dispatch_command_handler(0x42d9, cmd::TAKE_AN_ORNITHOPTER);
+        while rx.try_recv().is_ok() {}
+
+        // The commit boarded from the pad room 1, rotating the inner room
+        // into previous_room.
+        assert_eq!(game.location_and_room, inner_room & 0xff00 | 1);
+        assert_eq!(game.current_room, 1, "boarded from the outdoor room 1");
+        assert_eq!(game.previous_room, 6, "the inner room became previous_room");
+        // The notransition tail opened the cockpit map view.
+        assert_eq!(game.map_ornithopter_mode, 1, "cockpit mode");
+        assert_eq!(game.game_screen_mode_flags, 4, "map-travel screen mode");
+        assert_eq!(game.travel_vehicle_mode, 2, "travel by ornithopter");
+        assert_eq!(game.data_046eb, 1, "the travel map view owns the screen");
+        assert_eq!(
+            game.get_active_screen_element(),
+            ScreenElement::TravelMapScreen,
+            "the travel map's Cancel menu is the active element"
+        );
+    }
+
     // CONTACT FREMEN TROOPS (menu_callback_choice_map_main_contact_fremen_
     // troops): the verb selects a troop and opens its contact verb menu, NEXT
     // TROOP cycles the selection by troop id, and CUT CONTACT puts the map

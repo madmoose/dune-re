@@ -957,9 +957,9 @@ impl GameState {
             // = seg000:53f1 menu_callback_choice_map_main_see_spice_density.
             0x53f1 => println!("dispatch: SEE SPICE DENSITY (0x53f1) not ported"),
             // = seg000:42d9 menu_callback_choice_map_main_take_an_ornithopter —
-            // commit_room_move + ui_toggle_room_view into the ported
-            // notransition entry.
-            0x42d9 => println!("dispatch: map-menu TAKE AN ORNITHOPTER (0x42d9) not ported"),
+            // commit_room_move + ui_toggle_room_view into the notransition
+            // entry.
+            0x42d9 => self.menu_callback_choice_map_main_take_an_ornithopter(),
             // = seg000:5b1e menu_callback_choice_map_main_find_prospectors.
             0x5b1e => println!("dispatch: FIND PROSPECTORS (0x5b1e) not ported"),
             // = the location popup's GO THERE verbs (loc_05fb0's menu).
@@ -1825,10 +1825,7 @@ impl GameState {
         // walk compares the incoming buffer's priority byte (`[buf]`, DOS al)
         // against the top's per iteration (= seg000:d343..d359):
         let priority = self.menu_buffer(element).priority;
-        loop {
-            let Some(&top) = self.screen_element_stack.last() else {
-                break;
-            };
+        while let Some(&top) = self.screen_element_stack.last() {
             let top_priority = self.menu_buffer(top).priority;
             if priority == top_priority {
                 // = seg000:d345 jz loc_0d368 — equal priority REPLACES the top
