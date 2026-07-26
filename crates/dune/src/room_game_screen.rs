@@ -181,6 +181,32 @@ pub(crate) const MENU_GLOBE_MUSIC: [CommandMenuRecord; 3] = [
     rec(0x00a3, 0xd2df), // "  Cancel"     menu_callback_choice_music_cd_order_cancel
 ];
 
+/// = seg001:207a menu_globe_save_game — the save-slot submenu the SAVE GAME
+/// verb (menu_callback_choice_mirror_room_save_game) pushes: one row per save
+/// slot ("Log N: DAY  d / hh.mm x.m." — the day/time is patched into the
+/// COMMAND.BIN string from each slot file's game_time header) plus Cancel.
+/// Rows of existing saves get CMD_HIGHLIGHT (the DOS cx = 8000h flag pass).
+#[rustfmt::skip]
+pub(crate) const MENU_GLOBE_SAVE_GAME: [CommandMenuRecord; 3] = [
+    rec(0x010f, 0xb35a), // Log 1: DAY ...  menu_callback_choice_globe_save_game
+    rec(0x0110, 0xb35a), // Log 2: DAY ...  menu_callback_choice_globe_save_game
+    rec(0x00a3, 0xd2e2), // "  Cancel"      menu_callback_choice_exit_menu
+];
+
+/// = seg001:208a menu_globe_load_game — the load-slot submenu the LOAD GAME
+/// verb pushes: the two manual slots plus the two autosave slots (LAST
+/// ENTERING INTO A PLACE / NEW SIETCH, written by the seg000:3f7e/3fa4
+/// room-entry autosave calls). Rows without a slot file get CMD_GREY (the DOS
+/// cx = 4000h flag pass).
+#[rustfmt::skip]
+pub(crate) const MENU_GLOBE_LOAD_GAME: [CommandMenuRecord; 5] = [
+    rec(0x010f, 0xb3b0), // Log 1: DAY ...             menu_callback_choice_globe_load_game
+    rec(0x0110, 0xb3b0), // Log 2: DAY ...             menu_callback_choice_globe_load_game
+    rec(0x0111, 0xb3b0), // LAST ENTERING INTO A PLACE menu_callback_choice_globe_load_game
+    rec(0x0112, 0xb3b0), // LAST ENTERING NEW SIETCH   menu_callback_choice_globe_load_game
+    rec(0x00a3, 0xd2e2), // "  Cancel"                 menu_callback_choice_exit_menu
+];
+
 /// = seg001:20b6 menu_exit_game_confirmation — the EXIT GAME confirmation submenu
 /// menu_callback_choice_exit_game pushes over the active menu. DOS stores a leading
 /// priority word (0x00f6) and a trailing 0-word fence, both implicit here. YES
@@ -258,8 +284,8 @@ pub(crate) struct RoomPerson {
     pub(crate) location_appearance: u16,
     /// seg000 offset of the verb's handler — stored as the second word of the
     /// built command-menu record. Like CommandMenuRecord.handler, nothing reads
-    /// it yet.
-    handler: u16,
+    /// it yet (the savegame block carries it at entry offset +4).
+    pub(crate) handler: u16,
     /// = entry word +8 (RoomPerson.time_joined) — game_time when the person
     /// last joined the player (COME WITH ME, npc_refresh_travel_timestamp with
     /// bx=0). loc_094f3 seeds for_condit_ds_16 from it while flags bit 0x40 is
@@ -361,6 +387,14 @@ pub(crate) enum ScreenElement {
     // submenu (STANDARD ORDER / SHUFFLE / Cancel) menu_callback_choice_music_on_
     // cd_style pushes over the mixer menu. Its cleanup func is fn_0d917_noop.
     MusicCdOrderMenu,
+    // = menu_globe_save_game (seg001:207a, leading priority byte 0xfe) — the
+    // save-slot submenu the SAVE GAME verb pushes (loc_0b2aa). Its cleanup
+    // func is resume_game_clock.
+    SaveGameMenu,
+    // = menu_globe_load_game (seg001:208a, leading priority byte 0xfe) — the
+    // load-slot submenu the LOAD GAME verb pushes. Its cleanup func is
+    // resume_game_clock.
+    LoadGameMenu,
     // = menu_done (seg001:2012, priority byte 0xf8) — the full-screen PALACE PLAN
     // overlay ui_draw_palace_plan pushes over the room command menu. DOS shares
     // the menu_done header with the unported on-map troop screen; PalacePlan is
@@ -444,6 +478,7 @@ impl ScreenElement {
             | ScreenElement::TravelMapScreen
             | ScreenElement::ChangeDestinationIgnoreWarning
             | ScreenElement::MapTroopOccupationMenu => 0xf8,
+            ScreenElement::SaveGameMenu | ScreenElement::LoadGameMenu => 0xfe,
             ScreenElement::ExitGameConfirmation | ScreenElement::MusicCdOrderMenu => 0xf6,
         }
     }
@@ -460,6 +495,8 @@ impl GameState {
             ScreenElement::NpcActionsMenu => &self.menu_npc_actions,
             ScreenElement::ExitGameConfirmation => &self.menu_exit_game_confirmation,
             ScreenElement::MusicCdOrderMenu => &self.menu_globe_music,
+            ScreenElement::SaveGameMenu => &self.menu_globe_save_game,
+            ScreenElement::LoadGameMenu => &self.menu_globe_load_game,
             ScreenElement::PalacePlan => &self.menu_done,
             ScreenElement::TravelMapScreen => &self.menu_multiple_cancel,
             ScreenElement::TroopMapScreen => &self.menu_map_main,
@@ -483,6 +520,8 @@ impl GameState {
             ScreenElement::NpcActionsMenu => &mut self.menu_npc_actions,
             ScreenElement::ExitGameConfirmation => &mut self.menu_exit_game_confirmation,
             ScreenElement::MusicCdOrderMenu => &mut self.menu_globe_music,
+            ScreenElement::SaveGameMenu => &mut self.menu_globe_save_game,
+            ScreenElement::LoadGameMenu => &mut self.menu_globe_load_game,
             ScreenElement::PalacePlan => &mut self.menu_done,
             ScreenElement::TravelMapScreen => &mut self.menu_multiple_cancel,
             ScreenElement::TroopMapScreen => &mut self.menu_map_main,
@@ -926,9 +965,23 @@ impl GameState {
             // = the location popup's GO THERE verbs (loc_05fb0's menu).
             0x50db => self.menu_callback_choice_move_to_location_orni(),
             0x50ea => self.menu_callback_choice_move_to_location_worm(),
-            // TODO: the other mirror-menu verbs (RESTART 0x0e47, LOAD 0xb29e,
-            // SAVE 0xb28c) and the room verbs (CALL A WORM 0x42d1, ...) are
-            // not ported.
+            // = seg000:b28c/b29e the mirror-menu SAVE GAME / LOAD GAME verbs —
+            // push the slot submenu (savegame.rs).
+            0xb28c => self.menu_callback_choice_mirror_room_save_game(),
+            0xb29e => self.menu_callback_choice_mirror_room_load_game(),
+            // = seg000:b35a/b3b0 the slot rows of those submenus. DOS passes
+            // the row in cx; the port derives the slot from the row's label id
+            // (0x10f..0x112, fixed per slot).
+            0xb35a => {
+                let slot = ((text_id & 0xfff) - 0x10f) as u8;
+                self.menu_callback_choice_globe_save_game(slot, text_id);
+            }
+            0xb3b0 => {
+                let slot = ((text_id & 0xfff) - 0x10f) as u8;
+                self.menu_callback_choice_globe_load_game(slot);
+            }
+            // TODO: the remaining mirror-menu verb (RESTART 0x0e47) and the
+            // room verbs (CALL A WORM 0x42d1, ...) are not ported.
             0xd2e2 => self.menu_callback_choice_exit_menu(),
             _ => {
                 println!("dispatch_command_handler: unhandled 0x{handler:04x}");
@@ -1476,8 +1529,13 @@ impl GameState {
 
     // = seg000:b2b9 suspend_game_clock — inc game_suspend_count, suspending the
     // in-game clock and idle events one nesting level.
-    fn suspend_game_clock(&mut self) {
+    pub(crate) fn suspend_game_clock(&mut self) {
         self.game_suspend_count = self.game_suspend_count.saturating_add(1);
+    }
+
+    // = seg000:b2be resume_game_clock — release one suspension level.
+    pub(crate) fn resume_game_clock(&mut self) {
+        self.game_suspend_count = self.game_suspend_count.saturating_sub(1);
     }
 
     // ---- Not-yet-ported callees (no-op stubs, each linked to its DOS address).
@@ -1845,6 +1903,9 @@ impl GameState {
             ScreenElement::MapTroopDialog
             | ScreenElement::MapTroopContactCycle
             | ScreenElement::MapTroopMovingMenu => self.map_troop_contact_cleanup(),
+            // = seg000:b2ad bx = resume_game_clock — the save/load submenus
+            //   release the clock suspension loc_0b2aa took.
+            ScreenElement::SaveGameMenu | ScreenElement::LoadGameMenu => self.resume_game_clock(),
             // = seg000:8816 the SEE DUNE MAP menu is pushed with bx =
             //   nullsub_00f66 — a no-op cleanup (the view resets through
             //   reset_room_scene_state on the way back to the room).
@@ -2245,7 +2306,7 @@ impl GameState {
     // resolved string at x=0x5d, y = the row's y0 + 1 (small font), then fill the
     // rest of the row with the background colour. text_id & 0x3fff == 0 leaves the
     // slot blank (just the fill, which clears any previous verb).
-    fn draw_command_menu_item(&mut self, slot: u8, text_id: u16) {
+    pub(crate) fn draw_command_menu_item(&mut self, slot: u8, text_id: u16) {
         // = seg000:d48a push [active_seg]; set_screen_as_active_framebuffer. When
         // a transition is mid-flight (in_transition > 0) DOS targets fb1 instead.
         let saved = self.active_fb();

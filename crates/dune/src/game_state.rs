@@ -17,8 +17,9 @@ use crate::{
     recorder::Recorder,
     room_game_screen::{
         MENU_CHANGE_DESTINATION_IGNORE_WARNING, MENU_DONE, MENU_EXIT_GAME_CONFIRMATION,
-        MENU_GLOBE_MUSIC, MENU_GO_TOWARDS_THIS_PLACE, MENU_MIXER_PANEL, MENU_NPC_ACTIONS_INIT,
-        MENU_PALACE_MIRROR_ROOM, MenuBuffer, ROOM_PERSON_TABLE_INIT, RoomPerson, ScreenElement,
+        MENU_GLOBE_LOAD_GAME, MENU_GLOBE_MUSIC, MENU_GLOBE_SAVE_GAME, MENU_GO_TOWARDS_THIS_PLACE,
+        MENU_MIXER_PANEL, MENU_NPC_ACTIONS_INIT, MENU_PALACE_MIRROR_ROOM, MenuBuffer,
+        ROOM_PERSON_TABLE_INIT, RoomPerson, ScreenElement,
     },
     settings_ui::{SETTINGS_RECORDS_INIT, SettingsRecord},
     sprite::Sprite,
@@ -678,6 +679,11 @@ pub struct GameState {
     pub(crate) menu_mixer_panel: MenuBuffer,
     // = seg001:206a menu_globe_music — the CD-order submenu.
     pub(crate) menu_globe_music: MenuBuffer,
+    // = seg001:207a menu_globe_save_game — the save-slot submenu (records
+    // restaged with slot flags/labels on every open).
+    pub(crate) menu_globe_save_game: MenuBuffer,
+    // = seg001:208a menu_globe_load_game — the load-slot submenu.
+    pub(crate) menu_globe_load_game: MenuBuffer,
     // = seg001:20b6 menu_exit_game_confirmation — the EXIT GAME submenu.
     pub(crate) menu_exit_game_confirmation: MenuBuffer,
     // = seg001:20c2 menu_palace_mirror_room — the LOOK AT MIRROR menu.
@@ -1836,6 +1842,14 @@ impl GameState {
             menu_globe_music: MenuBuffer {
                 priority: ScreenElement::MusicCdOrderMenu.initial_priority(),
                 records: MENU_GLOBE_MUSIC.to_vec(),
+            },
+            menu_globe_save_game: MenuBuffer {
+                priority: ScreenElement::SaveGameMenu.initial_priority(),
+                records: MENU_GLOBE_SAVE_GAME.to_vec(),
+            },
+            menu_globe_load_game: MenuBuffer {
+                priority: ScreenElement::LoadGameMenu.initial_priority(),
+                records: MENU_GLOBE_LOAD_GAME.to_vec(),
             },
             menu_exit_game_confirmation: MenuBuffer {
                 priority: ScreenElement::ExitGameConfirmation.initial_priority(),

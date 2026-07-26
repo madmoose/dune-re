@@ -44,6 +44,7 @@ mod rect;
 mod room_game_screen;
 mod room_renderer;
 mod room_scene;
+mod savegame;
 mod settings_ui;
 mod sprite;
 mod sprite_bank;

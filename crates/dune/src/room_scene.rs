@@ -457,29 +457,41 @@ impl GameState {
         // = seg000:3f72 cmp [current_room],1 — leaving the location's entry
         //   room (room 1, the one you arrive in from the desert).
         if self.current_room == 1 {
-            // = seg000:3f79..3f81 create_save_cl cl=2 — TODO: autosave; the
-            //   save system is not ported.
+            // = seg000:3f79..3f81 create_save_cl cl=2 — the LAST ENTERING INTO
+            //   A PLACE autosave (dune37s3.sav). Suppressed headless so tests
+            //   and offscreen renders don't touch the working directory.
+            if !self.is_headless()
+                && let Err(e) = self.save_game(2)
+            {
+                println!("autosave (slot 2): {e}");
+            }
         }
 
         // = seg000:3f84 mov si,[current_location_ptr] — the current location
         //   record.
         let loc_index = self.current_location_index as usize;
-        if let Some(location) = self.locations.get_mut(loc_index) {
-            // = seg000:3f88 test byte [si+0ah],10h — first in-room move inside
-            //   an unvisited location.
-            if location.status & 0x10 == 0 {
-                // = seg000:3f8e or byte [si+0ah],10h — mark it visited.
-                location.status |= 0x10;
-                // = seg000:3f92 cmp dh,20h; adc [number_of_sietches_visited],0
-                //   — the carry folds in +1 for location codes below 0x20 (the
-                //   sietches); cities/palaces (>= 0x20) do not count.
-                if (self.location_and_room >> 8) < 0x20 {
-                    self.number_of_sietches_visited += 1;
-                }
-                // = seg000:3f9a mov [entering_new_sietch],0ffh.
-                self.entering_new_sietch = 0xff;
-                // = seg000:3f9f..3fa7 create_save_cl cl=3 — TODO: autosave; the
-                //   save system is not ported.
+        // = seg000:3f88 test byte [si+0ah],10h — first in-room move inside
+        //   an unvisited location.
+        if let Some(location) = self.locations.get_mut(loc_index)
+            && location.status & 0x10 == 0
+        {
+            // = seg000:3f8e or byte [si+0ah],10h — mark it visited.
+            location.status |= 0x10;
+            // = seg000:3f92 cmp dh,20h; adc [number_of_sietches_visited],0
+            //   — the carry folds in +1 for location codes below 0x20 (the
+            //   sietches); cities/palaces (>= 0x20) do not count.
+            if (self.location_and_room >> 8) < 0x20 {
+                self.number_of_sietches_visited += 1;
+            }
+            // = seg000:3f9a mov [entering_new_sietch],0ffh.
+            self.entering_new_sietch = 0xff;
+            // = seg000:3f9f..3fa7 create_save_cl cl=3 — the LAST ENTERING NEW
+            //   SIETCH autosave (dune37s4.sav). Suppressed headless like the
+            //   slot-2 autosave above.
+            if !self.is_headless()
+                && let Err(e) = self.save_game(3)
+            {
+                println!("autosave (slot 3): {e}");
             }
         }
 

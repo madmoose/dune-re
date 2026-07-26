@@ -627,7 +627,7 @@ impl GameState {
     // Note: when _byte_227D_suppress_sky_240_255 == 0 DOS also writes the
     // secondary sky-colour span here (= seg000:ddc0 loc_0d64e); that sky-palette
     // step is not ported yet.
-    fn wait_interruptable(&mut self, ticks: u64) -> bool {
+    pub(crate) fn wait_interruptable(&mut self, ticks: u64) -> bool {
         // = seg000:ddb4 [key_hit_scancode] = 0.
         self.kb_clear_scancode();
         // = seg000:ddca loop for `ticks` PIT ticks, polling any_key_pressed.
