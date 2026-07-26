@@ -796,31 +796,12 @@ impl GameState {
                 self.common_dialogue(0x0e);
             }
             // = seg000:937e ui_dialogue_related_to_Fremen2 — al = text_id -
-            // 0x87 selects the fremen2_troop_ptrs slot (>= 9 folds to 0; 8 is
-            // the prospector's slot via data_0476b); the phase-0x64 gate and
-            // the CONDIT staging run on the selected troop; al = 0x0f.
+            // 0x87 selects the fremen2_troop_ptrs slot; falls into the shared
+            // seg000:9381 body.
             0x937e => {
-                // = seg000:937e sub ax,87h; 9381..9392 the clamps.
-                let mut idx = text_id.wrapping_sub(0x87) as u8;
-                if idx >= 9 {
-                    idx = 0;
-                }
-                if idx == 8 {
-                    idx = self.data_0476b.wrapping_sub(1);
-                    if (idx as i8) < 0 {
-                        idx = 0;
-                    }
-                }
-                // = seg000:9394 selected_fremen2_index = al; 9397..93a0 si =
-                //   fremen2_troop_ptrs[al].
-                self.selected_fremen2 = idx;
-                if let Some(ti) = self.fremen2_troops[(idx & 7) as usize] {
-                    // = seg000:93a2 call game_phase_set_to_64_if_conditions_met.
-                    self.game_phase_set_to_64_if_conditions_met(ti);
-                    // = seg000:93a5 call troop_prepare_troop_data_for_condit.
-                    self.troop_prepare_troop_data_for_condit(ti);
-                }
-                self.common_dialogue(0x0f);
+                // = seg000:937e sub ax,87h.
+                let idx = text_id.wrapping_sub(0x87) as u8;
+                self.ui_dialogue_related_to_common_and_fremen2(idx);
             }
             0x9472 => self.menu_callback_choice_talk_to_me(),
             0x95e2 => self.menu_callback_choice_come_with_me(),
@@ -1428,14 +1409,14 @@ impl GameState {
     // on-screen people (person_hit_test, which routes a HUD-area cursor to the
     // companion portrait slots); a hit on person index < 0x0f dispatches
     // that person's verb handler (room_persons[id].handler, = `jmp word ptr
-    // [si+4]`). Over the dialogue verb panel (loc_09248) only the companion
+    // [si+4]`), and >= 0x0f enters the Fremen-2 dialogue for round-robin slot
+    // (index - 0x0f) — the "Fremen Chief" / "Nth Fremen Chief" figures
+    // (loc_09240). Over the dialogue verb panel (loc_09248) only the companion
     // slots are live: the current speaker's own portrait re-enters their
     // dialogue (callback_main_ui_element_19), the other companion's switches
     // the conversation to them. The room LMB handler reaches this when a click
     // lands on no ui_element (= seg000:d904 hit-test miss -> d90a call), and it
     // is also the handler armed on ui_elements[21]/[22].
-    //
-    // Not modelled: the person index >= 0x0f branch (loc_09240).
     pub(crate) fn callback_main_ui_element_21_22(&mut self) {
         // = seg000:9215 get_active_screen_element; cmp bp,1f0eh; jnz loc_09248.
         let active = self.get_active_screen_element();
@@ -1488,14 +1469,55 @@ impl GameState {
             self.menu_callback_choice_map_main_take_an_ornithopter_notransition();
             return;
         }
-        // = seg000:922f cmp cl,0fh; jnb loc_09240 — only person index < 0x0f
+        // = seg000:922f cmp cl,0fh; jnb loc_09240 — person index < 0x0f
         // dispatches a room_persons handler here.
         if (person_id as usize) < 0x0f {
             // = seg000:9234 al=0x10; mul cl; si = room_persons + cl*0x10;
             // jmp word ptr [si+4] — dispatch the matched person's handler.
             let handler = self.room_persons[person_id as usize].handler;
             self.dispatch_command_handler(handler, 0);
+        } else {
+            // = seg000:9240 loc_09240 — sub cl,0fh; mov al,cl; jmp
+            // ui_dialogue_related_to_common_and_Fremen2: a click on a
+            // Fremen-2 person (draw ids 0x0f..) enters that person's dialogue
+            // by round-robin slot, entering the shared body past the 937e
+            // text-id decode.
+            self.ui_dialogue_related_to_common_and_fremen2(person_id - 0x0f);
         }
+    }
+
+    // = seg000:9381 ui_dialogue_related_to_common_and_Fremen2 — enter the
+    // Fremen-2 dialogue for the fremen2_troop_ptrs slot `idx`: clamp (>= 9
+    // folds to 0; 8 is the prospector's slot via data_0476b), record
+    // selected_fremen2, run the phase-0x64 gate and the CONDIT staging on the
+    // slot's troop, then the shared dialogue entry with al = 0x0f. Reached
+    // from the verb record (seg000:937e, al = text_id - 0x87) and from the
+    // game-area click on a Fremen-2 person (seg000:9240, al = person - 0x0f).
+    pub(crate) fn ui_dialogue_related_to_common_and_fremen2(&mut self, mut idx: u8) {
+        // = seg000:9381 cmp al,9; jb loc_09387; xor ax,ax.
+        if idx >= 9 {
+            idx = 0;
+        }
+        // = seg000:9387..9392 slot 8 resolves to the prospector's recorded
+        //   slot (data_0476b, 1-based; 0 falls back to slot 0).
+        if idx == 8 {
+            idx = self.data_0476b.wrapping_sub(1);
+            if (idx as i8) < 0 {
+                idx = 0;
+            }
+        }
+        // = seg000:9394 selected_fremen2_index = al; 9397..93a0 si =
+        //   fremen2_troop_ptrs[al].
+        self.selected_fremen2 = idx;
+        if let Some(ti) = self.fremen2_troops[(idx & 7) as usize] {
+            // = seg000:93a2 call game_phase_set_to_64_if_conditions_met.
+            self.game_phase_set_to_64_if_conditions_met(ti);
+            // = seg000:93a5 call troop_prepare_troop_data_for_condit.
+            self.troop_prepare_troop_data_for_condit(ti);
+        }
+        // = seg000:93a8 al = 0x0f; falls through into
+        //   common_code_for_ui_dialogue_related_functions.
+        self.common_dialogue(0x0f);
     }
 
     // = seg000:945b callback_main_ui_element_19 — a click on the talking-head
@@ -4643,6 +4665,74 @@ mod tests {
             game.get_active_screen_element(),
             super::ScreenElement::RoomCommandMenu,
             "one STOP TALKING returns to the room menu"
+        );
+    }
+
+    // = seg000:9240 loc_09240 — a game-area click on a Fremen-2 person (draw
+    // ids 0x0f.., the figures titled "Fremen Chief" / "Nth Fremen Chief")
+    // enters that person's dialogue by round-robin slot, exactly like
+    // clicking their verb in the command panel. Asset-gated:
+    //   cargo test -p dune --lib -- --ignored fremen2_sprite
+    #[test]
+    #[ignore = "needs assets/DUNE.DAT"]
+    fn fremen2_sprite_click_opens_their_dialogue() {
+        let dat_path = concat!(env!("CARGO_MANIFEST_DIR"), "/../../assets/DUNE.DAT");
+        let Ok(dat_file) = DatFile::open(dat_path) else {
+            eprintln!("skipping: {dat_path} not found");
+            return;
+        };
+        let (tx, _rx) = mpsc::sync_channel(64);
+        let mut game = GameState::new(dat_file, tx);
+        game.set_headless();
+        game.start(true);
+
+        // Rally Carthag-Tuek's troop (troops[0], the chain head of
+        // locations[12]): a rallied troop (occupation bit 7 clear, not
+        // Harkonnen) classifies behind Fremen 2, not Fremen 1.
+        game.troops[0].occupation = 2;
+
+        // Enter Carthag-Tuek's audience room (room 2); the draw classifies
+        // the troops, rebuilds the person verbs, and records the on-screen
+        // anchors.
+        game.location_and_room = 0x0002;
+        game.location_appearance = 0x0d80;
+        game.current_room = 2;
+        game.current_location_index = 12;
+        game.draw_room_game_screen();
+        assert_eq!(game.fremen2_troops[0], Some(0), "classified as Fremen 2");
+
+        // His verb is "Fremen Chief" (0x87 = 0x78 + person id 0x0f).
+        let slot = game
+            .active_menu_records()
+            .iter()
+            .position(|r| r.text_id == 0x87)
+            .expect("the Fremen Chief verb (text_id 0x87) not in the menu");
+
+        // The room draw recorded his anchor under person id 0x0f.
+        let (fx, fy) = game.character_screen_pos[0x0f];
+        assert!(fx != 0xffff, "the Fremen-2 anchor was not recorded");
+
+        // Hovering the sprite highlights the Fremen Chief verb slot.
+        game.mouse_pos_x = fx + 16;
+        game.mouse_pos_y = fy + 40;
+        assert_eq!(game.person_hit_test(), Some(0x0f));
+        game.highlight_hovered_text_action_item();
+        assert_eq!(
+            game.index_of_last_hovered_action_item as usize, slot,
+            "hover did not highlight the Fremen Chief verb slot"
+        );
+
+        // Clicking the sprite enters his dialogue (the loc_09240 branch),
+        // staging the same troop the panel verb would.
+        game.callback_main_ui_element_21_22();
+        assert_eq!(game.selected_fremen2, 0, "round-robin slot 0 selected");
+        assert_eq!(game.current_lip_sync_resource_id, 0x0f);
+        assert_eq!(game.troop_condit.troop_id, 1, "troop CONDIT block staged");
+        assert!(game.talking_head.is_some(), "the Fremen head is up");
+        assert_eq!(
+            game.get_active_screen_element(),
+            super::ScreenElement::NpcActionsMenu,
+            "the dialogue verb panel is active"
         );
     }
 
