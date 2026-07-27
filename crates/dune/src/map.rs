@@ -91,21 +91,32 @@ impl GameState {
             .position(|l| l.map_offset as usize == offset)
     }
 
-    // = seg000:018f..01c6, the location loop of map2_resource_func: for every
-    // location, snap its map_x to its map cell, cache the map byte offset
-    // (Location.map_offset, seg000:019e), and mark the cell as holding a
-    // location (map byte |= 0x40, seg000:01a1). The rest of the DOS loop —
-    // spice_field_id/spice_amount from the MAP2 spice layer (seg000:01a5..
-    // 01bd) and the per-location troop callback pass (seg000:01c8..01dd) —
-    // is not ported yet (the port's static location table already carries
-    // spice values).
+    // = seg000:0169..01c6 map2_resource_func (minus the troop placement pass,
+    // init_troop_locations): build a 256-entry histogram of the MAP2 spice
+    // layer's bytes, each count seeded with 7 (seg000:0175..018d), then for
+    // every location: snap its map_x to its map cell, cache the map byte
+    // offset (Location.map_offset, seg000:019e), mark the cell as holding a
+    // location (map byte |= 0x40, seg000:01a1), read the MAP2 byte at that
+    // offset into spice_field_id (seg000:01a5..01ac) and set spice_amount =
+    // histogram[field] >> 4 (seg000:01af..01bd).
     pub(crate) fn init_location_map_offsets(&mut self) {
+        // = seg000:0175..018d the seeded MAP2 histogram (data_0c5f9 bytes,
+        //   the map length).
+        let mut histogram = [7u16; 256];
+        for &cell in self.map2.iter().take(self.map.len()) {
+            histogram[cell as usize] += 1;
+        }
         for i in 0..self.locations.len() {
             let (map_x, map_y) = (self.locations[i].map_x, self.locations[i].map_y);
             let (offset, snapped_x) = self.map_offset_and_snap_x(map_x as u16, map_y);
             self.locations[i].map_x = snapped_x as i16;
             self.locations[i].map_offset = offset as u16;
             self.map[offset] |= 0x40;
+            // = seg000:01a5..01bd the location's spice field: the MAP2 byte
+            //   at its cell, and the field's map coverage as the amount.
+            let field = self.map2[offset];
+            self.locations[i].spice_field_id = field;
+            self.locations[i].spice_amount = (histogram[field as usize] >> 4) as u8;
         }
     }
 }

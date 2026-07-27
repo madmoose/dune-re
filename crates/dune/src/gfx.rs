@@ -1399,6 +1399,104 @@ const MAP_GLOBE_EDGE_INSETS: [u8; 18] = [
     0x41, 0x4b,
 ];
 
+// = segvga:2441 vga_draw_landscape (gfx_vtable_vga_draw_landscape, the BH = 0
+// plain-remap path) — render the map row buffer (`rows`, stride 0xc8) to the
+// active framebuffer at (x0, y0) through the 256-entry palette-remap table
+// `xlat`. Interior-only: a pixel is drawn only when it equals BOTH its
+// right-hand neighbour and the pixel one row below (segvga:24bb..24c4; the
+// last column, past the dec cx at segvga:24ba, compares the below neighbour
+// only, segvga:24d1), so only the inside of each same-valued region takes its
+// colour and the borders come out as the backdrop 0x70 — that is what gives
+// the spice-density overlay its blobby fields. `top_lat` is the top row's
+// latitude: rows at |latitude| >= 0x46 are trimmed on both sides by the same
+// map_globe_edge_insets curve as vga_blit_shaded (loc_segvga_02396 /
+// loc_segvga_023d7: black up to the four shade bytes 0x1c,0x19,0x18,0x17
+// toward the map, mirrored on the right). The DOS grayscale-mode DAC patch
+// (segvga:245e) has no port equivalent.
+#[allow(clippy::too_many_arguments)]
+pub fn vga_draw_landscape(
+    state: &mut GameState,
+    rows: &[u8],
+    width: usize,
+    height: usize,
+    x0: i16,
+    y0: i16,
+    top_lat: i16,
+    xlat: &[u8; 256],
+) {
+    let yoff = state.y_offset as usize;
+    let fb = state.active_fb_mut();
+    for row in 0..height {
+        let y = (y0 as usize + row + yoff) as u16;
+        let mut x = x0 as u16;
+        let mut put = |x: &mut u16, c: u8| {
+            fb.set(*x, y, c);
+            *x += 1;
+        };
+        // = segvga:24b2 call loc_segvga_02396 — the edge inset for this
+        //   row's latitude.
+        let lat = (top_lat + row as i16).unsigned_abs() as usize;
+        let inset = if lat >= 0x46 {
+            MAP_GLOBE_EDGE_INSETS[(lat - 0x46).min(MAP_GLOBE_EDGE_INSETS.len() - 1)] as usize
+        } else {
+            0
+        };
+        // = segvga:23b2 sub cx,dx twice; jb loc_segvga_023cc — a row narrower
+        //   than twice the inset is entirely off the globe: fill it black.
+        if width < 2 * inset {
+            for _ in 0..width {
+                put(&mut x, 0);
+            }
+            continue;
+        }
+        // = segvga:23b6..23c7 the left edge: black up to the shade ramp.
+        if inset > 0 {
+            if inset >= 4 {
+                for _ in 0..inset - 4 {
+                    put(&mut x, 0);
+                }
+                put(&mut x, 0x1c);
+                put(&mut x, 0x19);
+            }
+            put(&mut x, 0x18);
+            put(&mut x, 0x17);
+        }
+        // = segvga:24bb..24dd the interior: width - 2*inset pixels from the
+        //   source column `inset` on.
+        let w_int = width - 2 * inset;
+        for col in 0..w_int {
+            let i = row * 0xc8 + inset + col;
+            let cell = rows[i];
+            // = segvga:24bc/24c0 cmp al,[si]; cmp al,[si+0c7h] — the right
+            //   and below neighbours (the source cursor has already stepped
+            //   past the pixel, so +0xc7 is one row down, same column); the
+            //   last column (segvga:24d1) has no right neighbour.
+            let right = rows.get(i + 1).copied().unwrap_or(0);
+            let below = rows.get(i + 0xc8).copied().unwrap_or(0);
+            let c = if (col == w_int - 1 || cell == right) && cell == below {
+                // = segvga:24c6/24c7 xlat; stosb.
+                xlat[cell as usize]
+            } else {
+                // = segvga:24cc mov al,ah (0x70) — the backdrop.
+                0x70
+            };
+            put(&mut x, c);
+        }
+        // = segvga:24df call loc_segvga_023d7 — the right edge, mirrored.
+        if inset > 0 {
+            put(&mut x, 0x17);
+            put(&mut x, 0x18);
+            if inset >= 4 {
+                put(&mut x, 0x19);
+                put(&mut x, 0x1c);
+                for _ in 0..inset - 4 {
+                    put(&mut x, 0);
+                }
+            }
+        }
+    }
+}
+
 // = segvga:23eb vga_blit_shaded (gfx_vtable_vga_blit_shaded) — blit the map
 // row buffer (`rows`, stride 0xc8, one raw map cell per byte) to the active
 // framebuffer at (x0, y0), remapping every cell from palette bank 0 to bank 1

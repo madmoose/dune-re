@@ -122,9 +122,16 @@ impl GameState {
         // = seg000:88b3/88b6 record the id, clear the voiced-variant index.
         self.current_subtitle_id = phrase_id;
         self.data_047e0 = 0;
-        // = seg000:88bb the data_046eb & 0x40 short-circuit drops the bubble
-        //   entirely (loc_080df, the map-troop popup path). TODO: that popup
-        //   context is not modelled.
+        // = seg000:88bb..88c7 the data_046eb bit-6 short-circuit: clear the
+        //   bit and route the text through the contact-popup caption path
+        //   instead, whose tail re-raises the spice-density overlay (and with
+        //   it the bit). The caption routine re-enters show_voice_subtitle
+        //   with the bit clear, taking the normal path below.
+        if self.data_046eb & 0x40 != 0 {
+            self.data_046eb &= !0x40;
+            self.move_troop_show_instruction_caption(phrase_id);
+            return;
+        }
         // = seg000:88ca..88cf resolve + expand (get_phrase_or_command_string_
         //   si loads the record's PHRASE bank on the way, seg000:cf78).
         self.load_phrasexx_hsq();

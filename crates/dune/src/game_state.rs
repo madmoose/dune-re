@@ -98,6 +98,10 @@ pub(crate) enum TaskId {
     // (one CREDITS.HNM frame per tick), armed by the book's past-the-last-
     // page path (play_credits, seg000:09f5).
     CreditsScroll,
+    // = seg000:176b frame_task_callback_blink — the scripted continue-
+    // sequence's blink toggle (interval 0x64), installed by
+    // start_scripted_dialogue.
+    SequenceBlink,
 }
 
 pub(crate) struct FrameTask {
@@ -143,6 +147,9 @@ pub struct GameState {
     // = segvga:01a3 fb_base_ofs — the game-area top. Stored here as a row; DOS
     // keeps the row*320 byte offset and applies it to every blit.
     pub y_offset: u16,
+    // = seg001:2772 data_02772 — the 16-bit line pattern draw_line loads per
+    // edge (seg000:c541); 0xffff = solid, 0x5555 = the overlay's dotted box.
+    pub line_pattern: u16,
     pub framebuffer: FrameBuffer,
     // = _word_2D08E_framebuffer_saved_seg (fb2): a clean backup of the composed
     // scene; regions are restored from here under moving overlays. (The buffer
@@ -873,6 +880,50 @@ pub struct GameState {
     // records are set per open by the CHANGE TROOP OCCUPATION verb.
     pub(crate) menu_map_troop_occupation: MenuBuffer,
 
+    // = seg001:2136 menu_map_move_prospectors — the prospector's
+    // multi-destination pick menu (MOVE TROOP on troops[2]).
+    pub(crate) menu_map_move_prospectors: MenuBuffer,
+
+    // = seg001:1fba menu_multiple_provide_continue_option / seg001:1fae
+    // menu_prospector_troop_after_specializing_in_spice — the two
+    // " Continue…" panels of a scripted continue-sequence (sequence.rs).
+    pub(crate) menu_sequence_continue: MenuBuffer,
+    pub(crate) menu_sequence_prospector: MenuBuffer,
+
+    // = seg001:2220 menu_ptr_02220 — which of the two the scene currently
+    // shows (change_menu_to_continue_menu / ..._special_menu_after_
+    // specializing_prospector_troop_in_spice). Static init = the prospector
+    // panel.
+    pub(crate) sequence_menu: ScreenElement,
+
+    // = seg001:477a data_0477a — the active continue-sequence script and its
+    // read cursor (DOS keeps a cs pointer; the port keeps the slice plus an
+    // index). None = no scene running.
+    pub(crate) sequence_script: Option<&'static [u8]>,
+    pub(crate) sequence_cursor: usize,
+
+    // = seg001:4778 data_04778 — the script position action 00 records so a
+    // later step can branch back to it. Its readers are the unported
+    // cutscene actions.
+    pub(crate) sequence_return_cursor: Option<usize>,
+
+    // = seg001:4776 data_04776 — the (location_and_room low byte,
+    // data_046e0) pair start_scripted_dialogue snapshots and the 0xff end
+    // restores.
+    pub(crate) sequence_saved_scene: (u8, u8),
+
+    // = seg000:23c25 the blink toggle frame_task_callback_blink flips while
+    // a scripted scene runs.
+    pub(crate) sequence_blink: bool,
+
+    // = seg001:4718 data_04718 / seg001:4738 data_04738 — the destination
+    // pick's working copy of the prospector queue and its entry count: the
+    // MOVE TROOP verb seeds them from prospector_destinations (three words
+    // copied, four scanned — the DOS asymmetry), map clicks append, and the
+    // Done verb copies them back.
+    pub(crate) prospector_pick_queue: [u16; 4],
+    pub(crate) prospector_pick_count: u8,
+
     // = seg001:21fd data_021fd — the SKIP TO DESTINATION command template's
     // flags byte (the seg001:21fc record's text-id high byte; 0x40 = greyed).
     // DOS patches the static template in place
@@ -1076,6 +1127,31 @@ pub struct GameState {
     // map_screen_open (seg000:4323) and the travel routines (seg000:49a6),
     // cleared back to 0 by map_screen_cleanup for the plain room view.
     pub(crate) data_046eb: u8,
+
+    // = the decompressed MAP2.HSQ (idx 0x3a) spice layer, one spice-field id
+    // per map cell, same geometry as `map`. The spice-density overlay renders
+    // it through a per-location colour table (DOS swaps res_map_seg to it,
+    // seg000:5487). Empty until initialize_resources.
+    pub(crate) map2: Box<[u8]>,
+
+    // = seg001:4710/4712 data_04710/data_04712 — the shared popup-panel
+    // origin the spice-density overlay draws at, and its rect (the rect
+    // doubles as the popup identity). The overlay's home entry (seg000:5406)
+    // reloads it from the data_011c1/011c3 home words; the contact popup
+    // parks it opposite itself (seg000:7a15) for the in-place entry.
+    pub(crate) map_overlay_panel_pos: (i16, i16),
+    pub(crate) map_overlay_panel_rect: Rect,
+
+    // = seg001:4722 data_04722 — which layer the overlay renders: 0 = the
+    // spice-density colours, nonzero = the alternate (ecology) table at
+    // seg000:583f, which no ported caller selects.
+    pub(crate) map_overlay_mode: u8,
+
+    // = seg001:0e30/0e32 _word_20E30_globe_param_3 / _word_20E32_globe_param_4
+    // — the map position the spice-density overlay is centred on, exchanged
+    // with the live zoomed-globe position around its draw (loc_0b69a).
+    pub(crate) globe_param_3: u16,
+    pub(crate) globe_param_4: i16,
 
     // = seg001:46da data_046da — nonzero while the WAIT-verb / travel event
     // pump (run_events_for_n_time_periods) owns the screen; the scheduler's
@@ -1820,6 +1896,7 @@ impl GameState {
             screen_pal: Palette::new(),
 
             y_offset: 24,
+            line_pattern: 0xffff,
             framebuffer: FrameBuffer::new(320, 200),
             framebuffer_saved: FrameBuffer::new(320, 200),
             framebuffer_back: FrameBuffer::new(320, 200),
@@ -1925,6 +2002,12 @@ impl GameState {
             game_phase_copy_ds_fe: 0,
             events_pump_active: 0,
             room_redraw_request: 0,
+            map2: Box::new([]),
+            map_overlay_panel_pos: (0, 0),
+            map_overlay_panel_rect: Rect::default(),
+            map_overlay_mode: 0,
+            globe_param_3: 0,
+            globe_param_4: 0,
             vision_messages: Vec::new(),
             comm_sightings: Vec::new(),
             scene_records: crate::room_scene::SCENE_RECORDS,
@@ -2095,6 +2178,28 @@ impl GameState {
                 priority: ScreenElement::MapTroopMovingMenu.initial_priority(),
                 records: MENU_MAP_TROOP_MOVING.to_vec(),
             },
+            menu_map_move_prospectors: MenuBuffer {
+                priority: ScreenElement::MapMoveProspectors.initial_priority(),
+                records: crate::troop_map_screen::MENU_MAP_MOVE_PROSPECTORS.to_vec(),
+            },
+            menu_sequence_continue: MenuBuffer {
+                priority: ScreenElement::SequenceContinue.initial_priority(),
+                records: crate::sequence::MENU_SEQUENCE_CONTINUE.to_vec(),
+            },
+            menu_sequence_prospector: MenuBuffer {
+                priority: ScreenElement::SequenceProspectorContinue.initial_priority(),
+                records: crate::sequence::MENU_SEQUENCE_PROSPECTOR.to_vec(),
+            },
+            // = seg001:2220 dw menu_prospector_troop_after_specializing_in_
+            //   spice — the static initial value.
+            sequence_menu: ScreenElement::SequenceProspectorContinue,
+            sequence_script: None,
+            sequence_cursor: 0,
+            sequence_return_cursor: None,
+            sequence_saved_scene: (0, 0),
+            sequence_blink: false,
+            prospector_pick_queue: [0; 4],
+            prospector_pick_count: 0,
             menu_map_troop_occupation: MenuBuffer {
                 priority: ScreenElement::MapTroopOccupationMenu.initial_priority(),
                 records: Vec::new(),
@@ -2379,6 +2484,11 @@ impl GameState {
         // (the port keeps the whole buffer, see map.rs).
         self.map = self.dat_file.read("MAP.HSQ").expect("load MAP.HSQ");
 
+        // = seg000:57ec/5481 open_resource_by_index(0x3a) — the MAP2.HSQ
+        // spice layer the density overlay renders (DOS loads it on demand and
+        // swaps res_map_seg to it; the port keeps it alongside the terrain).
+        self.map2 = self.dat_file.read("MAP2.HSQ").expect("load MAP2.HSQ");
+
         // = seg000:018f..01c6 cache each location's map cell (also marks the
         // cell's map byte with the location bit 0x40).
         self.init_location_map_offsets();
@@ -2594,7 +2704,7 @@ impl GameState {
                     if nibble & 0x05 == 0x05 {
                         // = seg000:d8a8 call call_restore_cursor; call loc_01707.
                         self.call_restore_cursor();
-                        self.dialogue_advance_on_click();
+                        self.menu_callback_choice_continue_for_sequence();
                     }
                 } else {
                     // = seg000:d8b1 test al,5; jnz loc_0d8ba — if the LMB is not
@@ -2941,6 +3051,9 @@ impl GameState {
                 }
                 TaskId::CreditsScroll => {
                     self.credits_scroll_frame_task();
+                }
+                TaskId::SequenceBlink => {
+                    self.tick_sequence_blink();
                 }
             }
         }
@@ -3705,29 +3818,36 @@ impl GameState {
     // in `color` as four vga_draw_line edges (top, bottom, left, right). The
     // bevel is axis-aligned, so the port fills the four edge runs directly into
     // the active framebuffer (applying fb_base_ofs / y_offset like every segvga
-    // blit) rather than routing through the generic Bresenham vga_draw_line; the
-    // 16-bit line pattern (data_02772, solid here) and clip rect (data_0276a)
-    // are not modelled.
+    // blit) rather than routing through the generic Bresenham vga_draw_line.
+    // Each edge reloads the 16-bit line pattern (data_02772, seg000:c541) and
+    // rotates it per pixel, plotting on the rotated-out bit (segvga:1a6d) —
+    // 0xffff draws solid, the spice overlay's 0x5555 the dotted you-are-here
+    // box. The clip rect (data_0276a) is not modelled.
     pub(crate) fn draw_rect_outline(&mut self, x0: i16, y0: i16, x1: i16, y1: i16, color: u8) {
         let yoff = self.y_offset as i16;
+        let pattern = self.line_pattern;
         let fb = self.active_fb_mut();
         let w = fb.w() as i16;
         let h = fb.h() as i16;
-        let mut plot = |x: i16, y: i16| {
+        let mut plot = |x: i16, y: i16, pat: &mut u16| {
+            let bit = *pat & 0x8000 != 0;
+            *pat = pat.rotate_left(1);
             let py = y + yoff;
-            if (0..w).contains(&x) && (0..h).contains(&py) {
+            if bit && (0..w).contains(&x) && (0..h).contains(&py) {
                 fb.set(x as u16, py as u16, color);
             }
         };
         // = seg000:c569/c573 the top and bottom edges.
+        let (mut top, mut bottom) = (pattern, pattern);
         for x in x0..=x1 {
-            plot(x, y0);
-            plot(x, y1);
+            plot(x, y0, &mut top);
+            plot(x, y1, &mut bottom);
         }
         // = seg000:c57d/c583 the left and right edges.
+        let (mut left, mut right) = (pattern, pattern);
         for y in y0..=y1 {
-            plot(x0, y);
-            plot(x1, y);
+            plot(x0, y, &mut left);
+            plot(x1, y, &mut right);
         }
     }
 

@@ -2430,6 +2430,13 @@ impl GameState {
         } else {
             4
         };
+        self.troop_travel_substeps(ti, steps);
+    }
+
+    // = seg000:8313 loc_08313 — the sub-step loop and its icon-upkeep tail;
+    // troop_issue_move_order enters here directly with cx = 7 (seg000:8518)
+    // to give a freshly-ordered troop its head start.
+    pub(crate) fn troop_travel_substeps(&mut self, ti: usize, steps: u16) {
         for _ in 0..steps {
             // = seg000:8314..831c a zero delta = arrival (troop_08357).
             let (dlng, dlat) = self.troop_travel_substep_delta(ti);
@@ -2826,6 +2833,125 @@ impl GameState {
             // = seg000:844d..8451 home: drop the mission bits and settle.
             self.troops[ti].occupation &= 0xfc;
             self.troop_settle_into_location(ti);
+        }
+    }
+
+    // = seg000:84a6 troop_issue_move_order — order the troop to `dest_li`.
+    // The prospector re-syncs against its destination queue and moves to its
+    // head; a troop already moving just retargets; a stationed troop leaves
+    // its chain (with the leaving side effects) and starts moving with a
+    // 7-sub-step head start.
+    pub(crate) fn troop_issue_move_order(&mut self, ti: usize, dest_li: usize) {
+        let mut dest_ptr = locations::location_ptr_from_index(dest_li);
+        // = seg000:84a6..84af the prospector (troops[2]) moves to its queue
+        //   head instead; an empty queue is no order.
+        if ti == 2 {
+            let Some(head) = self.prospector_sync_destination_queue() else {
+                return;
+            };
+            dest_ptr = head;
+        }
+        // = seg000:84b2..84c8 already moving: retarget; a fetch mission
+        //   (occupation low bits 11b) drops its low bits; the icon follows
+        //   the (possibly changed) facing.
+        if self.troops[ti].occupation & 0x40 != 0 {
+            self.troops[ti].offset_of_location = dest_ptr;
+            if self.troops[ti].occupation & 3 == 3 {
+                self.troops[ti].occupation &= 0xfc;
+            }
+            self.troop_refresh_icon(ti);
+            return;
+        }
+        // = seg000:84ca call troop_06ebf — the hired troops left behind with
+        //   the just-reassigned speech bit re-derive their occupation
+        //   (callback_troop_06ecb).
+        let old_li = locations::location_index_from_ptr(self.troops[ti].offset_of_location);
+        self.for_each_hired_troop_in_location(old_li, |s, tj| {
+            if s.troops[tj].dissatisfaction_and_speech & 0x10 != 0 {
+                let nibble = s.troops[tj].occupation & 0x0f;
+                s.troop_reinit_occupation(tj, nibble);
+            }
+        });
+        // = seg000:84ce call troop_unlink_from_location_chain.
+        self.troop_unlink_from_location_chain(ti);
+        // = seg000:84d2..84fe a defending troop (occupation exactly 6)
+        //   leaving:
+        if self.troops[ti].occupation == 6 {
+            // = seg000:84d8..84ee leaving a battle-flagged location as the
+            //   last defender collapses the defence (location_do_
+            //   accumulation_05098 + location_battle_lost_...). Not ported.
+            //   TODO.
+            if self.locations[old_li].status & 2 != 0 {
+                println!(
+                    "troop_issue_move_order: the last-defender battle-lost check (seg000:84d8) not ported"
+                );
+            }
+            // = seg000:84f0..84fe heading for a peaceful sietch costs 3
+            //   motivation; another battle destination aborts the order.
+            if self.locations[dest_li].appearance < 0x28 {
+                if self.locations[dest_li].status & 2 != 0 {
+                    return;
+                }
+                self.troop_decrease_motivation(ti, 3);
+            }
+        }
+        // = seg000:8501..850f the departure: location word = the destination
+        //   (di takes the old one), the moving bit, position 0, the troop's
+        //   equipment leaves the old location, the icon follows.
+        self.troops[ti].offset_of_location = dest_ptr;
+        self.troops[ti].occupation |= 0x40;
+        self.troops[ti].position = 0;
+        self.troop_unregister_equipment_from_location(ti, old_li);
+        self.troop_refresh_icon(ti);
+        // = seg000:8512..851b a hidden troop (bitfield_10 bit 4) stays put;
+        //   everyone else gets a 7-sub-step head start (jmp loc_08313).
+        if self.troops[ti].bitfield_10 & 0x10 == 0 {
+            self.troop_travel_substeps(ti, 7);
+        }
+    }
+
+    // = seg000:848f prospector_sync_destination_queue — drop leading queue
+    // entries already reached (the head equals the prospector's current
+    // destination while it is not moving); None = the queue is empty,
+    // otherwise the head the move order goes to.
+    fn prospector_sync_destination_queue(&mut self) -> Option<u16> {
+        loop {
+            let head = self.prospector_destinations[0];
+            if head != 0
+                && self.troops[2].offset_of_location == head
+                && self.troops[2].occupation & 0x40 == 0
+            {
+                self.shift_prospector_destinations();
+                continue;
+            }
+            // = seg000:84a3 or di,di — ZF for the caller.
+            return if head == 0 { None } else { Some(head) };
+        }
+    }
+
+    // = seg000:7f75 troop_location_unregister_troop_equipment_from_location_
+    // equipment — the inverse of the register: subtract the troop's
+    // held-equipment bits from the location's counts, clamped at 0.
+    fn troop_unregister_equipment_from_location(&mut self, ti: usize, li: usize) {
+        let eq = self.troops[ti].equipment;
+        for slot in 0..7 {
+            if eq & (0x80 >> slot) != 0 {
+                let s = self.locations[li].equipment.slot_mut(slot);
+                *s = s.saturating_sub(1);
+            }
+        }
+    }
+
+    // = seg000:6f93 troop_decrease_motivation — motivation -= `by`, clamped
+    // at 0; dropping below 5 pins it at 4, stops the troop working and sets
+    // the demotivated speech bit (0x20).
+    pub(crate) fn troop_decrease_motivation(&mut self, ti: usize, by: u8) {
+        let t = &mut self.troops[ti];
+        t.motivation = t.motivation.saturating_sub(by);
+        if t.motivation < 5 {
+            t.motivation = 4;
+            self.troop_make_stop_working(ti);
+            self.troops[ti].dissatisfaction_and_speech |= 0x20;
         }
     }
 }

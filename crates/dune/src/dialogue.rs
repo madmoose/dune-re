@@ -367,7 +367,7 @@ impl GameState {
 
     // = seg000:9f40 loc_09f40 — per-presentation setup shared by the talk verb
     // (seg000:9472) and the auto-dialogue present chain (seg000:9713).
-    fn prepare_dialogue_presentation(&mut self) {
+    pub(crate) fn prepare_dialogue_presentation(&mut self) {
         // = seg000:9f43..9f51 — current_lip_sync_resource_id == 2 (Stilgar)
         //   during final-attack stage 4 (final_attack_stage_ds_c2 == 4) re-runs
         //   increase_final_attack_stage_if_more_than_10K_Fremen_near_Harkonnen_
@@ -1226,11 +1226,15 @@ impl GameState {
             //   spice stock, the smuggler's bill). Arms the overlay; the idle
             //   animator raises the sign and draws the number onto it.
             0x0a => self.head_sign_arm_for_current_line(),
-            // = seg000:a1f7 (0x03) trigger_cutscenes, a244/a248 (0x04/0x05) the
-            //   accept/refuse/argue menu, a1ed (0x0e) increase_final_attack_stage
-            //   (ds:c2 not modelled), a125/a157/a172 (0x08/0x09/0x0f) the
-            //   speaker-dependent effects, a28e (0x0d) the command-menu/PALPLAN
-            //   redraw — all unported.
+            // = seg000:a1f7 callback_event_dialogue_line_03_trigger_cutscenes
+            //   — install the phase-appropriate continue-sequence script
+            //   (sequence.rs). Below phase 0x14 this is the prospector's
+            //   spice-map scene.
+            3 => self.dialogue_event_trigger_cutscene(),
+            // = a244/a248 (0x04/0x05) the accept/refuse/argue menu, a1ed
+            //   (0x0e) increase_final_attack_stage, a125/a157/a172
+            //   (0x08/0x09/0x0f) the speaker-dependent effects, a28e (0x0d)
+            //   the command-menu/PALPLAN redraw — all unported.
             _ => println!("dispatch_dialogue_line_event: unported event 0x{event:02x}"),
         }
     }

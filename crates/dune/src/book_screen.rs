@@ -502,8 +502,10 @@ impl GameState {
         self.subtitle_bubble = None;
         // = seg000:b1a6..b1a9 reopen PERS.HSQ (the room portrait bank).
         self.open_sprite_bank(sprite_bank::PERS);
-        // = seg000:b1ac jmp loc_01877 — the shared enter-room tail.
-        self.enter_room_view();
+        // = seg000:b1ac jmp loc_01877 — the shared enter-room tail, entered
+        // past the neg at seg000:186e so room_view_toggle keeps pointing at
+        // the room view.
+        self.ui_enter_room_view_tail();
     }
 
     // = seg000:09f5 play_credits (the in-book scrolling entry, distinct from

@@ -412,7 +412,7 @@ impl GameState {
                 return;
             }
             // = seg000:8843 call map_dismiss_rallied_troops_popup.
-            self.map_dismiss_rallied_troops_popup();
+            self.map_close_rallied_troops_popup();
         }
         // = seg000:8846 lodsw; add [zoomed_globe_longitude],ax; lodsw; add
         //   [zoomed_globe_latitude],ax — the longitude wraps around the map;
@@ -431,7 +431,8 @@ impl GameState {
         //   the active menu is menu_multiple_cancel/menu_map_move_prospectors
         //   AND data_046eb bit 0x40 is set (the globe-0x40 sub-mode); that
         //   path copies the zoomed position into globe_param_3/4 instead
-        //   (loc_0541f). The windowed map view (data_046eb == 1) never takes
+        //   (map_enter_spice_density_overlay_in_place). The windowed map
+        //   view (data_046eb == 1) never takes
         //   it. TODO: port with SEE DUNE MAP (the full-globe view).
         if self.data_046eb & 0x40 != 0 {
             println!("ui_click_map_center: globe-0x40 branches not ported");
@@ -604,9 +605,31 @@ impl GameState {
             self.map_renderer.draw(fb, &self.map, tablat, lat, lng);
             return;
         }
-        // = seg000:b714 loc_0b714 — the windowed map. Window geometry from
-        //   data_046e3_rect: width (data_0dcf2), height (data_0dcf4) and centre
-        //   (data_0dcf6/data_0dcf8, unused until the marker draws are ported).
+        // = seg000:b714 loc_0b714 — the windowed map.
+        let (rows, width, height, top_lat) = self.map_fill_window_rows_from(None);
+        // = seg000:b7c6 test data_046eb,40h; jnz — bit 0x40 suppresses the
+        //   blit (the spice-density overlay renders the same rows through
+        //   vga_draw_landscape instead).
+        if self.data_046eb & 0x40 == 0 {
+            let r = self.map_view_rect;
+            // = seg000:b7cd call [gfx_vtable_vga_blit_shaded].
+            gfx::vga_blit_shaded(self, &rows, width, height, r.x0, r.y0, top_lat);
+        }
+        let _ = height;
+    }
+
+    // = seg000:b714..b7c4 the windowed map's row fill: one map row per window
+    // row into the ss row buffer at RESOURCE_GLOBDATA (stride 0xc8). `source`
+    // selects the byte layer — None = the terrain MAP.HSQ, Some(bytes) = the
+    // layer DOS installs by swapping res_map_seg (the spice-density overlay
+    // passes MAP2.HSQ, seg000:5487). Returns the buffer plus the window
+    // width/height and the top row's latitude.
+    pub(crate) fn map_fill_window_rows_from(
+        &mut self,
+        source: Option<&[u8]>,
+    ) -> (Vec<u8>, usize, usize, i16) {
+        // Window geometry from data_046e3_rect: width (data_0dcf2), height
+        // (data_0dcf4) and centre (data_0dcf6/data_0dcf8).
         let r = self.map_view_rect;
         let width = (r.x1 - r.x0) as usize;
         let height = (r.y1 - r.y0) as usize;
@@ -649,7 +672,8 @@ impl GameState {
             let left = (cell + row_len - eff_w / 2) % row_len;
             // = seg000:b807..b81d copy, wrapping around the row end.
             let avail = row_len - left;
-            let src = &self.map[row_off..row_off + row_len];
+            let bytes = source.unwrap_or(&self.map);
+            let src = &bytes[row_off..row_off + row_len];
             if avail >= eff_w {
                 dst[..eff_w].copy_from_slice(&src[left..left + eff_w]);
             } else {
@@ -657,12 +681,7 @@ impl GameState {
                 dst[avail..eff_w].copy_from_slice(&src[..eff_w - avail]);
             }
         }
-
-        // = seg000:b7c6 test data_046eb,40h; jnz — bit 0x40 suppresses the blit.
-        if self.data_046eb & 0x40 == 0 {
-            // = seg000:b7cd call [gfx_vtable_vga_blit_shaded].
-            gfx::vga_blit_shaded(self, &rows, width, height, r.x0, r.y0, top_lat);
-        }
+        (rows, width, height, top_lat)
     }
 
     // = seg000:b647 map_position_to_screen — project a map position (x =

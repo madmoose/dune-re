@@ -93,6 +93,19 @@ pub(crate) const MENU_MAP_TROOP_MOVING: [CommandMenuRecord; 3] = [
     rec(cmd::CANCEL,             0xd2e2),
 ];
 
+/// = seg001:2136 menu_map_move_prospectors — the prospector's
+/// multi-destination pick menu the MOVE TROOP verb pushes for troops[2].
+/// ADD A DESTINATION is a plain label (its DOS handler seg000:80c7 is a
+/// ret; the map click does the adding) that move_prospectors_configure_menu
+/// greys once three destinations are queued.
+#[rustfmt::skip]
+pub(crate) const MENU_MAP_MOVE_PROSPECTORS: [CommandMenuRecord; 4] = [
+    rec(cmd::ADD_A_DESTINATION,     0x80c7),
+    rec(cmd::GIVE_NEW_DESTINATIONS, 0x80d9),
+    rec(cmd::DONE,                  0x8214),
+    rec(cmd::CANCEL,                0xd2e2),
+];
+
 // = seg001:1482 full_map_view_rect — the SEE DUNE MAP window (4,4)-(316,148),
 // copied into data_046e3_rect (map_view_rect) by the open transition
 // callback. vga_draw_map_zoomed fills exactly this window: 36 bands of 4
@@ -113,6 +126,14 @@ pub(crate) const MAP_POPUP_TROOP_INFO: u16 = 0x18df;
 /// = seg001:1668 data_01668 — the location info panel record (frame 0xf8,
 /// fill 0x10). The record's seg001 offset is the popup identity.
 pub(crate) const MAP_POPUP_LOCATION: u16 = 0x1668;
+
+/// = seg001:11c1/11c3 data_011c1/data_011c3 — the spice-density overlay
+/// panel's screen origin (75, 15).
+const SPICE_OVERLAY_PANEL_POS: (i16, i16) = (75, 15);
+
+/// = seg001:4710 data_04710 — the overlay panel's rect doubles as its popup
+/// identity in map_popup_ptr (seg000:5535).
+pub(crate) const MAP_POPUP_SPICE_OVERLAY: u16 = 0x4710;
 
 /// = seg001:18e9 troop_contact_text_panel_record — the contact dialogue
 /// popup's panel record, frame colour 0xf5 (+8), fill 0xfb (+9). The record's
@@ -149,6 +170,19 @@ pub(crate) static DUNE_MAP_MOUSE_HANDLERS: MouseHandlers = MouseHandlers {
     release: GameState::dune_map_mouse_release,
     rmb_release: GameState::dune_map_mouse_noop,
     drag: GameState::dune_map_mouse_drag,
+    rmb_drag: GameState::dune_map_mouse_drag_noop,
+};
+
+// = seg001:1aac mouse_handlers_01aac — the MOVE TROOP destination-pick mode:
+// the map hover keeps working, the LMB picks a destination, everything else
+// is a no-op.
+pub(crate) static MOVE_TROOP_MOUSE_HANDLERS: MouseHandlers = MouseHandlers {
+    idle: GameState::dune_map_mouse_idle,
+    lmb: GameState::move_troop_pick_lmb,
+    rmb: GameState::dune_map_mouse_noop,
+    release: GameState::dune_map_mouse_noop,
+    rmb_release: GameState::dune_map_mouse_noop,
+    drag: GameState::dune_map_mouse_drag_noop,
     rmb_drag: GameState::dune_map_mouse_drag_noop,
 };
 
@@ -260,14 +294,296 @@ impl GameState {
         self.map_setup_main_menu();
         // = seg000:5ac8/5ac9 restore the entry data_046eb.
         self.data_046eb = saved_046eb;
-        // = seg000:5acc..5ad0 bit 0x40 re-enters the spice-density overlay
-        //   (loc_05406) — not ported yet. TODO.
+        // = seg000:5acc..5ad0 bit 0x40 re-enters the spice-density overlay.
         if self.data_046eb & 0x40 != 0 {
-            println!("ui_main_view_map_interface: spice-density overlay (loc_05406) not ported");
+            self.map_enter_spice_density_overlay();
         }
         // = seg000:5ad3 install mouse_handlers_01a9e.
         self.active_mouse_handlers = &DUNE_MAP_MOUSE_HANDLERS;
         // = seg000:5ad9 nav rect = the map window.
+        self.set_mouse_nav_rect(self.map_view_rect);
+    }
+
+    // = seg000:53f1 menu_callback_choice_map_main_see_spice_density — the map
+    // main menu's SEE SPICE DENSITY verb: a toggle. With the overlay up it
+    // leaves it; otherwise it raises it with the map main menu as the panel's
+    // menu (data_04720 = 0x1e6e).
+    pub(crate) fn menu_callback_choice_map_main_see_spice_density(&mut self) {
+        // = seg000:53f1 data_04722 = 0 — the spice-density mode (not the
+        //   ecology one).
+        self.map_overlay_mode = 0;
+        // = seg000:53f6..53fd test data_046eb,40h; jnz loc_058fa.
+        if self.data_046eb & 0x40 != 0 {
+            self.map_leave_spice_density_overlay();
+            return;
+        }
+        // = seg000:5400 data_04720 = menu_map_main; fall into
+        //   map_enter_spice_density_overlay.
+        self.map_enter_spice_density_overlay();
+    }
+
+    // = seg000:5406 map_enter_spice_density_overlay — raise the spice-density
+    // overlay at its home position: a small map window inside a panel showing
+    // each location's spice field shaded by its density. The panel origin
+    // reloads from the data_011c1/011c3 home words and the open popups close.
+    // The SEE SPICE DENSITY verb falls in here (loc_05400) and the map
+    // recompose re-enters via the bit-6 check at seg000:5ad0.
+    //
+    // The panel origin is data_04710/04712; the map window sits at +(5, 7)
+    // and is 0xa0 x 0x59. The window content is the MAP2.HSQ spice layer run
+    // through the same windowed row fill as the terrain map (DOS swaps
+    // res_map_seg around the call, seg000:5487), then rendered through the
+    // per-field colour table loc_057e5 builds (vga_draw_landscape).
+    pub(crate) fn map_enter_spice_density_overlay(&mut self) {
+        // = seg000:5406..5412 the panel origin from data_011c1/011c3. DOS
+        //   persists panel drags back into the home words (seg000:59d1); the
+        //   drag is not ported, so the home stays the static (75, 15).
+        self.map_overlay_panel_pos = SPICE_OVERLAY_PANEL_POS;
+        // = seg000:5416..541c close the popups the overlay replaces.
+        self.map_close_rallied_troops_popup();
+        self.map_close_location_troop_popup();
+        self.map_close_troop_info_popup();
+        self.map_enter_spice_density_overlay_in_place();
+    }
+
+    // = seg000:541f map_enter_spice_density_overlay_in_place — raise the
+    // overlay at the current panel origin, left wherever the last popup
+    // staged it: the contact popup parks it at (92, 30) — or (92, 14) with
+    // the popup in the lower half (seg000:7a15) — which is where the
+    // prospector scene's overlay appears. Reached from the move-order
+    // caption tail (seg000:8134); the nav-panel centre button also jumps
+    // here in the overlay sub-mode (seg000:5b0a, unported).
+    pub(crate) fn map_enter_spice_density_overlay_in_place(&mut self) {
+        // = seg000:541f..542b the overlay opens on the map position the
+        //   view is centred at (globe_param_3/4 = the zoomed globe position).
+        self.globe_param_3 = self.zoomed_globe_longitude;
+        self.globe_param_4 = self.zoomed_globe_latitude;
+        self.map_draw_spice_density_overlay();
+    }
+
+    // = seg000:542f loc_0542f — draw (or redraw) the overlay.
+    pub(crate) fn map_draw_spice_density_overlay(&mut self) {
+        let (px, py) = self.map_overlay_panel_pos;
+        // = seg000:542f/5435 data_046fc = 0; current_bubble_layout_ptr = 0.
+        self.subtitle_bubble = None;
+        // = seg000:543e..5456 the map window: the panel origin + (5, 7),
+        //   0xa0 x 0x59.
+        self.map_view_rect = rect(px + 5, py + 7, px + 5 + 160, py + 7 + 89);
+        // = seg000:5459..5465 the panel rect's far corner: the window plus a
+        //   (5, 0xc) border.
+        self.map_overlay_panel_rect = rect(px, py, px + 5 + 160 + 5, py + 7 + 89 + 0xc);
+        // = seg000:5468..5471 draw the panel frame sprite 0x8d from ONMAP at
+        //   the panel origin.
+        self.open_onmap_spritesheet();
+        let (sx, sy) = (px, py);
+        let full = rect(0, 0, 320, 200);
+        self.with_active_bank_sheet(|s, sheet| {
+            s.draw_sprite_from_sheet_clipped(sheet, 0x8d, sx, sy, full);
+        });
+        // = seg000:5474/5477 fb1 active + the sprite clip rect.
+        self.set_fb1_as_active_framebuffer();
+        // = seg000:547a..5497 the window content: MAP2's rows (res_map_seg
+        //   swapped) with data_046eb = 0x40 so map_draw_zoomed_globe fills the
+        //   row buffer without blitting, around the loc_0b69a position swap.
+        let saved_046eb = std::mem::replace(&mut self.data_046eb, 0x40);
+        self.map_overlay_swap_position();
+        let map2 = self.map2.clone();
+        let (rows, width, height, top_lat) = self.map_fill_window_rows_from(Some(&map2));
+        // = seg000:549e call loc_058e4 — the landscape render through the
+        //   per-location colour table.
+        let xlat = self.build_spice_density_xlat();
+        let r = self.map_view_rect;
+        crate::gfx::vga_draw_landscape(self, &rows, width, height, r.x0, r.y0, top_lat, &xlat);
+        // = seg000:54a1 call load_icones_sprites — the windowed-view marker
+        //   sprites (base 0x3a) live in ICONES; the legend below reopens
+        //   ONMAP for its ramp bars.
+        self.open_icones_spritesheet();
+        // = seg000:54a4..54aa the location markers and the overlay's legend
+        //   strip and content (loc_05605/loc_0563e).
+        self.map_build_and_draw_location_markers();
+        self.map_overlay_draw_legend_strip();
+        self.map_overlay_draw_legend();
+        // = seg000:54ad data_02772 = 0x5555 — the dotted line pattern for the
+        //   box below.
+        self.line_pattern = 0x5555;
+        // = seg000:54b3..551a the "you are here" box: the player position
+        //   projected into the window, a 0x50 x 0x28 box clamped to the
+        //   window, outlined in 0xfb.
+        let (cx, cy) = self.map_position_to_screen(self.globe_param_3, self.globe_param_4);
+        let (mut x0, mut x1) = (cx - 0x28, cx + 0x27);
+        let (mut y0, mut y1) = (cy - 0x14, cy + 0x13);
+        let (wx0, wx1) = (px + 5, px + 5 + 0x9f);
+        let (wy0, wy1) = (py + 7, py + 7 + 0x58);
+        x0 = x0.clamp(wx0, wx1);
+        x1 = x1.clamp(wx0, wx1);
+        y0 = y0.clamp(wy0, wy1);
+        y1 = y1.clamp(wy0, wy1);
+        if y0 != y1 && x0 != x1 {
+            self.draw_rect_outline(x0, y0, x1, y1, 0xfb);
+        }
+        // = seg000:551d data_02772 = 0xffff — the solid pattern back.
+        self.line_pattern = 0xffff;
+        // = seg000:551d..5535 the panel becomes an open popup so a click
+        //   inside it routes to the overlay, not the map: the primary slot
+        //   when it is free (or already the overlay's), else the secondary
+        //   one — that is how the overlay coexists with the troop-contact
+        //   popup during the prospector scene.
+        let secondary = self.map_popup_ptr != 0 && self.map_popup_ptr != MAP_POPUP_SPICE_OVERLAY;
+        if secondary {
+            self.map_popup2_ptr = MAP_POPUP_SPICE_OVERLAY;
+        } else {
+            self.map_popup_ptr = MAP_POPUP_SPICE_OVERLAY;
+        }
+        // = seg000:553c..554a the pending menu (data_04720) folds in with
+        //   effect 6. The port's callers push their own menus.
+        // = seg000:554e..5558 the primary-slot case draws the overlay's own
+        //   decorations (loc_062f2 + loc_0813e: the spice-field legend and
+        //   the equipment row — unported); the secondary-slot case draws the
+        //   player-position sprite.
+        if secondary {
+            self.map_draw_player_position_sprite();
+        }
+        // = seg000:555b/555e present the panel rect.
+        let panel = self.map_overlay_panel_rect;
+        self.present_screen_rect(panel);
+        // = seg000:5561 call loc_0b69a — swap the position back.
+        self.map_overlay_swap_position();
+        // = seg000:5564..5572 data_046eb = 0xc0 (the full map plus the
+        //   overlay bit) and the map window returns to the full-map rect.
+        self.data_046eb = saved_046eb | 0xc0;
+        self.map_view_rect = FULL_MAP_VIEW_RECT;
+        // = seg000:5575/5578 the mouse nav rect is the panel.
+        self.set_mouse_nav_rect(panel);
+    }
+
+    // = seg000:5605 loc_05605 — the legend strip background: fill the panel
+    // band below the map window ((px+6, py+0x62)-(x1-6, y1-2)) with 0xf5 and
+    // select the small font for the label. DOS also resets the legend hover
+    // cache here (data_04724 = 0xff); the hover highlighter it serves
+    // (seg000:5744..57e0, the density-tick XOR box and label recolour under
+    // the mouse) is not ported.
+    fn map_overlay_draw_legend_strip(&mut self) {
+        let (px, py) = self.map_overlay_panel_pos;
+        let r = self.map_overlay_panel_rect;
+        // = seg000:5605..562c the 0xf5 fill of the strip rect, into the
+        //   active framebuffer.
+        let dest = self.active_fb();
+        crate::gfx::vga_fill_rect(
+            self,
+            dest,
+            (px + 6) as u16,
+            (py + 0x62) as u16,
+            (r.x1 - 6) as u16,
+            (r.y1 - 2) as u16,
+            0xf5,
+        );
+        // = seg000:5635 call font_select_small_font.
+        self.font_select_small_font();
+    }
+
+    // = seg000:563e loc_0563e — the legend content on the strip: the
+    // "  SPICE DENSITY  " label (phrase 0x65, colour word 0xf5fe) at
+    // (px+6, py+0x62), the '-' glyph at x = px+6+0x53 with the '+' 0x41
+    // past it, then the two ONMAP density-ramp bar sprites 0x80/0x81 at
+    // (px+0x5f, py+0x63) and 0x3c further right. The data_04722 != 0
+    // ecology variant ("  TROOP OCCUPATION  ", seg000:568c) is not
+    // reachable from the ported callers. TODO.
+    fn map_overlay_draw_legend(&mut self) {
+        let (px, py) = self.map_overlay_panel_pos;
+        // = seg000:5652..5656 the label.
+        self.font_draw_phrase_or_command_string_with_color_at_pos(
+            0x65,
+            0xf5fe,
+            (px + 6) as u16,
+            (py + 0x62) as u16,
+        );
+        // = seg000:5659..5662 the '-' end cap: only the pen x moves (the y
+        //   stays on the label row).
+        self.font_state.x = (px + 6 + 0x53) as u16;
+        self.font_draw_glyph(b'-');
+        // = seg000:5666..566d the '+' end cap, 0x41 past the advanced pen.
+        self.font_state.x += 0x41;
+        self.font_draw_glyph(b'+');
+        // = seg000:5671..5689 the density-ramp bars: ONMAP sprites 0x80 and
+        //   0x81 (draw_sprite, the unclipped variant).
+        self.open_onmap_spritesheet();
+        let full = rect(0, 0, 320, 200);
+        self.with_active_bank_sheet(|s, sheet| {
+            s.draw_sprite_from_sheet_clipped(sheet, 0x80, px + 0x5f, py + 0x63, full);
+            s.draw_sprite_from_sheet_clipped(sheet, 0x81, px + 0x5f + 0x3c, py + 0x63, full);
+        });
+    }
+
+    // = seg000:b69a loc_0b69a — exchange the live map position (zoomed_globe_
+    // longitude/latitude) with the overlay's (globe_param_3/4). Called before
+    // and after the overlay draw, so the overlay renders its own position and
+    // the map view keeps its own.
+    fn map_overlay_swap_position(&mut self) {
+        std::mem::swap(&mut self.zoomed_globe_longitude, &mut self.globe_param_3);
+        std::mem::swap(&mut self.zoomed_globe_latitude, &mut self.globe_param_4);
+    }
+
+    // = seg000:57e5 build_spice_density_xlat — build the overlay's 256-entry
+    // palette-remap table: every MAP2 spice-field id maps to a colour,
+    // defaulting to the backdrop 0x70. With data_04722 == 0 (the spice-
+    // density mode) each visible location paints its own field: status bit 6
+    // clear takes the flat marker colour (0x75, or 0x78 in monotone mode),
+    // bit 6 set the density-ramp shade 0x50 + (spice_density >> 4).
+    fn build_spice_density_xlat(&mut self) -> [u8; 256] {
+        // = seg000:57f1..57f8 fill with 0x70.
+        let mut xlat = [0x70u8; 256];
+        // = seg000:57fa cmp data_04722,0; jnz loc_0583f — the other mode (the
+        //   ecology/vegetation view) is not reachable from the ported
+        //   callers. TODO.
+        for loc in self.locations.iter() {
+            // = seg000:5808..580d test status,80h — a hidden location paints
+            //   nothing.
+            if loc.status & 0x80 != 0 {
+                continue;
+            }
+            // = seg000:580f bl = spice_field_id — the MAP2 byte this
+            //   location owns.
+            let field = loc.spice_field_id as usize;
+            // = seg000:5812..582e status bit 6 clear takes the flat colour
+            //   (the jz at 5821 stores the 0x75 set up before the popf);
+            //   bit 6 set the density shade.
+            let colour = if loc.status & 0x40 == 0 {
+                // = seg000:5815..581e 0x75, or 0x78 with the MON cmd arg.
+                if self.cmd_args_memory & 2 != 0 {
+                    0x78
+                } else {
+                    0x75
+                }
+            } else {
+                // = seg000:5823..582e al = 0x50 + (spice_density >> 4).
+                0x50 + (loc.spice_density >> 4)
+            };
+            xlat[field] = colour;
+        }
+        xlat
+    }
+
+    // = seg000:58fa loc_058fa — leave the spice-density overlay: drop the
+    // sub-mode bit, take the panel back out of the popup slot, repaint the
+    // map under it and restore the map view's mouse rect.
+    pub(crate) fn map_leave_spice_density_overlay(&mut self) {
+        // = seg000:58fa/58ff test data_046eb,40h; jz ret.
+        if self.data_046eb & 0x40 == 0 {
+            return;
+        }
+        // = seg000:5904 and data_046eb,0bfh.
+        self.data_046eb &= 0xbf;
+        // = seg000:5909..5917 clear whichever popup slot holds the panel.
+        if self.map_popup_ptr == MAP_POPUP_SPICE_OVERLAY {
+            self.map_popup_ptr = 0;
+        } else if self.map_popup2_ptr == MAP_POPUP_SPICE_OVERLAY {
+            self.map_popup2_ptr = 0;
+        }
+        // = seg000:5919 call troop_icons_update_dirty_rect — repaint the map
+        //   under the panel.
+        let r = self.map_overlay_panel_rect;
+        self.troop_icons_update_dirty_rect(r);
+        // = seg000:591c call loc_05ad9 — the map view's nav rect back.
         self.set_mouse_nav_rect(self.map_view_rect);
     }
 
@@ -356,12 +672,351 @@ impl GameState {
         self.redraw_period_sensitive_view_content();
         // = seg000:5dbf/5dc0 restore the entry data_046eb.
         self.data_046eb = saved_046eb;
-        // = seg000:5dc3..5dc7 bit 0x40 re-enters the spice-density overlay
-        //   (loc_0542f) — not ported yet. TODO.
+        // = seg000:5dc3..5dc7 bit 0x40 redraws the spice-density overlay.
         if self.data_046eb & 0x40 != 0 {
-            println!("map_view_refresh_after_events: spice-density overlay (loc_0542f) not ported");
+            self.map_draw_spice_density_overlay();
         }
         // = seg000:5dca jmp open_onmap_resource.
+        self.open_onmap_spritesheet();
+    }
+
+    // = seg000:8064 menu_callback_choice_multiple_move_troop — the MOVE
+    // TROOP / CHANGE DESTINATION verb: switch the mouse into the
+    // destination-pick mode, show the instruction caption and push the pick
+    // menu (the plain Cancel menu, or the prospector's multi-destination
+    // menu for troops[2]).
+    pub(crate) fn menu_callback_choice_multiple_move_troop(&mut self) {
+        // = seg000:8064/8067 install mouse_handlers_01aac.
+        self.active_mouse_handlers = &MOVE_TROOP_MOUSE_HANDLERS;
+        // = seg000:806a call contact_verb_troop.
+        let Some(ti) = self.contact_verb_troop() else {
+            return;
+        };
+        // = seg000:806d cmp si,troops[2] — the prospector picks up to four
+        //   destinations; everyone else exactly one.
+        if ti != 2 {
+            // = seg000:8073..8076 the COMMAND 0x54 caption.
+            self.move_troop_show_instruction_caption(cmd::SELECT_DESTINATION_OF_TROOP);
+            // = seg000:8079..807f bp = menu_multiple_cancel, bx = loc_0824d
+            //   (the MapMoveTroopDestination identity's cleanup); jmp
+            //   loc_0d323.
+            self.menu_multiple_cancel.records = vec![rec(cmd::CANCEL, 0xd2e2)];
+            self.stage_command_submenu(ScreenElement::MapMoveTroopDestination);
+            return;
+        }
+        // = seg000:8082..808c the working copy of the prospector queue
+        //   (three words; the count scan below covers four — the DOS
+        //   asymmetry leaves the fourth working word stale).
+        self.prospector_pick_queue[..3].copy_from_slice(&self.prospector_destinations[..3]);
+        // = seg000:808d..809c the entry count: the first zero word of the
+        //   four, 3 when none is zero.
+        self.prospector_pick_count = self
+            .prospector_pick_queue
+            .iter()
+            .position(|&w| w == 0)
+            .unwrap_or(3) as u8;
+        // = seg000:80a0..80a6 the COMMAND 0x55 caption + the menu greys.
+        self.move_troop_show_instruction_caption(cmd::SELECT_DESTINATIONS_OF_PROSPECTORS);
+        self.move_prospectors_configure_menu();
+        // = seg000:80a9 jmp loc_0d32f — transition + insert + fold (without
+        //   the d323 hover highlight).
+        self.screen_overlay_request_transition();
+        self.screen_element_stack_push(ScreenElement::MapMoveProspectors);
+        self.play_pending_panel_fold();
+    }
+
+    // = seg000:80df move_troop_show_instruction_caption — show the
+    // move-order instruction (a COMMAND id) as a voiced subtitle in the
+    // contact popup's text box, then flip the map into the spice-density
+    // overlay sub-mode and drop the talking-head HUD element. Besides the
+    // move-troop verbs, show_voice_subtitle jumps here through its
+    // data_046eb bit-6 short-circuit (seg000:88c7).
+    pub(crate) fn move_troop_show_instruction_caption(&mut self, id: u16) {
+        // = seg000:80e0 call set_screen_as_active_framebuffer.
+        self.set_screen_as_active_framebuffer();
+        // = seg000:80e3 call subtitle_draw_troop_popup_background — the text
+        //   box wipe; the port's popup subtitle path repaints the box inside
+        //   the bubble draw.
+        // = seg000:80e7..80fd the pen shifts right 0x26 (when x >= 0x32) and
+        //   the box narrows to 0x19 rows; the box height is a port const, so
+        //   only the pen shift is modelled.
+        let saved_pos = self.map_contact_subtitle_pos;
+        if saved_pos.0 >= 0x32 {
+            self.map_contact_subtitle_pos.0 += 0x26;
+        }
+        // = seg000:8102 call loc_09f82 — the subtitle font.
+        self.font_state.color = 0x00f0;
+        self.font_select_tall_font();
+        // = seg000:8105/8106 call show_voice_subtitle.
+        self.show_voice_subtitle(id);
+        // = seg000:8109..811b the caption's voice (unless a dialogue is
+        //   active, data_04774): the id rebased onto the shared instruction
+        //   bank — play_dialogue_voc subtracts the Fremen voc base right
+        //   back.
+        if !self.is_dialogue_active {
+            self.current_subtitle_id = self
+                .current_subtitle_id
+                .wrapping_add(0x10a)
+                .wrapping_add(self.voc_base(0x0e));
+            self.play_dialogue_voc();
+        }
+        // = seg000:811e..8126 restore the pen, back to fb1.
+        self.map_contact_subtitle_pos = saved_pos;
+        self.set_fb1_as_active_framebuffer();
+        // = seg000:8129..812f data_04720 = data_018f3 (the pending panel
+        //   menu; the port's callers push their own) and data_04722 = 0 (the
+        //   spice-density mode).
+        self.map_overlay_mode = 0;
+        // = seg000:8134 call map_enter_spice_density_overlay_in_place — the
+        //   overlay comes up at the panel origin the contact popup staged,
+        //   not the home position.
+        self.map_enter_spice_density_overlay_in_place();
+        // = seg000:8137 drop the talking-head HUD element.
+        self.ui_elements[18].flags = 0;
+    }
+
+    // = seg000:80ac move_prospectors_configure_menu — grey ADD A DESTINATION
+    // once the working queue holds three destinations.
+    fn move_prospectors_configure_menu(&mut self) {
+        let full = self.prospector_pick_count.wrapping_sub(1) >= 2;
+        let id = cmd::ADD_A_DESTINATION;
+        self.menu_map_move_prospectors.records[0].text_id = if full { CMD_GREY | id } else { id };
+    }
+
+    // = seg000:81ec mouse_handler_move_troop_pick — the destination-pick
+    // LMB. DOS gates the click through rect_contains on [map_popup2_ptr] —
+    // during the move mode that word is 0 unless the modify-equipment panel
+    // record was staged, leaving the test on the pseudo-rect at ds:0; the
+    // port reads the evident intent and cancels on a click outside the map
+    // window. The caption-panel hit test (loc_05944) belongs to the
+    // unported overlay sub-mode.
+    pub(crate) fn move_troop_pick_lmb(&mut self) {
+        // = seg000:81ec call open_onmap_resource.
+        self.open_onmap_spritesheet();
+        let x = self.mouse_pos_x as i16;
+        let y = self.mouse_pos_y as i16;
+        // = seg000:81ef..81f6 the gate; a miss exits the menu (loc_08246).
+        if !self.map_view_clip_rect().in_rect(x, y) {
+            self.menu_callback_choice_exit_menu();
+            self.open_onmap_spritesheet();
+            return;
+        }
+        // = seg000:81fb..8209 the marker pick, with data_046eb forced to the
+        //   overlay value 0x40 across the search and back to 0xc0 after: the
+        //   visible-marker entries were built while the spice-density overlay
+        //   was drawing, so they carry mode 0x40 and only match the search
+        //   under that value. Any appearance (al = 0xff) within distance 9.
+        let saved_046eb = std::mem::replace(&mut self.data_046eb, 0x40);
+        let (marker_ptr, dist) = self.find_nearest_location_marker(0xff, x, y);
+        self.data_046eb = saved_046eb | 0xc0;
+        if dist >= 9 || marker_ptr == 0 {
+            return;
+        }
+        let li = location_index_from_ptr(marker_ptr);
+        // = seg000:820f call move_troop_validate_pick; jb ret (keep picking).
+        if self.move_troop_validate_pick(li) {
+            // = seg000:8212 fall through into the done path.
+            self.move_troop_finalize_order(Some(li));
+        }
+    }
+
+    // = seg000:8256 move_troop_validate_pick — validate/queue the picked
+    // destination; returns whether the order proceeds (the DOS carry-clear
+    // fall-through into the done path).
+    fn move_troop_validate_pick(&mut self, li: usize) -> bool {
+        // = seg000:8256..825d a non-prospector troop goes straight through
+        //   (loc_0829e).
+        let Some(ti) = self.contact_verb_troop() else {
+            return false;
+        };
+        if ti != 2 {
+            return true;
+        }
+        // = seg000:825f..826a the prospector needs a sietch (appearance
+        //   < 0x20) or an Atreides-held area (status bit 3).
+        let loc = &self.locations[li];
+        if loc.appearance >= 0x20 && loc.status & 8 == 0 {
+            return false;
+        }
+        // = seg000:826c..8273 a full working queue starts over.
+        if self.prospector_pick_count >= 3 {
+            self.give_new_destinations_for_prospectors();
+        }
+        // = seg000:8276..8282 append.
+        let slot = self.prospector_pick_count as usize;
+        self.prospector_pick_queue[slot] = crate::locations::location_ptr_from_index(li);
+        self.prospector_pick_count += 1;
+        // = seg000:8286..828c redraw the overlay (loc_0542f, unported) and
+        //   the menu (its ADD slot may grey), re-inserted in place.
+        self.move_prospectors_configure_menu();
+        self.screen_element_stack_push(ScreenElement::MapMoveProspectors);
+        // = seg000:828f..829b three destinations proceed to the done path
+        //   after a 0x32-tick beat (a busy-wait; no deterministic state
+        //   effect headless).
+        self.prospector_pick_count >= 3
+    }
+
+    // = seg000:8214 menu_callback_choice_map_move_prospectors_done — the
+    // shared done path: also entered by a valid pick's fall-through with the
+    // picked destination.
+    pub(crate) fn menu_callback_choice_map_move_prospectors_done(&mut self) {
+        self.move_troop_finalize_order(None);
+    }
+
+    // = seg000:8214..8243 the move-order finalization.
+    fn move_troop_finalize_order(&mut self, picked: Option<usize>) {
+        // = seg000:8214 call move_troop_teardown (loc_082b7).
+        self.move_troop_teardown();
+        // = seg000:8217 call contact_verb_troop.
+        let Some(ti) = self.contact_verb_troop() else {
+            return;
+        };
+        // = seg000:821a..8233 the prospector copies the working queue back
+        //   (three words) and orders toward its head; an empty head cancels.
+        let dest_li = if ti == 2 {
+            let queue = self.prospector_pick_queue;
+            self.prospector_destinations[..3].copy_from_slice(&queue[..3]);
+            let head = self.prospector_destinations[0];
+            if head == 0 {
+                // = seg000:8233 jz loc_08246.
+                self.menu_callback_choice_exit_menu();
+                self.open_onmap_spritesheet();
+                return;
+            }
+            location_index_from_ptr(head)
+        } else {
+            let Some(li) = picked else {
+                return;
+            };
+            li
+        };
+        // = seg000:8235/8238 the acknowledgement line; a spoken-line event
+        //   that drops the gate refuses the order (loc_08246).
+        if !self.troop_present_move_acknowledgement(ti, dest_li) {
+            self.menu_callback_choice_exit_menu();
+            self.open_onmap_spritesheet();
+            return;
+        }
+        // = seg000:823a call troop_issue_move_order.
+        self.troop_issue_move_order(ti, dest_li);
+        // = seg000:823d call screen_element_stack_pop_and_redraw — the pick
+        //   menu pops WITHOUT its cleanup (the success path restores by
+        //   hand).
+        if self.screen_element_stack.len() > 1 {
+            self.screen_element_stack.pop();
+            self.redraw_active_command_menu();
+        }
+        // = seg000:8240 call loc_08250 — the map mouse handlers return.
+        self.move_troop_restore_map_handlers();
+        // = seg000:8243 jmp map_setup_main_menu.
+        self.map_setup_main_menu();
+    }
+
+    // = seg000:80c8 give_new_destinations_for_prospectors — reset the
+    // working queue (three words; the DOS clear matches the three-word
+    // copies).
+    fn give_new_destinations_for_prospectors(&mut self) {
+        self.prospector_pick_count = 0;
+        self.prospector_pick_queue[..3].fill(0);
+    }
+
+    // = seg000:80d9 menu_callback_choice_map_move_prospectors_give_new_
+    // destinations — the GIVE NEW DESTINATIONS verb: reset the queue and
+    // redraw (loc_08286: the overlay redraw is unported, the menu ungreys
+    // and re-inserts).
+    pub(crate) fn menu_callback_choice_map_move_prospectors_give_new_destinations(&mut self) {
+        self.give_new_destinations_for_prospectors();
+        self.move_prospectors_configure_menu();
+        self.screen_element_stack_push(ScreenElement::MapMoveProspectors);
+    }
+
+    // = seg000:82da troop_present_move_acknowledgement — the troop speaks
+    // its answer to a move order toward `dest_li`: action code 0x0b with the
+    // destination staged for CONDIT (or 0x10 without restaging when it
+    // already stands there). Returns whether the order was accepted (the
+    // interrupt gate survived the line's events).
+    fn troop_present_move_acknowledgement(&mut self, ti: usize, dest_li: usize) -> bool {
+        // = seg000:82dc bp = [si+4].
+        let old_ptr = self.troops[ti].offset_of_location;
+        let dest_ptr = crate::locations::location_ptr_from_index(dest_li);
+        // = seg000:82df..82f8 the action code, with the destination staged
+        //   for the line's conditions and name placeholders.
+        let action = if ti != 2 && dest_ptr == old_ptr {
+            0x10
+        } else {
+            self.troops[ti].offset_of_location = dest_ptr;
+            self.troop_prepare_troop_data_for_condit(ti);
+            self.set_command_menu_origin();
+            self.troops[ti].offset_of_location = old_ptr;
+            0x0b
+        };
+        // = seg000:82fa call loc_09f82 — the subtitle font.
+        self.font_state.color = 0x00f0;
+        self.font_select_tall_font();
+        // = seg000:82fd call arm_dialogue_interrupt_gate.
+        self.dialogue_interrupt_gate = 0xff;
+        // = seg000:8300 call troop_present_dialogue_line_with_action
+        //   (loc_07bbe): pending_room_action = the code, a fresh resume
+        //   cursor, the line through the Fremen voice bank (0x0f), the
+        //   voice replay when no line matched.
+        self.map_contact_troop_pending = Some(ti);
+        self.pending_room_action = action;
+        self.dialogue_resume_entry_ptr = 0;
+        self.set_screen_as_active_framebuffer();
+        if !self.present_room_person_line(0x0f) {
+            self.play_dialogue_voc();
+        }
+        // = seg000:7c56..7c5d with the full map up, drop the bubble pointer.
+        if self.data_046eb & 0x80 != 0 {
+            self.subtitle_bubble = None;
+        }
+        self.set_fb1_as_active_framebuffer();
+        // = seg000:8305 jmp test_dialogue_interrupt_gate — ZF = accepted.
+        self.dialogue_interrupt_gate == 0xff
+    }
+
+    // = seg000:824d loc_0824d — the move mode's Cancel cleanup: the
+    // teardown, then the map mouse handlers.
+    pub(crate) fn move_troop_cleanup(&mut self) {
+        self.move_troop_teardown();
+        self.move_troop_restore_map_handlers();
+    }
+
+    // = seg000:82b7 move_troop_teardown — leave the destination-pick
+    // overlay: while the overlay sub-mode (data_046eb bit 6) is up, exit it
+    // (map_leave_spice_density_overlay), repaint the contact popup panel and
+    // re-present the contact dialogue (loc_07be0).
+    fn move_troop_teardown(&mut self) {
+        // = seg000:82b7/82bc test data_046eb,40h; jz ret.
+        if self.data_046eb & 0x40 == 0 {
+            return;
+        }
+        // = seg000:82be call map_leave_spice_density_overlay.
+        self.map_leave_spice_density_overlay();
+        // = seg000:82c1..82ca si = troop_contact_text_panel_record; call
+        //   loc_0c551 — repaint the contact popup's panel outline on screen.
+        self.set_screen_as_active_framebuffer();
+        let r = self.map_contact_popup_rect;
+        self.draw_rect_outline(r.x0, r.y0, r.x1 - 1, r.y1 - 1, 0xf5);
+        // = seg000:82cd/82d0 call contact_verb_troop; call loc_07be0 — for
+        //   the live contact troop: a fresh resume cursor and the
+        //   ask-for-more re-present (which rebuilds the popup and speaks the
+        //   next line).
+        if let Some(ti) = self.contact_verb_troop() {
+            if self.map_contact_troop == Some(ti) {
+                self.dialogue_resume_entry_ptr = 0;
+                self.menu_callback_choice_map_troop_dialogue_ask_for_more_information();
+            }
+        }
+        // = seg000:82d3 back to fb1.
+        self.set_fb1_as_active_framebuffer();
+    }
+
+    // = seg000:8250 loc_08250 (-> loc_05ad3) — restore the map view's mouse
+    // handlers and nav rect, and reopen ONMAP.
+    fn move_troop_restore_map_handlers(&mut self) {
+        self.active_mouse_handlers = &DUNE_MAP_MOUSE_HANDLERS;
+        self.set_mouse_nav_rect(self.map_view_rect);
         self.open_onmap_spritesheet();
     }
 
@@ -488,7 +1143,7 @@ impl GameState {
 
     // = seg000:5beb map_dismiss_rallied_troops_popup — when the open popup is
     // the rallied-troops title panel, close it and repaint the map beneath.
-    pub(crate) fn map_dismiss_rallied_troops_popup(&mut self) {
+    pub(crate) fn map_close_rallied_troops_popup(&mut self) {
         // = seg000:5beb cmp map_popup_ptr,194ah; jnz ret.
         if self.map_popup_ptr != MAP_POPUP_RALLIED {
             return;
@@ -634,7 +1289,7 @@ impl GameState {
             // = seg000:5c19 call_restore_cursor; 5c1c the dismissal; 5c1f
             //   jmp draw_mouse.
             self.call_restore_cursor();
-            self.map_dismiss_rallied_troops_popup();
+            self.map_close_rallied_troops_popup();
             self.draw_mouse();
         }
         // = seg000:5c22..5c75 the marker hover label + the occupation-panel
@@ -645,7 +1300,7 @@ impl GameState {
     // = seg000:5c76 map_main_mouse_lmb — the full-map view's LMB handler.
     pub(crate) fn dune_map_mouse_lmb(&mut self) {
         // = seg000:5c76 call map_dismiss_rallied_troops_popup.
-        self.map_dismiss_rallied_troops_popup();
+        self.map_close_rallied_troops_popup();
         // = seg000:5c79 call open_onmap_resource.
         self.open_onmap_spritesheet();
         let x = self.mouse_pos_x as i16;
@@ -696,13 +1351,21 @@ impl GameState {
     // = the open popup panel's rect (the record rect DOS reads through
     // map_popup_ptr, e.g. seg000:5c7c rect_contains, loc_0c7d4): the
     // rallied-troops title panel, the troop info panel, the location info
-    // panel or the troop contact dialogue panel. None when no popup is up.
+    // panel, the troop contact dialogue panel or the spice-density overlay
+    // panel. None when no popup is up.
     pub(crate) fn map_open_popup_rect(&self) -> Option<Rect> {
-        match self.map_popup_ptr {
+        self.map_popup_record_rect(self.map_popup_ptr)
+    }
+
+    // = the popup record's rect field (the +0..+7 words at the pointer DOS
+    // keeps in map_popup_ptr / map_popup2_ptr).
+    pub(crate) fn map_popup_record_rect(&self, ptr: u16) -> Option<Rect> {
+        match ptr {
             MAP_POPUP_RALLIED => Some(RALLIED_POPUP_RECT),
             MAP_POPUP_TROOP_INFO => Some(self.map_info_panel_rect),
             MAP_POPUP_LOCATION => Some(self.map_location_popup_rect),
             MAP_POPUP_TROOP_CONTACT => Some(self.map_contact_popup_rect),
+            MAP_POPUP_SPICE_OVERLAY => Some(self.map_overlay_panel_rect),
             _ => None,
         }
     }
@@ -711,7 +1374,7 @@ impl GameState {
     // toggle the troop info panel.
     pub(crate) fn dune_map_mouse_rmb(&mut self) {
         // = seg000:5ce4 call map_dismiss_rallied_troops_popup.
-        self.map_dismiss_rallied_troops_popup();
+        self.map_close_rallied_troops_popup();
         // = seg000:5ce7 call open_onmap_resource.
         self.open_onmap_spritesheet();
         // = seg000:5cea..5cef a secondary popup open blocks the toggle.
@@ -996,7 +1659,9 @@ impl GameState {
         //   the dialogue panel element (loc_02ebf).
         if ti == 2 {
             self.troop_occupation_verb_apply(ti, 1);
-            self.draw_task_list_insert();
+            // = seg000:8080 jmp loc_02ebf — put the scene's " Continue…"
+            //   panel up (the line just presented installed the script).
+            self.sequence_push_continue_menu();
             return;
         }
         self.troop_occupation_verb_apply(ti, 0);
@@ -1192,9 +1857,11 @@ impl GameState {
             r.y0 = y0;
             r.y1 = y0 + 0x43;
             // = seg000:7a15/7a1b data_04710 = 0x5c, data_04712 = 0x1e / 0x0e —
-            //   the troop occupation panel's origin, read by the map's hover
-            //   readout (seg000:5c22) and the spice sub-mode. Neither is
-            //   ported, so the rect is not modelled. TODO.
+            //   park the shared popup-panel origin in the half the popup is
+            //   not in; the spice-density overlay's in-place entry draws its
+            //   panel there. The map hover readout also reads it
+            //   (seg000:5c22, unported).
+            self.map_overlay_panel_pos = (0x5c, if icon_y >= 0x4c { 0x1e } else { 0x0e });
         }
         self.map_contact_popup_rect = r;
         // = seg000:7a1e map_popup_ptr = si — this popup becomes the open one,
@@ -1378,7 +2045,7 @@ impl GameState {
     // troop when nothing is selected, else cycles to the next one.
     pub(crate) fn menu_callback_choice_map_main_contact_fremen_troops(&mut self) {
         // = seg000:86cc call map_dismiss_rallied_troops_popup.
-        self.map_dismiss_rallied_troops_popup();
+        self.map_close_rallied_troops_popup();
         // = seg000:86cf cmp number_of_rallied_troops,0; jz ret — no Fremen
         //   have joined yet, so there is nobody to contact.
         if self.number_of_rallied_troops == 0 {
@@ -3143,6 +3810,383 @@ mod tests {
     // main menu back — the push that pops the contact menu and runs its
     // cleanup. Asset-gated:
     //   cargo test -p dune --bin dune -- --ignored contact_fremen_troops
+    // The prospector troop's spice-map scene: SPECIALIZE IN SPICE on
+    // troops[2] (which starts at Carthag-Timin) presents "We're unbeatable in
+    // spice prospecting…", whose event 0x03 installs the below-phase-0x14
+    // continue-sequence and puts the " Continue…" panel up. The first
+    // Continue raises the spice-density overlay and speaks "Here, take this
+    // map of the planet."; the second drops it and speaks "You can update
+    // this map…"; the third ends the scene. Asset-gated:
+    //   cargo test -p dune --bin dune -- --ignored prospector_spice_map
+    #[test]
+    #[ignore = "needs assets/DUNE.DAT"]
+    fn prospector_spice_map_scene_plays() {
+        let dat_path = concat!(env!("CARGO_MANIFEST_DIR"), "/../../assets/DUNE.DAT");
+        let Ok(dat_file) = DatFile::open(dat_path) else {
+            eprintln!("skipping: {dat_path} not found");
+            return;
+        };
+        let (tx, rx) = mpsc::sync_channel(64);
+        let mut game = GameState::new(dat_file, tx);
+        game.set_headless();
+        game.start(true);
+        while rx.try_recv().is_ok() {}
+
+        // The prospector troop starts at Carthag-Timin (first_name 2 /
+        // last_name 4).
+        let home = crate::locations::location_index_from_ptr(game.troops[2].offset_of_location);
+        assert_eq!(
+            (
+                game.locations[home].first_name,
+                game.locations[home].last_name
+            ),
+            (2, 4),
+            "the prospectors start at Carthag-Timin"
+        );
+
+        // Contact them on the map with an occupation other than prospecting,
+        // so SPECIALIZE IN SPICE is a real change.
+        game.troops[2].occupation = 0x02;
+        game.number_of_rallied_troops = 1;
+        game.location_visibility_distance = 4;
+        game.dispatch_command_handler(0x186b, cmd::SEE_DUNE_MAP);
+        while rx.try_recv().is_ok() {}
+        let (px, plat) = game.get_map_position();
+        game.troops[2].gps_coordinates_1 = px;
+        game.troops[2].gps_coordinates_2 = plat as u16;
+        game.map_selected_troop_id = game.troops[2].troop_id;
+        game.map_select_troop();
+        while rx.try_recv().is_ok() {}
+
+        // CHANGE TROOP OCCUPATION stages the occupation submenu over the
+        // order menu — the verb below closes that submenu, so the order menu
+        // (and with it the selection) survives the scene, as in the game.
+        game.dispatch_command_handler(0x69b3, cmd::CHANGE_TROOP_OCCUPATION);
+        while rx.try_recv().is_ok() {}
+        assert_eq!(
+            game.get_active_screen_element(),
+            ScreenElement::MapTroopOccupationMenu,
+            "the occupation submenu is up"
+        );
+
+        // SPECIALIZE IN SPICE: occupation 1, the first line, and the scene's
+        // " Continue…" panel (the prospector variant, with the WHAT? slot).
+        game.dispatch_command_handler(0x6a71, cmd::SPECIALIZE_IN_SPICE);
+        while rx.try_recv().is_ok() {}
+        assert_eq!(
+            game.troops[2].occupation & 0x0f,
+            1,
+            "the prospectors take spice prospecting, not mining"
+        );
+        let line1 = game.current_subtitle_id;
+        assert_ne!(line1, 0, "the first line was presented");
+        assert!(game.sequence_script.is_some(), "the scene script installed");
+        assert!(game.is_dialogue_active, "the scene owns the screen");
+        assert_eq!(
+            game.get_active_screen_element(),
+            ScreenElement::SequenceProspectorContinue,
+            "the prospector Continue panel is up"
+        );
+        assert_eq!(game.data_046eb & 0x40, 0, "no overlay yet");
+
+        // Continue: the spice-density overlay comes up and the second line
+        // plays over it.
+        game.mouse_pos_x = 0;
+        game.mouse_pos_y = 0;
+        game.menu_callback_choice_continue_for_sequence();
+        while rx.try_recv().is_ok() {}
+        assert_ne!(game.data_046eb & 0x40, 0, "the spice-density overlay is up");
+        // (The panel registers itself in a popup slot as it is raised
+        // (seg000:551d..5535); the contact popup the line then rebuilds takes
+        // the primary slot back, exactly as the DOS interleaving does, so the
+        // resting slot is not asserted here.)
+        let line2 = game.current_subtitle_id;
+        assert_ne!(line2, line1, "the second line was presented");
+        // The overlay window carries the spice-field colours: the panel's map
+        // window is filled with the backdrop 0x70 plus per-field shades, not
+        // the map bank the plain view uses.
+        let (ox, oy) = game.map_overlay_panel_pos;
+        let yoff = game.y_offset;
+        let window: Vec<u8> = (oy + 8..oy + 8 + 0x57)
+            .flat_map(|y| (ox + 6..ox + 6 + 0x9e).map(move |x| (x, y)))
+            .map(|(x, y)| game.screen.get(x as u16, (y as u16) + yoff))
+            .collect();
+        assert!(window.contains(&0x70), "the overlay backdrop is drawn");
+        assert!(
+            window.iter().any(|&p| (0x50..=0x5f).contains(&p)),
+            "and the density-ramp field shades on top of it"
+        );
+        // The legend strip below the window (loc_05605/loc_0563e): the 0xf5
+        // band with the SPICE DENSITY label and ramp bars on it.
+        let legend: Vec<u8> = (ox + 6..ox + 6 + 0x9e)
+            .map(|x| game.screen.get(x as u16, (oy + 0x63) as u16 + yoff))
+            .collect();
+        assert!(legend.contains(&0xf5), "the legend strip is drawn");
+        game.screen
+            .write_png(&game.palette, "prospector_spice_map_overlay.png")
+            .unwrap();
+
+        // Continue again: the overlay goes away and the closing line plays.
+        game.menu_callback_choice_continue_for_sequence();
+        while rx.try_recv().is_ok() {}
+        assert_eq!(game.data_046eb & 0x40, 0, "the overlay is down");
+        assert_eq!(
+            game.map_view_rect,
+            super::FULL_MAP_VIEW_RECT,
+            "the map window is the full-map one again"
+        );
+        assert_ne!(
+            game.current_subtitle_id, line2,
+            "the closing line was presented"
+        );
+
+        // The last Continue reads the 0xff fence: the scene ends and the
+        // contacted troop's order menu comes back.
+        game.menu_callback_choice_continue_for_sequence();
+        while rx.try_recv().is_ok() {}
+        assert!(game.sequence_script.is_none(), "the scene ended");
+        assert!(!game.is_dialogue_active, "the screen is handed back");
+        assert_eq!(
+            game.get_active_screen_element(),
+            ScreenElement::MapTroopDialog,
+            "the troop's order menu is back"
+        );
+    }
+
+    // MOVE TROOP (seg000:8064): from an open contact, the verb switches into
+    // the destination-pick mode; a click on a location marker makes the troop
+    // speak its acknowledgement, issue the move order (occupation bit 6,
+    // 7-sub-step head start) and drop back to the map main menu. Asset-gated:
+    //   cargo test -p dune --bin dune -- --ignored move_troop
+    #[test]
+    #[ignore = "needs assets/DUNE.DAT"]
+    fn move_troop_orders_a_contacted_troop_to_a_marker() {
+        let dat_path = concat!(env!("CARGO_MANIFEST_DIR"), "/../../assets/DUNE.DAT");
+        let Ok(dat_file) = DatFile::open(dat_path) else {
+            eprintln!("skipping: {dat_path} not found");
+            return;
+        };
+        let (tx, rx) = mpsc::sync_channel(64);
+        let mut game = GameState::new(dat_file, tx);
+        game.set_headless();
+        game.start(true);
+        while rx.try_recv().is_ok() {}
+
+        // The contact preamble of contact_fremen_troops_opens_and_cycles_the_
+        // order_menu: troop 1 rallied and in range, contacted via the map
+        // menu, its order menu up.
+        game.troops[0].occupation = 0x01;
+        game.troops[0].motivation = 80;
+        game.number_of_rallied_troops = 1;
+        game.location_visibility_distance = 4;
+        game.dispatch_command_handler(0x186b, cmd::SEE_DUNE_MAP);
+        while rx.try_recv().is_ok() {}
+        let (px, plat) = game.get_map_position();
+        game.troops[0].gps_coordinates_1 = px;
+        game.troops[0].gps_coordinates_2 = plat as u16;
+        game.dispatch_command_handler(0x86cc, cmd::CONTACT_FREMEN_TROOPS);
+        while rx.try_recv().is_ok() {}
+        assert_eq!(game.map_selected_troop_id, 1, "troop 1 contacted");
+        assert_eq!(
+            game.get_active_screen_element(),
+            ScreenElement::MapTroopDialog,
+            "the order menu is up"
+        );
+
+        // MOVE TROOP: the pick mode, its Cancel menu, and the instruction
+        // caption in the popup box.
+        game.dispatch_command_handler(0x8064, cmd::MOVE_TROOP);
+        while rx.try_recv().is_ok() {}
+        assert_eq!(
+            game.get_active_screen_element(),
+            ScreenElement::MapMoveTroopDestination,
+            "the destination-pick Cancel menu is up"
+        );
+        assert!(
+            std::ptr::eq(
+                game.active_mouse_handlers,
+                &super::MOVE_TROOP_MOUSE_HANDLERS
+            ),
+            "the pick mouse handlers are installed"
+        );
+
+        // A click on a marker of another location orders the troop there —
+        // one 14+ latitude rows out, so the order's 7-sub-step head start
+        // leaves the dominant-axis distance at or above the arrival radius
+        // (7) and the troop is still moving afterwards. The pick runs over
+        // the spice-density overlay the caption raised, so the marker
+        // coordinates are the ones that overlay's window rebuilt.
+        let old_ptr = game.troops[0].offset_of_location;
+        let troop_lat = game.troops[0].gps_coordinates_2 as i16;
+        let target = game
+            .visible_location_markers
+            .iter()
+            .find(|m| {
+                m.mode == 0x40
+                    && crate::locations::location_ptr_from_index(m.location_index as usize)
+                        != old_ptr
+                    && game.locations[m.location_index as usize]
+                        .map_y
+                        .abs_diff(troop_lat)
+                        > 13
+            })
+            .copied()
+            .expect("a distant destination marker in the overlay window");
+        let dest_ptr = crate::locations::location_ptr_from_index(target.location_index as usize);
+        let old_li = crate::locations::location_index_from_ptr(old_ptr);
+        game.mouse_pos_x = target.x as u16;
+        game.mouse_pos_y = target.y as u16;
+        game.move_troop_pick_lmb();
+        while rx.try_recv().is_ok() {}
+
+        assert_ne!(
+            game.troops[0].occupation & 0x40,
+            0,
+            "the troop is moving (the order was accepted)"
+        );
+        assert_eq!(
+            game.troops[0].offset_of_location, dest_ptr,
+            "toward the picked destination"
+        );
+        assert_eq!(game.troops[0].position, 0, "the position slot cleared");
+        assert_ne!(
+            game.locations[old_li].troop_id, game.troops[0].troop_id,
+            "unlinked from the old location's chain"
+        );
+        assert_eq!(
+            game.get_active_screen_element(),
+            ScreenElement::TroopMapScreen,
+            "back at the map main menu"
+        );
+        assert!(
+            std::ptr::eq(game.active_mouse_handlers, &super::DUNE_MAP_MOUSE_HANDLERS),
+            "the map mouse handlers are back"
+        );
+        assert_eq!(game.map_selected_troop_id, 0, "the contact ended");
+
+        // A click outside the map window in pick mode cancels instead: enter
+        // the mode again through the moving troop's CHANGE DESTINATION (the
+        // widened visibility keeps the now-travelling troop in range).
+        game.location_visibility_distance = 99;
+        game.map_selected_troop_id = 1;
+        game.map_select_troop();
+        while rx.try_recv().is_ok() {}
+        assert_eq!(
+            game.get_active_screen_element(),
+            ScreenElement::MapTroopMovingMenu,
+            "a moving troop gets the CHANGE DESTINATION menu"
+        );
+        game.dispatch_command_handler(0x8064, cmd::CHANGE_DESTINATION);
+        while rx.try_recv().is_ok() {}
+        game.mouse_pos_x = 10;
+        game.mouse_pos_y = 190;
+        game.move_troop_pick_lmb();
+        while rx.try_recv().is_ok() {}
+        assert_ne!(
+            game.get_active_screen_element(),
+            ScreenElement::MapMoveTroopDestination,
+            "the outside click cancelled the pick mode"
+        );
+        assert_eq!(
+            game.troops[0].offset_of_location, dest_ptr,
+            "the destination is unchanged"
+        );
+    }
+
+    // The prospector variant: MOVE TROOP on troops[2] collects up to three
+    // destinations in the working queue (sietches or Atreides areas only)
+    // and Done copies them back and orders the troop to the head.
+    #[test]
+    #[ignore = "needs assets/DUNE.DAT"]
+    fn move_prospectors_queues_destinations() {
+        let dat_path = concat!(env!("CARGO_MANIFEST_DIR"), "/../../assets/DUNE.DAT");
+        let Ok(dat_file) = DatFile::open(dat_path) else {
+            eprintln!("skipping: {dat_path} not found");
+            return;
+        };
+        let (tx, rx) = mpsc::sync_channel(64);
+        let mut game = GameState::new(dat_file, tx);
+        game.set_headless();
+        game.start(true);
+        while rx.try_recv().is_ok() {}
+
+        // The prospector troop rallied, selected and in range on the map.
+        game.troops[2].occupation = 0x01;
+        game.troops[2].motivation = 80;
+        game.number_of_rallied_troops = 1;
+        game.location_visibility_distance = 4;
+        game.dispatch_command_handler(0x186b, cmd::SEE_DUNE_MAP);
+        while rx.try_recv().is_ok() {}
+        let (px, plat) = game.get_map_position();
+        game.troops[2].gps_coordinates_1 = px;
+        game.troops[2].gps_coordinates_2 = plat as u16;
+        game.map_selected_troop_id = game.troops[2].troop_id;
+        game.map_select_troop();
+        while rx.try_recv().is_ok() {}
+
+        // MOVE TROOP brings up the prospector menu with an empty queue.
+        game.dispatch_command_handler(0x8064, cmd::MOVE_TROOP);
+        while rx.try_recv().is_ok() {}
+        assert_eq!(
+            game.get_active_screen_element(),
+            ScreenElement::MapMoveProspectors,
+            "the prospector destination menu is up"
+        );
+        assert_eq!(game.prospector_pick_count, 0);
+
+        // Click two sietch markers: both queue, the menu stays up. Far ones
+        // (14+ latitude rows, not the prospector's own location) so the
+        // order's head start does not already arrive.
+        let own = game.troops[2].offset_of_location;
+        let troop_lat = game.troops[2].gps_coordinates_2 as i16;
+        let sietches: Vec<_> = game
+            .visible_location_markers
+            .iter()
+            .filter(|m| {
+                let li = m.location_index as usize;
+                m.mode == 0x40
+                    && game.locations[li].appearance < 0x20
+                    && crate::locations::location_ptr_from_index(li) != own
+                    && game.locations[li].map_y.abs_diff(troop_lat) > 13
+            })
+            .take(2)
+            .copied()
+            .collect();
+        assert_eq!(sietches.len(), 2, "two sietch markers visible");
+        for m in &sietches {
+            game.mouse_pos_x = m.x as u16;
+            game.mouse_pos_y = m.y as u16;
+            game.move_troop_pick_lmb();
+            while rx.try_recv().is_ok() {}
+        }
+        assert_eq!(game.prospector_pick_count, 2, "two destinations queued");
+        assert_eq!(
+            game.get_active_screen_element(),
+            ScreenElement::MapMoveProspectors,
+            "still collecting"
+        );
+
+        // Done copies the working queue back into the live destination queue
+        // (seg000:8221..822c, before the troop is asked) and closes the pick
+        // menu. Whether the move itself issues then depends on the troop's
+        // answer: the acknowledgement line's event can drop the interrupt
+        // gate, which refuses the order (seg000:8238) — that is the branch
+        // this troop's dialogue takes here, so the assertions stop at the
+        // queue. The accepted-order path is covered by move_troop_orders_a_
+        // contacted_troop_to_a_marker.
+        game.dispatch_command_handler(0x8214, cmd::DONE);
+        while rx.try_recv().is_ok() {}
+        let head = crate::locations::location_ptr_from_index(sietches[0].location_index as usize);
+        let second = crate::locations::location_ptr_from_index(sietches[1].location_index as usize);
+        assert_eq!(game.prospector_destinations[0], head, "the queue head");
+        assert_eq!(game.prospector_destinations[1], second, "the second stop");
+        assert_ne!(
+            game.get_active_screen_element(),
+            ScreenElement::MapMoveProspectors,
+            "the destination menu closed"
+        );
+    }
+
     #[test]
     #[ignore = "needs assets/DUNE.DAT"]
     fn contact_fremen_troops_opens_and_cycles_the_order_menu() {

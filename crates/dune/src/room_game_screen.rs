@@ -449,11 +449,28 @@ pub(crate) enum ScreenElement {
     // gives them one identity whose records are set at open time. Nothing
     // compares the five buffer addresses, so the identities need not differ.
     MapTroopOccupationMenu,
+    // = menu_multiple_provide_continue_option (seg001:1fba, priority byte
+    // 0xfc) — the plain " Continue…" panel of a scripted continue-sequence
+    // (sequence.rs). Pushed with the no-op cleanup nullsub_00f66.
+    SequenceContinue,
+    // = menu_prospector_troop_after_specializing_in_spice (seg001:1fae,
+    // priority byte 0xfc) — the " Continue…" / "WHAT?" panel of the
+    // prospector's spice-map scene; the WHAT slot replays the line.
+    SequenceProspectorContinue,
+    // = menu_multiple_cancel again (seg001:212e, priority byte 0xf8), pushed
+    // by the MOVE TROOP verb (seg000:8079) as the destination-pick mode's
+    // Cancel menu. Its cleanup func is loc_0824d (move_troop_cleanup).
+    MapMoveTroopDestination,
+    // = menu_map_move_prospectors (seg001:2136, priority byte 0xf8) — the
+    // prospector's multi-destination menu (ADD A DESTINATION / GIVE NEW
+    // DESTINATIONS / Done / Cancel), pushed by the MOVE TROOP verb for
+    // troops[2]. Its cleanup func is loc_0824d (move_troop_cleanup).
+    MapMoveProspectors,
     // = menu_book (seg001:2032, leading priority word 0xff) — THE BOOK diary
     // screen's verb menu, pushed by callback_transition_0af26 (seg000:af38)
     // with the no-op cleanup fn_0d917_noop. Like the SEE DUNE MAP menu its
     // 0xff priority replaces the room base in place, and the close verb's
-    // enter_room_view re-inserts the room base the same way.
+    // ui_enter_room_view re-inserts the room base the same way.
     BookScreen,
 }
 
@@ -479,12 +496,16 @@ impl ScreenElement {
             | ScreenElement::MoveToLocationMenu
             | ScreenElement::MapTroopDialog
             | ScreenElement::MapTroopContactCycle
-            | ScreenElement::MapTroopMovingMenu => 0xfc,
+            | ScreenElement::MapTroopMovingMenu
+            | ScreenElement::SequenceContinue
+            | ScreenElement::SequenceProspectorContinue => 0xfc,
             ScreenElement::MixerPanel
             | ScreenElement::PalacePlan
             | ScreenElement::TravelMapScreen
             | ScreenElement::ChangeDestinationIgnoreWarning
-            | ScreenElement::MapTroopOccupationMenu => 0xf8,
+            | ScreenElement::MapTroopOccupationMenu
+            | ScreenElement::MapMoveTroopDestination
+            | ScreenElement::MapMoveProspectors => 0xf8,
             ScreenElement::SaveGameMenu | ScreenElement::LoadGameMenu => 0xfe,
             ScreenElement::ExitGameConfirmation | ScreenElement::MusicCdOrderMenu => 0xf6,
         }
@@ -513,6 +534,10 @@ impl GameState {
             ScreenElement::MapTroopContactCycle => &self.menu_map_troop_contact_cycle,
             ScreenElement::MapTroopMovingMenu => &self.menu_map_troop_moving,
             ScreenElement::MapTroopOccupationMenu => &self.menu_map_troop_occupation,
+            ScreenElement::MapMoveTroopDestination => &self.menu_multiple_cancel,
+            ScreenElement::MapMoveProspectors => &self.menu_map_move_prospectors,
+            ScreenElement::SequenceContinue => &self.menu_sequence_continue,
+            ScreenElement::SequenceProspectorContinue => &self.menu_sequence_prospector,
             ScreenElement::GoTowardsThisPlace => &self.menu_go_towards_this_place,
             ScreenElement::ChangeDestinationIgnoreWarning => {
                 &self.menu_change_destination_ignore_warning
@@ -539,6 +564,10 @@ impl GameState {
             ScreenElement::MapTroopContactCycle => &mut self.menu_map_troop_contact_cycle,
             ScreenElement::MapTroopMovingMenu => &mut self.menu_map_troop_moving,
             ScreenElement::MapTroopOccupationMenu => &mut self.menu_map_troop_occupation,
+            ScreenElement::MapMoveTroopDestination => &mut self.menu_multiple_cancel,
+            ScreenElement::MapMoveProspectors => &mut self.menu_map_move_prospectors,
+            ScreenElement::SequenceContinue => &mut self.menu_sequence_continue,
+            ScreenElement::SequenceProspectorContinue => &mut self.menu_sequence_prospector,
             ScreenElement::GoTowardsThisPlace => &mut self.menu_go_towards_this_place,
             ScreenElement::ChangeDestinationIgnoreWarning => {
                 &mut self.menu_change_destination_ignore_warning
@@ -941,11 +970,19 @@ impl GameState {
             // = seg000:7cbb — MODIFY EQUIPMENT.
             0x7cbb => println!("dispatch: MODIFY EQUIPMENT (0x7cbb) not ported"),
             // = seg000:8064 — MOVE TROOP / CHANGE DESTINATION.
-            0x8064 => println!("dispatch: MOVE TROOP (0x8064) not ported"),
+            0x8064 => self.menu_callback_choice_multiple_move_troop(),
+            // = seg000:80c7 — ADD A DESTINATION (a plain ret: the map click
+            //   does the adding; the slot is a label).
+            0x80c7 => {}
+            // = seg000:80d9 — GIVE NEW DESTINATIONS.
+            0x80d9 => self.menu_callback_choice_map_move_prospectors_give_new_destinations(),
+            // = seg000:8214 — Done (the prospector menu).
+            0x8214 => self.menu_callback_choice_map_move_prospectors_done(),
             // = the map main menu's remaining verbs (MENU_MAP_MAIN) — the
             // troop-command flows are not ported yet.
             // = seg000:53f1 menu_callback_choice_map_main_see_spice_density.
-            0x53f1 => println!("dispatch: SEE SPICE DENSITY (0x53f1) not ported"),
+            // = seg000:53f1 menu_callback_choice_map_main_see_spice_density.
+            0x53f1 => self.menu_callback_choice_map_main_see_spice_density(),
             // = seg000:42d9 menu_callback_choice_map_main_take_an_ornithopter —
             // commit_room_move + ui_toggle_room_view into the notransition
             // entry.
@@ -1613,7 +1650,7 @@ impl GameState {
             // = seg000:2ebf loc_02ebf: bp = [data_02220] (the dialogue record
             // buffer), bx = 0f66h; jmp screen_element_stack_push — install the
             // dialogue panel as the active screen element.
-            self.draw_task_list_insert();
+            self.sequence_push_continue_menu();
             return;
         }
 
@@ -1943,6 +1980,11 @@ impl GameState {
             // = seg000:b2ad bx = resume_game_clock — the save/load submenus
             //   release the clock suspension loc_0b2aa took.
             ScreenElement::SaveGameMenu | ScreenElement::LoadGameMenu => self.resume_game_clock(),
+            // = seg000:824d loc_0824d — the MOVE TROOP destination-pick
+            //   Cancel: tear the move mode down and restore the map handlers.
+            ScreenElement::MapMoveTroopDestination | ScreenElement::MapMoveProspectors => {
+                self.move_troop_cleanup()
+            }
             // = seg000:8816 the SEE DUNE MAP menu is pushed with bx =
             //   nullsub_00f66 — a no-op cleanup (the view resets through
             //   reset_room_scene_state on the way back to the room).
@@ -2892,14 +2934,6 @@ impl GameState {
     pub(crate) fn restore_cursor_over_panel(&mut self) {
         self.call_restore_cursor();
     }
-
-    // = seg000:2ec6 the dialogue branch's jmp screen_element_stack_push (loc_02ebf:
-    // bp = [data_02220] the dialogue record buffer, bx = 0f66h). It would install
-    // the dialogue panel as the active screen element. The dialogue record / draw
-    // system is not ported (the data_04774 branch never runs with the default
-    // flags), so this is a no-op stub.
-    // TODO: port the dialogue panel; no-op stub.
-    pub(crate) fn draw_task_list_insert(&mut self) {}
 
     // = seg000:0acd stage_28_night_attack_start. The night attack on the sietch:
     // an ATTACK.HSQ background with a particle system (bombs, debris, sky

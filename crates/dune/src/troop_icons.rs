@@ -359,29 +359,38 @@ impl GameState {
             return;
         }
         // = seg000:c7a2..c7bd + loc_0c7d4 the open-popup preservation: DOS
-        //   composes in fb1 and, before the fb1-to-screen publish, copies the
-        //   open popup's rect back from the still-intact visible screen. The
-        //   port composes in place on the front buffer, so it grabs the
-        //   popup's pixels before the fb2 restore and lays them back after
-        //   the icon draws. map_popup2_ptr (seg000:c7b0) never opens in the
-        //   port (its writer, the give-equipment panel seg000:7de2, is not
-        //   ported).
-        let popup_save = self.map_open_popup_rect().and_then(|p| {
-            let pr = rect(
-                p.x0.max(clipped.x0),
-                (p.y0 + yoff).max(clipped.y0),
-                p.x1.min(clipped.x1),
-                (p.y1 + yoff).min(clipped.y1),
-            );
-            if pr.x1 <= pr.x0 || pr.y1 <= pr.y0 {
-                return None;
-            }
-            let src = match self.screen_buffer {
-                crate::FbId::Fb1 => &self.framebuffer,
-                _ => &self.screen,
-            };
-            Some((pr, crate::gfx::vga_grab_rect(src, pr)))
-        });
+        //   composes in fb1 and, before the fb1-to-screen publish, copies
+        //   each open popup's rect back from the still-intact visible screen
+        //   — the primary slot, then the secondary one (seg000:c7b0, checked
+        //   only when the primary is open, seg000:c7a8; the spice-density
+        //   overlay takes it while the troop-contact popup owns the primary).
+        //   The port composes in place on the front buffer, so it grabs the
+        //   popups' pixels before the fb2 restore and lays them back after
+        //   the icon draws.
+        let mut popup_rects = Vec::new();
+        if let Some(p) = self.map_open_popup_rect() {
+            popup_rects.push(p);
+            popup_rects.extend(self.map_popup_record_rect(self.map_popup2_ptr));
+        }
+        let popup_save: Vec<(Rect, Vec<u8>)> = popup_rects
+            .into_iter()
+            .filter_map(|p| {
+                let pr = rect(
+                    p.x0.max(clipped.x0),
+                    (p.y0 + yoff).max(clipped.y0),
+                    p.x1.min(clipped.x1),
+                    (p.y1 + yoff).min(clipped.y1),
+                );
+                if pr.x1 <= pr.x0 || pr.y1 <= pr.y0 {
+                    return None;
+                }
+                let src = match self.screen_buffer {
+                    crate::FbId::Fb1 => &self.framebuffer,
+                    _ => &self.screen,
+                };
+                Some((pr, crate::gfx::vga_grab_rect(src, pr)))
+            })
+            .collect();
         // = seg000:c718 call copy_clip_rect_to_screen_from_fb2 — restore the
         //   clipped rect from the fb2 snapshot; the front buffer honours the
         //   fb1 redirection like every screen push.
@@ -437,7 +446,7 @@ impl GameState {
             self.ui_hud_head_draw();
         }
         // = seg000:c7a2..c7bd lay the preserved popup pixels back on top.
-        if let Some((pr, pixels)) = popup_save {
+        for (pr, pixels) in popup_save {
             let dst = match self.screen_buffer {
                 crate::FbId::Fb1 => &mut self.framebuffer,
                 _ => &mut self.screen,

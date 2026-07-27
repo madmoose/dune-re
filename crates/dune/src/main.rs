@@ -47,6 +47,7 @@ mod room_game_screen;
 mod room_renderer;
 mod room_scene;
 mod savegame;
+mod sequence;
 mod settings_ui;
 mod smugglers;
 mod sprite;

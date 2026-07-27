@@ -46,10 +46,18 @@ pub(crate) const NEXT_TROOP: u16 = 0x51;
 pub(crate) const NO_MORE_ORDERS: u16 = 0x52;
 /// "CUT CONTACT"
 pub(crate) const CUT_CONTACT: u16 = 0x53;
+/// "Select the destination of the troop."
+pub(crate) const SELECT_DESTINATION_OF_TROOP: u16 = 0x54;
+/// "Select the destinations of the prospectors."
+pub(crate) const SELECT_DESTINATIONS_OF_PROSPECTORS: u16 = 0x55;
 /// "SELECT TROOP OCCUPATION"
 pub(crate) const SELECT_TROOP_OCCUPATION: u16 = 0x56;
 /// "CHANGE DESTINATION"
 pub(crate) const CHANGE_DESTINATION: u16 = 0x58;
+/// "ADD A DESTINATION"
+pub(crate) const ADD_A_DESTINATION: u16 = 0x5b;
+/// "GIVE NEW DESTINATIONS"
+pub(crate) const GIVE_NEW_DESTINATIONS: u16 = 0x5c;
 /// "GO & SEARCH FOR EQUIPMENT"
 pub(crate) const GO_AND_SEARCH_FOR_EQUIPMENT: u16 = 0x5d;
 /// "ESPIONAGE"
@@ -83,7 +91,13 @@ pub(crate) const EQUIPMENT: u16 = 0x6e;
 /// "GIVE ORDERS TO TROOP"
 pub(crate) const GIVE_ORDERS_TO_TROOP: u16 = 0x93;
 /// "SEE DUNE MAP"
+pub(crate) const WHAT: u16 = 0x95;
+/// " WHAT ? "
 pub(crate) const SEE_DUNE_MAP: u16 = 0x98;
+/// "Done"
+pub(crate) const DONE: u16 = 0xa1;
+/// " Continue..."
+pub(crate) const CONTINUE: u16 = 0xa2;
 /// "  Cancel"
 pub(crate) const CANCEL: u16 = 0xa3;
 /// "TAKE AN ORNITHOPTER"

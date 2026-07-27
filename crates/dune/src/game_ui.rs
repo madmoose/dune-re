@@ -444,13 +444,14 @@ impl GameState {
             self.ui_show_globe_map_view();
             return;
         }
-        self.enter_room_view();
+        self.ui_enter_room_view_tail();
     }
 
-    // = seg000:1877 loc_01877 — the enter-room path (also jumped to straight
-    // from the book close, seg000:b1ac). Drain pending UI tasks, reset the
-    // scene, restore the voice/subtitle mode from its default.
-    pub(crate) fn enter_room_view(&mut self) {
+    // = seg000:1877 loc_01877 — the shared enter-room tail, past the toggle
+    // neg. Also jumped to directly from callback_ui_element_book_close
+    // (seg000:b1ac), which must not flip room_view_toggle. Drain pending UI
+    // tasks, reset the scene, restore the voice/subtitle mode from its default.
+    pub(crate) fn ui_enter_room_view_tail(&mut self) {
         self.dismiss_stacked_overlays();
         self.reset_room_scene_state();
         // = seg000:187d voice_subtitle_mode = voice_subtitle_mode_default.
@@ -1045,13 +1046,6 @@ impl GameState {
         // = seg000:d93e call word ptr [di+0ch].
         self.dispatch_ui_click(i);
     }
-
-    // = seg000:1707 loc_01707 — advance/skip the on-screen dialogue line on a fresh
-    // LMB press while data_04774 is set. DOS checks the active screen element rect
-    // (ui_hud_elements[8]) and drives the lip-sync / subtitle advance (loc_09ed5).
-    // TODO: port the dialogue-advance body once the dialogue runtime is modelled;
-    // no-op stub meanwhile.
-    pub(crate) fn dialogue_advance_on_click(&mut self) {}
 
     // = the room-screen record's RMB handler ([si+4] = fn_0d917_noop, a no-op):
     // the room view assigns no right-button action.
