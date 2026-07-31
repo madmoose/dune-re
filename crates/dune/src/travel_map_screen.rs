@@ -1939,7 +1939,7 @@ impl GameState {
         }
         // = seg000:35fc without a companion aboard only the hostile-zone
         //   warning runs (loc_03637); the cabin view needs someone to speak.
-        if self.companion_1 == -1 && self.companion_2 == -1 {
+        if self.companions[0] == -1 && self.companions[1] == -1 {
             self.travel_route_hostile_zone_check();
             return;
         }
@@ -2068,14 +2068,14 @@ impl GameState {
     // no companion is aboard.
     fn travel_pick_speaking_companion(&self) -> Option<u8> {
         // = seg000:3672 both slots empty.
-        if self.companion_1 == -1 && self.companion_2 == -1 {
+        if self.companions[0] == -1 && self.companions[1] == -1 {
             return None;
         }
         // = seg000:3677..3684 one companion, or rand_bits bit 0x80 chooses.
-        let pick = if self.companion_2 == -1 || self.rand_bits & 0x80 != 0 {
-            self.companion_1
+        let pick = if self.companions[1] == -1 || self.rand_bits & 0x80 != 0 {
+            self.companions[0]
         } else {
-            self.companion_2
+            self.companions[1]
         };
         Some(pick as u8)
     }

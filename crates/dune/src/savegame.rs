@@ -439,8 +439,8 @@ impl GameState {
             0x1150,
             location_ptr_from_index(self.last_location_index as u16),
         );
-        w8(b, 0x1152, self.companion_1 as u8);
-        w8(b, 0x1153, self.companion_2 as u8);
+        w8(b, 0x1152, self.companions[0] as u8);
+        w8(b, 0x1153, self.companions[1] as u8);
         w16(b, 0x1154, self.harkonnen_raids_armed_after_game_time);
         w16(b, 0x1156, self.illness_plot_armed_after_ingame_day);
         w16(b, 0x1170, self.spice_stock_at_last_new_day);
@@ -660,8 +660,8 @@ impl GameState {
 
         self.current_location_index = location_index_from_ptr(r16(b, 0x114e));
         self.last_location_index = location_index_from_ptr(r16(b, 0x1150)) as usize;
-        self.companion_1 = (r8(b, 0x1152) as i8) as i16;
-        self.companion_2 = (r8(b, 0x1153) as i8) as i16;
+        self.companions[0] = (r8(b, 0x1152) as i8) as i16;
+        self.companions[1] = (r8(b, 0x1153) as i8) as i16;
         self.harkonnen_raids_armed_after_game_time = r16(b, 0x1154);
         self.illness_plot_armed_after_ingame_day = r16(b, 0x1156);
         self.spice_stock_at_last_new_day = r16(b, 0x1170);

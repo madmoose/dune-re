@@ -773,18 +773,18 @@ impl GameState {
 
     // = seg000:d763 the tail of ui_set_and_draw_frieze_sides_closed_book (also
     // reached from the command panel at seg000:2eef): redraw the two bottom-left
-    // buttons (records 21,22) — first the frame sprite 0x40, then their state
-    // icon (0x41 + data_01152 / data_01153) overlaid on top.
+    // portraits (records 21,22).
     pub(crate) fn ui_hud_draw_companions(&mut self) {
-        // = seg000:d766 both records' sprite_id = 0x40 (the empty button frame).
+        // = seg000:d766 both records' sprite_id = 0x40 (the empty background).
         self.ui_elements[21].sprite_id = 0x40;
         self.ui_elements[22].sprite_id = 0x40;
         // = seg000:d76f cx=2; draw records 21,22.
         self.draw_ui_elements_list(21, 2);
-        // = seg000:d778 sprite_id = (sign-extended state byte) + 0x41, per button.
-        self.ui_elements[21].sprite_id = self.companion_1 + 0x41;
-        self.ui_elements[22].sprite_id = self.companion_2 + 0x41;
-        // = seg000:d78c cx=2; draw records 21,22 again over the frames.
+
+        // = seg000:d778 sprite_id = companion + 0x41.
+        self.ui_elements[21].sprite_id = self.companions[0] + 0x41;
+        self.ui_elements[22].sprite_id = self.companions[1] + 0x41;
+        // = seg000:d78c cx=2; draw portraits over background.
         self.draw_ui_elements_list(21, 2);
     }
 
@@ -807,18 +807,14 @@ impl GameState {
         }
         // = seg000:d7cf bx = the ui_hud_companion_1/2 pair; push bx — the real
         //   pair is restored after the masked redraw.
-        let saved = (self.companion_1, self.companion_2);
+        let saved = self.companions;
         // = seg000:d7d4..d7e9 per slot: a nonzero counter is decremented, and
         //   an odd result blanks that slot (0xff) for this redraw.
         for slot in 0..2 {
             if self.ui_hud_companion_blink[slot] != 0 {
                 self.ui_hud_companion_blink[slot] -= 1;
                 if self.ui_hud_companion_blink[slot] & 1 != 0 {
-                    if slot == 0 {
-                        self.companion_1 = -1;
-                    } else {
-                        self.companion_2 = -1;
-                    }
+                    self.companions[slot] = -1;
                 }
             }
         }
@@ -837,7 +833,7 @@ impl GameState {
             self.send_frame_to_display();
         }
         // = seg000:d810 pop the real companion pair back.
-        (self.companion_1, self.companion_2) = saved;
+        self.companions = saved;
     }
 
     // = seg000:d795 ui_set_and_draw_frieze_sides — apply a frieze template to the

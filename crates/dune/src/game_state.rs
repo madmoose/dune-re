@@ -626,8 +626,7 @@ pub struct GameState {
     // person index shown in each of the two bottom-left HUD companion
     // portraits (-1 = empty). Filled/cleared by npc_assign_companion_slot /
     // npc_remove_companion_slot when a dialogue closes.
-    pub(crate) companion_1: i16,
-    pub(crate) companion_2: i16,
+    pub(crate) companions: [i16; 2],
 
     // = seg001:1154 harkonnen_raids_armed_after_game_time — game_time
     // snapshot taken by the phase-0x2c (met Stilgar) callback; the raid
@@ -2081,8 +2080,7 @@ impl GameState {
             condit_staged_location: 0,
             current_location_index: 0xffff,
             last_location_index: 0,
-            companion_1: -1,
-            companion_2: -1,
+            companions: [-1, -1],
             ui_hud_companion_blink: [0, 0],
             companion_blink_step_latch: 0,
             data_011bc: 0,

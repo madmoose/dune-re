@@ -634,15 +634,15 @@ impl GameState {
     pub(crate) fn npc_remove_companion_slot(&mut self, index: usize) {
         // = seg000:9655 cl = npc->person_index.
         let p = self.room_persons[index].person_index as i16;
-        if self.companion_2 == p {
+        if self.companions[1] == p {
             // = seg000:965d..965f the person sits in slot 2 -> [di] = 0xff.
-            self.companion_2 = -1;
+            self.companions[1] = -1;
             self.ui_hud_companion_blink[1] = 0;
-        } else if self.companion_1 == p {
+        } else if self.companions[0] == p {
             // = seg000:9662/9666 in slot 1 -> the xchg pulls slot 2 down into
             //   slot 1 and leaves slot 2 empty.
-            self.companion_1 = self.companion_2;
-            self.companion_2 = -1;
+            self.companions[0] = self.companions[1];
+            self.companions[1] = -1;
             self.ui_hud_companion_blink[0] = 0;
         } else {
             // = seg000:9664 jnz loc_0961a — not a companion.
@@ -665,30 +665,26 @@ impl GameState {
         // = seg000:9673 cl = npc->person_index.
         let p = self.room_persons[index].person_index as i16;
         // = seg000:9679..968a the slot scan.
-        let slot = if self.companion_1 == p {
+        let slot = if self.companions[0] == p {
             return;
-        } else if self.companion_1 == -1 {
+        } else if self.companions[0] == -1 {
             0
-        } else if self.companion_2 == p {
+        } else if self.companions[1] == p {
             return;
-        } else if self.companion_2 == -1 {
+        } else if self.companions[1] == -1 {
             1
         } else {
             // = seg000:968c..96a8 both full: evict slot 1. si = room_persons +
             //   0x10 * [ui_hud_companion_1]; pending_room_action = 0x64 +
             //   person_index; npc_clear_travelling; shift slot 2 down.
-            let evicted = self.companion_1 as usize;
+            let evicted = self.companions[0] as usize;
             self.pending_room_action = 0x64 + self.room_persons[evicted].person_index;
             self.npc_clear_travelling(evicted);
-            self.companion_1 = self.companion_2;
+            self.companions[0] = self.companions[1];
             1
         };
         // = seg000:96ab loc_096ab — store the person and arm the blink.
-        if slot == 0 {
-            self.companion_1 = p;
-        } else {
-            self.companion_2 = p;
-        }
+        self.companions[slot] = p;
         self.ui_hud_companion_blink[slot] = 0x10;
         // = seg000:96b2 jmp ui_hud_draw_companions.
         self.ui_hud_draw_companions();

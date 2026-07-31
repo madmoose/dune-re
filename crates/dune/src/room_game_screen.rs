@@ -1814,20 +1814,20 @@ impl GameState {
             y1: e.y1 as i16,
         };
         // = seg000:92cb cl = [ui_hud_companion_1]; cmp cl,0ffh; jz loc_09281.
-        if self.companion_1 < 0 {
+        if self.companions[0] < 0 {
             return None;
         }
         // = seg000:92d4 di = ui_hud_elements[21]; call rect_contains.
         if slot_rect(&self.ui_elements[21]).contains_interior(x, y) {
-            return Some(self.companion_1 as u8);
+            return Some(self.companions[0] as u8);
         }
         // = seg000:92dc cl = [ui_hud_companion_2]; cmp cl,0ffh; jz loc_09281.
-        if self.companion_2 < 0 {
+        if self.companions[1] < 0 {
             return None;
         }
         // = seg000:92e5 di = ui_hud_elements[22]; jmp rect_contains.
         if slot_rect(&self.ui_elements[22]).contains_interior(x, y) {
-            return Some(self.companion_2 as u8);
+            return Some(self.companions[1] as u8);
         }
         None
     }
@@ -3376,8 +3376,8 @@ mod tests {
         // speaker to companion HUD slot 1 (npc_assign_companion_slot,
         // seg000:9855) and arms its 8-blink counter.
         game.menu_callback_choice_exit_menu(0, 0);
-        assert_eq!(game.companion_1, 1, "Jessica in companion slot 1");
-        assert_eq!(game.companion_2, -1, "slot 2 stays empty");
+        assert_eq!(game.companions[0], 1, "Jessica in companion slot 1");
+        assert_eq!(game.companions[1], -1, "slot 2 stays empty");
         assert_eq!(game.ui_hud_companion_blink[0], 0x10, "blink armed");
         assert_eq!(game.ui_elements[21].sprite_id, 0x42, "slot-1 portrait");
         // The cleanup also marks the speaker talked-to (seg000:97dd).
@@ -3397,7 +3397,7 @@ mod tests {
         }
         assert_eq!(blanks, 8, "the new portrait blinks 8 times");
         assert_eq!(game.ui_hud_companion_blink[0], 0, "blink counter drained");
-        assert_eq!(game.companion_1, 1, "the real pair is restored");
+        assert_eq!(game.companions[0], 1, "the real pair is restored");
         assert_eq!(
             game.ui_elements[21].sprite_id, 0x42,
             "portrait shown at the end"
@@ -3480,7 +3480,7 @@ mod tests {
         // longer travelling, calls npc_remove_companion_slot — clearing the slot
         // and its blink counter and reverting the portrait to the empty frame.
         game.menu_callback_choice_exit_menu(0, 0);
-        assert_eq!(game.companion_1, -1, "STAY HERE removes the portrait");
+        assert_eq!(game.companions[0], -1, "STAY HERE removes the portrait");
         assert_eq!(game.ui_hud_companion_blink[0], 0, "blink cleared");
         assert_eq!(game.ui_elements[21].sprite_id, 0x40, "empty button frame");
 
@@ -3488,8 +3488,8 @@ mod tests {
         // companion displaces slot 1 — the evictee's travelling state is
         // cleared, their person code lands in pending_room_action (0x64 + p),
         // slot 2 shifts down, and the newcomer takes slot 2.
-        game.companion_1 = 3; // Duncan
-        game.companion_2 = 4; // Gurney
+        game.companions[0] = 3; // Duncan
+        game.companions[1] = 4; // Gurney
         game.room_persons[3].flags |= 0x40;
         game.persons_travelling_with |= 1 << 3;
         game.npc_assign_companion_slot(1);
@@ -3499,8 +3499,8 @@ mod tests {
         );
         assert_eq!(game.room_persons[3].flags & 0x40, 0, "evictee detached");
         assert_eq!(game.persons_travelling_with & (1 << 3), 0);
-        assert_eq!(game.companion_1, 4, "slot 2 shifted down");
-        assert_eq!(game.companion_2, 1, "newcomer in slot 2");
+        assert_eq!(game.companions[0], 4, "slot 2 shifted down");
+        assert_eq!(game.companions[1], 1, "newcomer in slot 2");
         assert_eq!(game.ui_hud_companion_blink[1], 0x10, "newcomer blinks");
         game.pending_room_action = 0;
 
