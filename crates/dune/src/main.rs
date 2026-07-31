@@ -562,12 +562,14 @@ struct App {
     // audio streams, which tee their output into it while recording.
     recorder: Arc<Recorder>,
     // True while the window is fully hidden (minimised / another space / wholly
-    // covered). The present loop re-arms `request_redraw` every frame and is
-    // paced only by `Queue::present` blocking on vsync; once the surface is
-    // off-screen that vsync pacing disappears, so the loop would spin unbounded,
-    // pegging the CPU and flooding the GPU drawable queue (overload + drawable
-    // timeouts). While occluded we stop presenting and let the event loop idle.
+    // covered). While occluded we stop presenting and redrawing entirely
+    // (`ControlFlow::Wait`) so nothing floods the GPU drawable queue of an
+    // off-screen surface (overload + drawable timeouts).
     occluded: bool,
+    // Next heartbeat-redraw deadline. `about_to_wait` requests a redraw when
+    // the deadline passes and parks the event loop (`WaitUntil`) otherwise, so
+    // the present loop wakes at `REDRAW_INTERVAL` instead of spinning.
+    next_redraw: std::time::Instant,
     // `--cursor system`: instead of the GPU overlay, hand the cursor to the OS
     // as a scaled custom bitmap so the compositor moves it with zero present-
     // loop latency. The game still runs in `Overlay` mode (publishes shape,
@@ -599,6 +601,13 @@ struct App {
 /// that DOS never showed on screen. Sustained hides (HNM playback, the intro,
 /// screen transitions) last far longer than this grace and still apply.
 const CURSOR_HIDE_GRACE: std::time::Duration = std::time::Duration::from_millis(50);
+
+/// Present-loop heartbeat: how often the event loop wakes to sample the frame
+/// slot, cursor debounce, and system-cursor shape when no input events arrive.
+/// ~120 Hz keeps present latency under one vsync on high-refresh displays
+/// while the loop sleeps (`ControlFlow::WaitUntil`) between wakes — the actual
+/// present rate is still capped by the Fifo swapchain.
+const REDRAW_INTERVAL: std::time::Duration = std::time::Duration::from_micros(8_333);
 
 impl Drop for App {
     fn drop(&mut self) {
@@ -1074,14 +1083,11 @@ impl ApplicationHandler for App {
                 event_loop.exit();
             }
             WindowEvent::Occluded(occluded) => {
+                // `about_to_wait` picks the matching control flow (Wait while
+                // occluded, WaitUntil heartbeat otherwise) after this event.
                 self.occluded = occluded;
-                if occluded {
-                    event_loop.set_control_flow(ControlFlow::Wait);
-                } else {
-                    event_loop.set_control_flow(ControlFlow::Poll);
-                    if let Some(window) = &self.window {
-                        window.request_redraw();
-                    }
+                if !occluded && let Some(window) = &self.window {
+                    window.request_redraw();
                 }
             }
             WindowEvent::KeyboardInput { event, .. } => {
@@ -1202,11 +1208,29 @@ impl ApplicationHandler for App {
                         self.update_system_cursor(event_loop);
                     }
                 }
-
-                self.window.as_ref().unwrap().request_redraw();
             }
             _ => (),
         }
+    }
+
+    fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
+        // Heartbeat pacing: request one redraw per elapsed REDRAW_INTERVAL and
+        // sleep until the next deadline. The deadline is absolute so a stream
+        // of input events cannot starve redraws by resetting it. While
+        // occluded the loop parks fully; the Occluded(false) event both wakes
+        // it and requests the catch-up redraw.
+        if self.occluded {
+            event_loop.set_control_flow(ControlFlow::Wait);
+            return;
+        }
+        let now = std::time::Instant::now();
+        if now >= self.next_redraw {
+            self.next_redraw = now + REDRAW_INTERVAL;
+            if let Some(window) = &self.window {
+                window.request_redraw();
+            }
+        }
+        event_loop.set_control_flow(ControlFlow::WaitUntil(self.next_redraw));
     }
 }
 
@@ -1414,6 +1438,7 @@ fn main() {
         screenshot_seq: 0,
         recorder,
         occluded: false,
+        next_redraw: std::time::Instant::now(),
         system_cursor,
         system_cursors: None,
         system_cursor_applied: None,
@@ -1422,6 +1447,5 @@ fn main() {
         ns_cursor_hidden: false,
     };
 
-    event_loop.set_control_flow(ControlFlow::Poll);
     event_loop.run_app(&mut app).unwrap();
 }
