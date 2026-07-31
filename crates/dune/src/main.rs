@@ -47,6 +47,7 @@ mod rect;
 mod room_game_screen;
 mod room_renderer;
 mod room_scene;
+mod save_screen;
 mod savegame;
 mod sequence;
 mod settings_ui;
@@ -1103,6 +1104,21 @@ impl ApplicationHandler for App {
                     if let Some(scancode) = keycode_to_scancode(code) {
                         let pressed = event.state == ElementState::Pressed;
                         self.input.lock().unwrap().on_key(scancode, pressed);
+                    }
+                }
+                // Port-only: queue the translated characters for the custom
+                // save panel's filename field. Filtering to filesystem-safe
+                // characters here keeps the queue clean; Backspace/Enter/ESC
+                // arrive as control characters and stay on the scancode path.
+                if event.state == ElementState::Pressed
+                    && let Some(text) = event.text.as_ref()
+                {
+                    let mut input = self.input.lock().unwrap();
+                    for c in text
+                        .chars()
+                        .filter(|c| c.is_ascii_alphanumeric() || " _-.".contains(*c))
+                    {
+                        input.on_text(c);
                     }
                 }
             }

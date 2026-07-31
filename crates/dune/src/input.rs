@@ -8,7 +8,10 @@
 //! `Arc<Mutex<…>>` wrapper matches that one-writer / one-reader model; the lock
 //! is held only for the brief field updates here.
 
-use std::sync::{Arc, Mutex};
+use std::{
+    collections::VecDeque,
+    sync::{Arc, Mutex},
+};
 
 use winit::keyboard::KeyCode;
 
@@ -62,7 +65,18 @@ pub struct InputState {
     // = the INT 33,3 button bitmask masked to the low 3 bits (bl & 7):
     // bit0 = left, bit1 = right, bit2 = middle.
     pub mouse_buttons: u8,
+
+    // Port-only: host-typed characters (winit KeyEvent.text) for the custom
+    // save panel's filename field. DOS has no text input; the scancode array
+    // cannot reconstruct shifted/layout-dependent characters, so the host
+    // queues the translated characters here. Capped at TYPED_CHARS_CAP;
+    // drained by GameState::take_typed_chars.
+    pub typed: VecDeque<char>,
 }
+
+/// Cap on the typed-character queue; stale characters accumulated outside the
+/// save panel are bounded and dropped wholesale when the panel opens.
+const TYPED_CHARS_CAP: usize = 32;
 
 impl Default for InputState {
     fn default() -> Self {
@@ -76,6 +90,7 @@ impl Default for InputState {
             mouse_x: MOUSE_START_X,
             mouse_y: MOUSE_START_Y,
             mouse_buttons: 0,
+            typed: VecDeque::new(),
         }
     }
 }
@@ -99,6 +114,14 @@ impl InputState {
         self.kb_keys[idx] = if pressed { 0xff } else { 0x00 };
         if pressed {
             self.key_hit_scancode = scancode & 0x7f;
+        }
+    }
+
+    /// Port-only: queue a host-typed character for the save panel's filename
+    /// field. Characters past the cap are dropped.
+    pub fn on_text(&mut self, c: char) {
+        if self.typed.len() < TYPED_CHARS_CAP {
+            self.typed.push_back(c);
         }
     }
 
@@ -287,6 +310,13 @@ impl GameState {
         input.key_hit_scancode = 0;
         input.kb_esc_was_hit = 0;
         input.kb_keys = [0; KB_KEYS_LEN];
+        input.typed.clear();
+    }
+
+    // Port-only: drain the host-typed character queue (the save panel's
+    // filename input; mirrors get_and_reset_key_scancode's take-and-clear).
+    pub(crate) fn take_typed_chars(&mut self) -> Vec<char> {
+        self.input.lock().unwrap().typed.drain(..).collect()
     }
 
     // = seg000:de7b pause_if_p_key_pressed — when the P key is held and the
@@ -340,5 +370,6 @@ impl GameState {
         let mut input = self.input.lock().unwrap();
         input.key_hit_scancode = 0;
         input.kb_keys = [0; KB_KEYS_LEN];
+        input.typed.clear();
     }
 }

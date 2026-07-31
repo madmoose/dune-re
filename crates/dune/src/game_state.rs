@@ -131,6 +131,10 @@ pub struct GameState {
     // the press so a held key advances only once.
     debug_advance_phase_key_down: bool,
 
+    // Port-only: F5 opens the custom named save/load panel (save_screen.rs).
+    // Edge-detects the press so a held key opens the panel only once.
+    pub(crate) custom_save_key_down: bool,
+
     // ---- Host/runtime state and buffers (not seg001 data-segment globals) ----
     pub dat_file: DatFile,
 
@@ -1925,6 +1929,7 @@ impl GameState {
             debug_overlay: false,
             debug_overlay_key_down: false,
             debug_advance_phase_key_down: false,
+            custom_save_key_down: false,
             // ---- Host/runtime state and buffers ----
             dat_file,
 
@@ -2554,6 +2559,10 @@ impl GameState {
             // Port-only testing hotkey: `=`/`+` steps game_phase forward by one,
             // firing the usual phase triggers. Also reads the raw key state.
             self.poll_debug_advance_game_phase();
+
+            // Port-only: F5 opens the custom named save/load panel (a blocking
+            // modal loop in save_screen.rs). Also reads the raw key state.
+            self.poll_custom_save_panel();
 
             // = seg000:d820..d82e — the Ctrl+V (scancode 0x2f + kb_keys[0x1d]
             // held; chani labels [0x1d] "_w" but 0x1d is Left Ctrl, not W)

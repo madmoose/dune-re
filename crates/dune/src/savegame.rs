@@ -747,7 +747,13 @@ impl GameState {
     // game_time header of the slot's file, None when the file is missing or
     // short.
     pub(crate) fn save_game_timestamp(slot: u8) -> Option<u16> {
-        let data = std::fs::read(save_game_filename(slot)).ok()?;
+        Self::save_game_timestamp_path(Path::new(&save_game_filename(slot)))
+    }
+
+    // Port-only: the u16 game_time header of any save file (custom saves
+    // included), None when the file is missing or short.
+    pub(crate) fn save_game_timestamp_path(path: &Path) -> Option<u16> {
+        let data = std::fs::read(path).ok()?;
         Some(u16::from_le_bytes([*data.first()?, *data.get(1)?]))
     }
 
@@ -905,11 +911,10 @@ impl GameState {
         }
     }
 
-    // = seg000:b3b0 menu_callback_choice_globe_load_game — a load-slot row:
-    // restore the slot's file and rebuild the active screen. `index` is DOS's
-    // cx (the menu row = the load slot).
-    pub(crate) fn menu_callback_choice_globe_load_game(&mut self, _text_id: u16, index: usize) {
-        let slot = index as u8;
+    // = seg000:b3b0..b3cd — the pre-load half shared by the slot rows and the
+    // custom save panel: drain a pending room-screen request and hand back the
+    // view toggle to preserve across the restore.
+    pub(crate) fn pre_load_fixups(&mut self) -> u8 {
         // = seg000:b3b0..b3b7 loc_00e49 — drain a pending room-screen request
         //   first (the port clears the request and the lip-sync id; the
         //   loc_00e6c transition draw is not ported).
@@ -919,12 +924,13 @@ impl GameState {
         }
         // = seg000:b3cd push room_view_toggle — the load keeps the current
         //   view toggle (the saved byte is discarded at seg000:b401).
-        let toggle = self.room_view_toggle;
-        // = seg000:b3c1..b3ed read + decompress + restore.
-        if let Err(e) = self.load_game(slot) {
-            println!("load_game (slot {slot}): {e}");
-            return;
-        }
+        self.room_view_toggle
+    }
+
+    // = seg000:b3f1..b424 — the post-load half: restore the view toggle, clear
+    // the per-scene transients, release the suspend nesting, and rebuild the
+    // active screen.
+    pub(crate) fn post_load_fixups(&mut self, toggle: u8) {
         self.room_view_toggle = toggle;
         // = seg000:b3f1 call loc_03ae9 — clear the person screen-pos markers.
         self.character_screen_pos = [(0xffff, 0xffff); 0x17];
@@ -951,6 +957,51 @@ impl GameState {
             //   map-view rebuild is the closest ported equivalent.
             self.ui_show_globe_map_view();
         }
+    }
+
+    // = seg000:b3b0 menu_callback_choice_globe_load_game — a load-slot row:
+    // restore the slot's file and rebuild the active screen. `index` is DOS's
+    // cx (the menu row = the load slot).
+    pub(crate) fn menu_callback_choice_globe_load_game(&mut self, _text_id: u16, index: usize) {
+        let slot = index as u8;
+        let toggle = self.pre_load_fixups();
+        // = seg000:b3c1..b3ed read + decompress + restore.
+        if let Err(e) = self.load_game(slot) {
+            println!("load_game (slot {slot}): {e}");
+            return;
+        }
+        self.post_load_fixups(toggle);
+    }
+
+    // Port-only: format a save header word as "DAY nnn hh.mm x.m." for the
+    // custom save panel's list rows. Day = ((time + 3) >> 4) + 1 (the
+    // seg000:b2df math); the time-of-day text is COMMAND.BIN string 0x117's
+    // ten-char slot indexed by time & 0xf (the seg000:b2f5 lookup). Returns
+    // raw COMMAND.BIN bytes; trailing spaces are trimmed.
+    pub(crate) fn format_save_day_time(&self, time: u16) -> Vec<u8> {
+        let mut out = Vec::with_capacity(18);
+        out.extend_from_slice(b"DAY ");
+        let day = (time.wrapping_add(3) >> 4).wrapping_add(1).min(999);
+        let mut leading = true;
+        for d in [day / 100, day / 10 % 10, day % 10] {
+            leading &= d == 0;
+            if !leading {
+                out.push(b'0' + d as u8);
+            }
+        }
+        if leading {
+            out.push(b'0');
+        }
+        out.push(b' ');
+        let table = self.get_phrase_or_command_string(0x117);
+        let lo = (time & 0xf) as usize * 10;
+        if table.len() >= lo + 10 {
+            out.extend_from_slice(&table[lo..lo + 10]);
+        }
+        while out.last() == Some(&b' ') {
+            out.pop();
+        }
+        out
     }
 }
 
