@@ -352,6 +352,337 @@ pub const CURSOR_LEFT: CursorShape = CursorShape {
     ],
 };
 
+pub fn cursor_shape(id: CursorShapeId) -> &'static CursorShape {
+    match id {
+        CursorShapeId::Arrow => &CURSOR_ARROW,
+        CursorShapeId::Hand => &CURSOR_HAND,
+        CursorShapeId::Up => &CURSOR_UP,
+        CursorShapeId::Right => &CURSOR_RIGHT,
+        CursorShapeId::Down => &CURSOR_DOWN,
+        CursorShapeId::Left => &CURSOR_LEFT,
+    }
+}
+
+impl GameState {
+    // = seg000:df1e get_mouse_pos_etc — latch the pointer position for this pass.
+    // Minimal port: copy the shared InputState (the host already maps the window
+    // cursor into 320x200 game coordinates) into mouse_pos_x/y. DOS instead reads
+    // INT 33,3 and shifts by the mickey scalers (_word_21A30..), then runs the
+    // joystick path (loc_0dd10) and the per-person idle/click scan (loc_0df56);
+    // mouse_stuff (seg000:db4c) button edge-detection is also TODO.
+    pub(crate) fn get_mouse_pos_etc(&mut self) {
+        // = seg000:df1e call pause_if_p_key_pressed — honour the P-key pause.
+        self.pause_if_p_key_pressed();
+        let input = self.input.lock().unwrap();
+        self.mouse_pos_x = input.mouse_x;
+        self.mouse_pos_y = input.mouse_y;
+    }
+
+    // = seg000:dc20 redraw_mouse — composite the cursor at its current position,
+    // erasing it from the previous one first. Returns whether the screen changed
+    // (the port presents only then). The cursor image, position and hide flag are
+    // double-buffered exactly as DOS does so an unmoved pointer redraws nothing.
+    //
+    // In `CursorMode::Overlay` the cursor is composited on the GPU at present
+    // time, so the framebuffer is left untouched and this returns `false` —
+    // game-tick cursor motion no longer drives a re-present. The shape and
+    // hide state are published to `SharedCursor` for the present thread.
+    pub(crate) fn redraw_mouse(&mut self) -> bool {
+        // = seg000:dc27/dc2b dx = mouse_pos_x (X), bx = mouse_pos_y (Y).
+        let x = self.mouse_pos_x;
+        let y = self.mouse_pos_y;
+        // = seg000:dc2f call get_mouse_cursor_image_addr — the shape for this pass.
+        let new_image = self.get_mouse_cursor_image();
+        // = seg000:dc34 xchg bp,[cursor_image_ptr] — bp becomes the old shape.
+        let old_image = self.cursor_image.replace(new_image);
+        // = seg000:dc3a xchg al,[cursor_hide_counter] — read it, then clear to 0.
+        let hide = std::mem::take(&mut self.cursor_hide_counter);
+        // Port-only: consume a rect bracket left open across passes (DOS's
+        // travel_trail_stamp_last lifts without a balancing draw) — the
+        // unconditional draw below satisfies the owed re-show. DOS instead
+        // lets the next draw_mouse_cursor_if_needed anywhere burn the flag on
+        // an over-show; the port must clear it here because a negative flag
+        // also suppresses send_frame_to_display.
+        if self.mouse_cursor_restore_needed < 0 {
+            self.mouse_cursor_restore_needed = 0;
+        }
+
+        if self.cursor_mode == CursorMode::Overlay {
+            // Tell the present thread what shape to draw; the freshest position
+            // is sampled there from `SharedInput` instead of being routed
+            // through the game tick. Published shown unconditionally: DOS
+            // always ends this routine with vga_draw_cursor (seg000:dc5e) — a
+            // negative hide counter (seg000:dc40 js) only skips the restore,
+            // never the draw — so after every pass the cursor is visible.
+            self.shared_cursor.publish(CursorOverlay {
+                shape: new_image,
+                hidden: false,
+            });
+            // Track the "drawn" position as if we had drawn it so any other
+            // consumer of mouse_draw_pos_* sees consistent state.
+            self.mouse_draw_pos_x = x;
+            self.mouse_draw_pos_y = y;
+            return false;
+        }
+
+        // = seg000:dc3e or al,al; js loc_0dc56 — hidden last pass: skip the
+        // restore and just draw.
+        if hide >= 0 {
+            // = seg000:dc42..dc50 unchanged position and shape -> nothing to do.
+            if old_image == Some(new_image)
+                && x == self.mouse_draw_pos_x
+                && y == self.mouse_draw_pos_y
+            {
+                return false;
+            }
+            // = seg000:dc52 call vga_restore_cursor — repaint the old background.
+            gfx::vga_restore_cursor(self);
+        }
+        // = seg000:dc56/dc5a record where the cursor is now drawn.
+        self.mouse_draw_pos_x = x;
+        self.mouse_draw_pos_y = y;
+        // = seg000:dc5e call vga_draw_cursor.
+        gfx::vga_draw_cursor(self, new_image, x, y);
+        true
+    }
+
+    // = seg000:dbb2 call_restore_cursor — hide the cursor one nesting level so a
+    // draw that lands under it paints clean background, not the cursor. Balanced
+    // by draw_mouse, which re-shows it. Baked erases the cursor from the
+    // framebuffer (vga_restore_cursor); Overlay/System publishes the hidden
+    // state to the present thread so the click's hide is visible immediately
+    // (not only at the next redraw_mouse). Both bracket every screen update that
+    // can land under the cursor — including the game loop's per-click hide
+    // (seg000:d8f4), which is what makes the cursor blink off on a HUD-arrow or
+    // command click. No-op while composing a frame offscreen (front == fb1),
+    // where the live cursor must not be touched.
+    pub(crate) fn call_restore_cursor(&mut self) {
+        if self.front_buffer_is_fb1() {
+            return;
+        }
+        // = seg000:dbb3 al = cursor_hide_counter (the pre-decrement value used by
+        //   the restore test below).
+        let old = self.cursor_hide_counter;
+        // = seg000:dbb6 dec [cursor_hide_counter]; dbba js keep / dbbc inc undo —
+        //   decrement in place, but keep the result only when it is negative;
+        //   otherwise inc it straight back, so a positive over-shown count is left
+        //   unchanged. The `dec` wraps like the 8086 byte op, so at the -128 floor
+        //   `dec` yields +127 (not negative) and the undo restores -128: the
+        //   counter saturates there instead of overflowing.
+        let dec = old.wrapping_sub(1);
+        if dec < 0 {
+            self.cursor_hide_counter = dec;
+        }
+        if self.cursor_mode == CursorMode::Baked {
+            // = seg000:dbc0 or al,al; js — restore only when it was visible.
+            if old >= 0 {
+                gfx::vga_restore_cursor(self);
+            }
+        } else {
+            self.publish_overlay_cursor();
+        }
+    }
+
+    // = seg000:dbec draw_mouse — show the cursor one nesting level, restoring it
+    // once the counter returns to 0. The mirror of call_restore_cursor. Baked
+    // composites the cursor into the framebuffer; Overlay re-publishes
+    // the (now shown) state. No-op while composing offscreen.
+    pub(crate) fn draw_mouse(&mut self) {
+        if self.front_buffer_is_fb1() {
+            return;
+        }
+        // = seg000:dbec inc cursor_hide_counter.
+        self.cursor_hide_counter = self.cursor_hide_counter.wrapping_add(1);
+        // = seg000:dbf0 js loc_0dc1a — still negative: nested-hidden, draw nothing.
+        if self.cursor_hide_counter < 0 {
+            if self.cursor_mode != CursorMode::Baked {
+                self.publish_overlay_cursor();
+            }
+            return;
+        }
+        // = seg000:dbf2 jnz loc_0dc1b — over-shown: undo the inc and return.
+        if self.cursor_hide_counter > 0 {
+            self.cursor_hide_counter -= 1;
+            return;
+        }
+        // = seg000:dbf4 counter == 0: the cursor is fully shown again.
+        if self.cursor_mode != CursorMode::Baked {
+            self.publish_overlay_cursor();
+            return;
+        }
+        // Baked: composite the cursor at mouse_pos with the last-selected shape.
+        let x = self.mouse_pos_x;
+        let y = self.mouse_pos_y;
+        self.mouse_draw_pos_x = x;
+        self.mouse_draw_pos_y = y;
+        let image = match self.cursor_image {
+            Some(image) => image,
+            None => self.get_mouse_cursor_image(),
+        };
+        gfx::vga_draw_cursor(self, image, x, y);
+    }
+
+    // = seg000:db74 restore_mouse_if_rect_intersects — lift the cursor only
+    // when `rect` overlaps the 16x16 cursor image as last drawn (mouse_draw_pos
+    // minus the shape's hotspot). An already-hidden cursor is left alone. On
+    // overlap, mouse_cursor_restore_needed goes negative so
+    // draw_mouse_cursor_if_needed knows a re-show is owed, and the hide falls
+    // through into call_restore_cursor (seg000:dbb2).
+    pub(crate) fn restore_mouse_if_rect_intersects(&mut self, rect: crate::Rect) {
+        // = seg000:db74 cmp [cursor_hide_counter],0; js ret.
+        if self.cursor_hide_counter < 0 {
+            return;
+        }
+        // = seg000:db7d..db8c the drawn cursor's top-left corner:
+        // mouse_draw_pos minus the hotspot of the current shape.
+        let shape = cursor_shape(self.cursor_image.unwrap_or(CursorShapeId::Arrow));
+        let x = self.mouse_draw_pos_x.wrapping_sub(shape.hotspot_x) as i16;
+        let y = self.mouse_draw_pos_y.wrapping_sub(shape.hotspot_y) as i16;
+        // = seg000:db90..dba7 the 16x16 overlap test against (x0,y0,x1,y1).
+        if x >= rect.x1 || y >= rect.y1 || x + 16 <= rect.x0 || y + 16 <= rect.y0 {
+            return;
+        }
+        // = seg000:dbae dec [mouse_cursor_restore_needed] — flag the pending
+        // re-show, then fall through into call_restore_cursor.
+        self.mouse_cursor_restore_needed = self.mouse_cursor_restore_needed.wrapping_sub(1);
+        self.call_restore_cursor();
+    }
+
+    // = seg000:db67 draw_mouse_cursor_if_needed — re-show the cursor only when
+    // restore_mouse_if_rect_intersects lifted it (the flag is negative);
+    // otherwise do nothing at all — no draw_mouse, no counter change.
+    pub(crate) fn draw_mouse_cursor_if_needed(&mut self) {
+        // = seg000:db67 cmp [mouse_cursor_restore_needed],0; jns ret.
+        if self.mouse_cursor_restore_needed >= 0 {
+            return;
+        }
+        // = seg000:db6e inc [mouse_cursor_restore_needed]; db72 jmp draw_mouse.
+        self.mouse_cursor_restore_needed += 1;
+        self.draw_mouse();
+    }
+
+    // = seg000:db67 draw_mouse_cursor_if_needed closing a bracket that
+    // presented mid-bracket. Port-only presentation care: DOS's re-draw lands
+    // straight on VGA and is instantly visible, but the port's present inside
+    // the bracket already published the frame with the cursor erased — so when
+    // the cursor really was lifted (Baked mode, cursor pixels live in the
+    // framebuffer), publish once more so the visible frame carries the
+    // re-drawn cursor instead of staying cursor-less until the next present.
+    pub(crate) fn draw_mouse_cursor_if_needed_then_present(&mut self) {
+        let lifted = self.mouse_cursor_restore_needed < 0;
+        self.draw_mouse_cursor_if_needed();
+        if lifted && self.cursor_mode == CursorMode::Baked && !self.front_buffer_is_fb1() {
+            self.send_frame_to_display();
+        }
+    }
+
+    // Publish the overlay cursor's current shape and hidden state to the
+    // present thread. call_restore_cursor / draw_mouse call it so a hide (or
+    // re-show) driven by an interaction reaches the compositor at once, without
+    // waiting for the next redraw_mouse — the present thread samples the live
+    // pointer position itself. Overlay only.
+    fn publish_overlay_cursor(&mut self) {
+        let shape = self
+            .cursor_image
+            .unwrap_or_else(|| self.get_mouse_cursor_image());
+        self.shared_cursor.publish(CursorOverlay {
+            shape,
+            hidden: self.cursor_hide_counter < 0,
+        });
+    }
+
+    // = seg000:db4c mouse_stuff — read the live button state and the previously
+    // latched state from `data_0dc34`, store the current state back so the next
+    // call can compute edges, and return the combined word: bit0 = LMB down,
+    // bit1 = RMB down, bit2 = LMB edge, bit3 = RMB edge (an edge is set on either
+    // a press or release since the previous call). game_loop reads the returned
+    // ax to dispatch idle / press / release / drag for either button.
+    //
+    // DOS layout:
+    //   data_0dc34 (byte): current button state, refreshed by an INT 33 poll
+    //   data_0dc35 (byte): previous button state, written here by mouse_stuff
+    //
+    // Port: live state comes from `InputState::mouse_buttons` (already polled
+    // by the host event loop); the previous state lives in `prev_mouse_buttons`.
+    // Returns the same ax as DOS so game_loop's dispatch reads it back unchanged.
+    pub(crate) fn mouse_stuff(&mut self) -> u16 {
+        // = seg000:db4c mov ax, [data_0dc34]. AL = live buttons, AH = previously
+        //   latched buttons (set by the previous call's `mov [data_0dc35], al`).
+        let live = self.input.lock().unwrap().mouse_buttons;
+        let prev = self.prev_mouse_buttons;
+        // = seg000:db4f and al,3 — keep only LMB | RMB.
+        let cur = live & 3;
+        // = seg000:db51 mov [data_0dc35], al — latch current for the next call's
+        //   edge computation. The port stores into prev_mouse_buttons, which
+        //   any_key_pressed also writes; both update sites store the same
+        //   "current buttons masked to LMB|RMB", so they coexist.
+        self.prev_mouse_buttons = cur;
+        // = seg000:db54..db5a xor ah,al; add ah,ah; add ah,ah; or al,ah — the
+        //   changed bits (bit0 LMB, bit1 RMB) shifted left by two and OR'd in, so
+        //   the edges land in bits 2..3 above the live state in bits 0..1.
+        let edges = cur ^ (prev & 3);
+        let ax = (cur as u16) | ((edges as u16) << 2);
+        // = seg000:db5e/db62 dx = mouse_pos_x; bx = mouse_pos_y. DOS returns
+        //   them in registers; the port keeps them on GameState already.
+        ax
+    }
+
+    // = seg000:dc6a get_mouse_cursor_image_addr — pick the cursor shape for the
+    // pointer's current hover region.
+    fn get_mouse_cursor_image(&self) -> CursorShapeId {
+        // = seg000:dc6a cmp [settings_drag_target],0; dc6f bp = 25c8h
+        // (cursor_shape_hand); dc72 jnz — while a mixer-panel slider or balance
+        // knob handle is grabbed (data_028be != 0) the cursor is the busy hand. This
+        // is the first, highest-priority check.
+        if self.settings_drag_target != 0 {
+            return CursorShapeId::Hand;
+        }
+        // = seg000:dc77 cmp [data_04723],0; jnz — the map-main-menu busy flag
+        // also forces the hand; not modelled (nothing ported sets it).
+        // = seg000:dc7e di = [mouse_nav_rect_ptr]; or di,di; jz — no
+        // navigation hot-zone installed: the plain arrow.
+        let Some(rect) = self.mouse_nav_rect else {
+            return CursorShapeId::Arrow;
+        };
+        let x = self.mouse_pos_x as i16;
+        let y = self.mouse_pos_y as i16;
+        // = seg000:dc86 cmp bx,9bh; jge — below the game area (over the HUD)
+        // the hot-zone does not apply.
+        if y >= 0x9b {
+            return CursorShapeId::Arrow;
+        }
+        // = seg000:dc8c call rect_contains; dc8f bp = cursor_shape_hand; jb —
+        // strictly inside the hot-zone the cursor is the hand.
+        if rect.contains_interior(x, y) {
+            return CursorShapeId::Hand;
+        }
+        // = seg000:dc94..dc9c with y inside the zone's vertical span, the
+        // pointer sits in a horizontal scroll band.
+        if y >= rect.y0 && y < rect.y1 {
+            // = seg000:dc9e..dca8 within 0x32 left of the zone: the left arrow.
+            if (rect.x0.wrapping_sub(x) as u16) < 0x32 {
+                return CursorShapeId::Left;
+            }
+            // = seg000:dcaa..dcb5 within 0x32 right of it: the right arrow.
+            if (x.wrapping_sub(rect.x1) as u16) < 0x32 {
+                return CursorShapeId::Right;
+            }
+        } else if x >= rect.x0 && x < rect.x1 {
+            // = seg000:dcb9..dcc0 the vertical scroll bands.
+            // = seg000:dcc2..dccd within 0x19 above the zone: the up arrow.
+            if (rect.y0.wrapping_sub(y) as u16) < 0x19 {
+                return CursorShapeId::Up;
+            }
+            // = seg000:dccf..dcda within 0x19 below it: the down arrow.
+            if (y.wrapping_sub(rect.y1) as u16) < 0x19 {
+                return CursorShapeId::Down;
+            }
+        }
+        // = seg000:dcdc bp = cursor_shape_arrow.
+        CursorShapeId::Arrow
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::sync::mpsc;
@@ -807,336 +1138,5 @@ mod tests {
             published_missing, 0,
             "no published frame during the steady conversation may lack the cursor"
         );
-    }
-}
-
-pub fn cursor_shape(id: CursorShapeId) -> &'static CursorShape {
-    match id {
-        CursorShapeId::Arrow => &CURSOR_ARROW,
-        CursorShapeId::Hand => &CURSOR_HAND,
-        CursorShapeId::Up => &CURSOR_UP,
-        CursorShapeId::Right => &CURSOR_RIGHT,
-        CursorShapeId::Down => &CURSOR_DOWN,
-        CursorShapeId::Left => &CURSOR_LEFT,
-    }
-}
-
-impl GameState {
-    // = seg000:df1e get_mouse_pos_etc — latch the pointer position for this pass.
-    // Minimal port: copy the shared InputState (the host already maps the window
-    // cursor into 320x200 game coordinates) into mouse_pos_x/y. DOS instead reads
-    // INT 33,3 and shifts by the mickey scalers (_word_21A30..), then runs the
-    // joystick path (loc_0dd10) and the per-person idle/click scan (loc_0df56);
-    // mouse_stuff (seg000:db4c) button edge-detection is also TODO.
-    pub(crate) fn get_mouse_pos_etc(&mut self) {
-        // = seg000:df1e call pause_if_p_key_pressed — honour the P-key pause.
-        self.pause_if_p_key_pressed();
-        let input = self.input.lock().unwrap();
-        self.mouse_pos_x = input.mouse_x;
-        self.mouse_pos_y = input.mouse_y;
-    }
-
-    // = seg000:dc20 redraw_mouse — composite the cursor at its current position,
-    // erasing it from the previous one first. Returns whether the screen changed
-    // (the port presents only then). The cursor image, position and hide flag are
-    // double-buffered exactly as DOS does so an unmoved pointer redraws nothing.
-    //
-    // In `CursorMode::Overlay` the cursor is composited on the GPU at present
-    // time, so the framebuffer is left untouched and this returns `false` —
-    // game-tick cursor motion no longer drives a re-present. The shape and
-    // hide state are published to `SharedCursor` for the present thread.
-    pub(crate) fn redraw_mouse(&mut self) -> bool {
-        // = seg000:dc27/dc2b dx = mouse_pos_x (X), bx = mouse_pos_y (Y).
-        let x = self.mouse_pos_x;
-        let y = self.mouse_pos_y;
-        // = seg000:dc2f call get_mouse_cursor_image_addr — the shape for this pass.
-        let new_image = self.get_mouse_cursor_image();
-        // = seg000:dc34 xchg bp,[cursor_image_ptr] — bp becomes the old shape.
-        let old_image = self.cursor_image.replace(new_image);
-        // = seg000:dc3a xchg al,[cursor_hide_counter] — read it, then clear to 0.
-        let hide = std::mem::take(&mut self.cursor_hide_counter);
-        // Port-only: consume a rect bracket left open across passes (DOS's
-        // travel_trail_stamp_last lifts without a balancing draw) — the
-        // unconditional draw below satisfies the owed re-show. DOS instead
-        // lets the next draw_mouse_cursor_if_needed anywhere burn the flag on
-        // an over-show; the port must clear it here because a negative flag
-        // also suppresses send_frame_to_display.
-        if self.mouse_cursor_restore_needed < 0 {
-            self.mouse_cursor_restore_needed = 0;
-        }
-
-        if self.cursor_mode == CursorMode::Overlay {
-            // Tell the present thread what shape to draw; the freshest position
-            // is sampled there from `SharedInput` instead of being routed
-            // through the game tick. Published shown unconditionally: DOS
-            // always ends this routine with vga_draw_cursor (seg000:dc5e) — a
-            // negative hide counter (seg000:dc40 js) only skips the restore,
-            // never the draw — so after every pass the cursor is visible.
-            self.shared_cursor.publish(CursorOverlay {
-                shape: new_image,
-                hidden: false,
-            });
-            // Track the "drawn" position as if we had drawn it so any other
-            // consumer of mouse_draw_pos_* sees consistent state.
-            self.mouse_draw_pos_x = x;
-            self.mouse_draw_pos_y = y;
-            return false;
-        }
-
-        // = seg000:dc3e or al,al; js loc_0dc56 — hidden last pass: skip the
-        // restore and just draw.
-        if hide >= 0 {
-            // = seg000:dc42..dc50 unchanged position and shape -> nothing to do.
-            if old_image == Some(new_image)
-                && x == self.mouse_draw_pos_x
-                && y == self.mouse_draw_pos_y
-            {
-                return false;
-            }
-            // = seg000:dc52 call vga_restore_cursor — repaint the old background.
-            gfx::vga_restore_cursor(self);
-        }
-        // = seg000:dc56/dc5a record where the cursor is now drawn.
-        self.mouse_draw_pos_x = x;
-        self.mouse_draw_pos_y = y;
-        // = seg000:dc5e call vga_draw_cursor.
-        gfx::vga_draw_cursor(self, new_image, x, y);
-        true
-    }
-
-    // = seg000:dbb2 call_restore_cursor — hide the cursor one nesting level so a
-    // draw that lands under it paints clean background, not the cursor. Balanced
-    // by draw_mouse, which re-shows it. Baked erases the cursor from the
-    // framebuffer (vga_restore_cursor); Overlay/System publishes the hidden
-    // state to the present thread so the click's hide is visible immediately
-    // (not only at the next redraw_mouse). Both bracket every screen update that
-    // can land under the cursor — including the game loop's per-click hide
-    // (seg000:d8f4), which is what makes the cursor blink off on a HUD-arrow or
-    // command click. No-op while composing a frame offscreen (front == fb1),
-    // where the live cursor must not be touched.
-    pub(crate) fn call_restore_cursor(&mut self) {
-        if self.front_buffer_is_fb1() {
-            return;
-        }
-        // = seg000:dbb3 al = cursor_hide_counter (the pre-decrement value used by
-        //   the restore test below).
-        let old = self.cursor_hide_counter;
-        // = seg000:dbb6 dec [cursor_hide_counter]; dbba js keep / dbbc inc undo —
-        //   decrement in place, but keep the result only when it is negative;
-        //   otherwise inc it straight back, so a positive over-shown count is left
-        //   unchanged. The `dec` wraps like the 8086 byte op, so at the -128 floor
-        //   `dec` yields +127 (not negative) and the undo restores -128: the
-        //   counter saturates there instead of overflowing.
-        let dec = old.wrapping_sub(1);
-        if dec < 0 {
-            self.cursor_hide_counter = dec;
-        }
-        if self.cursor_mode == CursorMode::Baked {
-            // = seg000:dbc0 or al,al; js — restore only when it was visible.
-            if old >= 0 {
-                gfx::vga_restore_cursor(self);
-            }
-        } else {
-            self.publish_overlay_cursor();
-        }
-    }
-
-    // = seg000:dbec draw_mouse — show the cursor one nesting level, restoring it
-    // once the counter returns to 0. The mirror of call_restore_cursor. Baked
-    // composites the cursor into the framebuffer; Overlay re-publishes
-    // the (now shown) state. No-op while composing offscreen.
-    pub(crate) fn draw_mouse(&mut self) {
-        if self.front_buffer_is_fb1() {
-            return;
-        }
-        // = seg000:dbec inc cursor_hide_counter.
-        self.cursor_hide_counter = self.cursor_hide_counter.wrapping_add(1);
-        // = seg000:dbf0 js loc_0dc1a — still negative: nested-hidden, draw nothing.
-        if self.cursor_hide_counter < 0 {
-            if self.cursor_mode != CursorMode::Baked {
-                self.publish_overlay_cursor();
-            }
-            return;
-        }
-        // = seg000:dbf2 jnz loc_0dc1b — over-shown: undo the inc and return.
-        if self.cursor_hide_counter > 0 {
-            self.cursor_hide_counter -= 1;
-            return;
-        }
-        // = seg000:dbf4 counter == 0: the cursor is fully shown again.
-        if self.cursor_mode != CursorMode::Baked {
-            self.publish_overlay_cursor();
-            return;
-        }
-        // Baked: composite the cursor at mouse_pos with the last-selected shape.
-        let x = self.mouse_pos_x;
-        let y = self.mouse_pos_y;
-        self.mouse_draw_pos_x = x;
-        self.mouse_draw_pos_y = y;
-        let image = match self.cursor_image {
-            Some(image) => image,
-            None => self.get_mouse_cursor_image(),
-        };
-        gfx::vga_draw_cursor(self, image, x, y);
-    }
-
-    // = seg000:db74 restore_mouse_if_rect_intersects — lift the cursor only
-    // when `rect` overlaps the 16x16 cursor image as last drawn (mouse_draw_pos
-    // minus the shape's hotspot). An already-hidden cursor is left alone. On
-    // overlap, mouse_cursor_restore_needed goes negative so
-    // draw_mouse_cursor_if_needed knows a re-show is owed, and the hide falls
-    // through into call_restore_cursor (seg000:dbb2).
-    pub(crate) fn restore_mouse_if_rect_intersects(&mut self, rect: crate::Rect) {
-        // = seg000:db74 cmp [cursor_hide_counter],0; js ret.
-        if self.cursor_hide_counter < 0 {
-            return;
-        }
-        // = seg000:db7d..db8c the drawn cursor's top-left corner:
-        // mouse_draw_pos minus the hotspot of the current shape.
-        let shape = cursor_shape(self.cursor_image.unwrap_or(CursorShapeId::Arrow));
-        let x = self.mouse_draw_pos_x.wrapping_sub(shape.hotspot_x) as i16;
-        let y = self.mouse_draw_pos_y.wrapping_sub(shape.hotspot_y) as i16;
-        // = seg000:db90..dba7 the 16x16 overlap test against (x0,y0,x1,y1).
-        if x >= rect.x1 || y >= rect.y1 || x + 16 <= rect.x0 || y + 16 <= rect.y0 {
-            return;
-        }
-        // = seg000:dbae dec [mouse_cursor_restore_needed] — flag the pending
-        // re-show, then fall through into call_restore_cursor.
-        self.mouse_cursor_restore_needed = self.mouse_cursor_restore_needed.wrapping_sub(1);
-        self.call_restore_cursor();
-    }
-
-    // = seg000:db67 draw_mouse_cursor_if_needed — re-show the cursor only when
-    // restore_mouse_if_rect_intersects lifted it (the flag is negative);
-    // otherwise do nothing at all — no draw_mouse, no counter change.
-    pub(crate) fn draw_mouse_cursor_if_needed(&mut self) {
-        // = seg000:db67 cmp [mouse_cursor_restore_needed],0; jns ret.
-        if self.mouse_cursor_restore_needed >= 0 {
-            return;
-        }
-        // = seg000:db6e inc [mouse_cursor_restore_needed]; db72 jmp draw_mouse.
-        self.mouse_cursor_restore_needed += 1;
-        self.draw_mouse();
-    }
-
-    // = seg000:db67 draw_mouse_cursor_if_needed closing a bracket that
-    // presented mid-bracket. Port-only presentation care: DOS's re-draw lands
-    // straight on VGA and is instantly visible, but the port's present inside
-    // the bracket already published the frame with the cursor erased — so when
-    // the cursor really was lifted (Baked mode, cursor pixels live in the
-    // framebuffer), publish once more so the visible frame carries the
-    // re-drawn cursor instead of staying cursor-less until the next present.
-    pub(crate) fn draw_mouse_cursor_if_needed_then_present(&mut self) {
-        let lifted = self.mouse_cursor_restore_needed < 0;
-        self.draw_mouse_cursor_if_needed();
-        if lifted && self.cursor_mode == CursorMode::Baked && !self.front_buffer_is_fb1() {
-            self.send_frame_to_display();
-        }
-    }
-
-    // Publish the overlay cursor's current shape and hidden state to the
-    // present thread. call_restore_cursor / draw_mouse call it so a hide (or
-    // re-show) driven by an interaction reaches the compositor at once, without
-    // waiting for the next redraw_mouse — the present thread samples the live
-    // pointer position itself. Overlay only.
-    fn publish_overlay_cursor(&mut self) {
-        let shape = self
-            .cursor_image
-            .unwrap_or_else(|| self.get_mouse_cursor_image());
-        self.shared_cursor.publish(CursorOverlay {
-            shape,
-            hidden: self.cursor_hide_counter < 0,
-        });
-    }
-
-    // = seg000:db4c mouse_stuff — read the live button state and the previously
-    // latched state from `data_0dc34`, store the current state back so the next
-    // call can compute edges, and return the combined word: bit0 = LMB down,
-    // bit1 = RMB down, bit2 = LMB edge, bit3 = RMB edge (an edge is set on either
-    // a press or release since the previous call). game_loop reads the returned
-    // ax to dispatch idle / press / release / drag for either button.
-    //
-    // DOS layout:
-    //   data_0dc34 (byte): current button state, refreshed by an INT 33 poll
-    //   data_0dc35 (byte): previous button state, written here by mouse_stuff
-    //
-    // Port: live state comes from `InputState::mouse_buttons` (already polled
-    // by the host event loop); the previous state lives in `prev_mouse_buttons`.
-    // Returns the same ax as DOS so game_loop's dispatch reads it back unchanged.
-    pub(crate) fn mouse_stuff(&mut self) -> u16 {
-        // = seg000:db4c mov ax, [data_0dc34]. AL = live buttons, AH = previously
-        //   latched buttons (set by the previous call's `mov [data_0dc35], al`).
-        let live = self.input.lock().unwrap().mouse_buttons;
-        let prev = self.prev_mouse_buttons;
-        // = seg000:db4f and al,3 — keep only LMB | RMB.
-        let cur = live & 3;
-        // = seg000:db51 mov [data_0dc35], al — latch current for the next call's
-        //   edge computation. The port stores into prev_mouse_buttons, which
-        //   any_key_pressed also writes; both update sites store the same
-        //   "current buttons masked to LMB|RMB", so they coexist.
-        self.prev_mouse_buttons = cur;
-        // = seg000:db54..db5a xor ah,al; add ah,ah; add ah,ah; or al,ah — the
-        //   changed bits (bit0 LMB, bit1 RMB) shifted left by two and OR'd in, so
-        //   the edges land in bits 2..3 above the live state in bits 0..1.
-        let edges = cur ^ (prev & 3);
-        let ax = (cur as u16) | ((edges as u16) << 2);
-        // = seg000:db5e/db62 dx = mouse_pos_x; bx = mouse_pos_y. DOS returns
-        //   them in registers; the port keeps them on GameState already.
-        ax
-    }
-
-    // = seg000:dc6a get_mouse_cursor_image_addr — pick the cursor shape for the
-    // pointer's current hover region.
-    fn get_mouse_cursor_image(&self) -> CursorShapeId {
-        // = seg000:dc6a cmp [settings_drag_target],0; dc6f bp = 25c8h
-        // (cursor_shape_hand); dc72 jnz — while a mixer-panel slider or balance
-        // knob handle is grabbed (data_028be != 0) the cursor is the busy hand. This
-        // is the first, highest-priority check.
-        if self.settings_drag_target != 0 {
-            return CursorShapeId::Hand;
-        }
-        // = seg000:dc77 cmp [data_04723],0; jnz — the map-main-menu busy flag
-        // also forces the hand; not modelled (nothing ported sets it).
-        // = seg000:dc7e di = [mouse_nav_rect_ptr]; or di,di; jz — no
-        // navigation hot-zone installed: the plain arrow.
-        let Some(rect) = self.mouse_nav_rect else {
-            return CursorShapeId::Arrow;
-        };
-        let x = self.mouse_pos_x as i16;
-        let y = self.mouse_pos_y as i16;
-        // = seg000:dc86 cmp bx,9bh; jge — below the game area (over the HUD)
-        // the hot-zone does not apply.
-        if y >= 0x9b {
-            return CursorShapeId::Arrow;
-        }
-        // = seg000:dc8c call rect_contains; dc8f bp = cursor_shape_hand; jb —
-        // strictly inside the hot-zone the cursor is the hand.
-        if rect.contains_interior(x, y) {
-            return CursorShapeId::Hand;
-        }
-        // = seg000:dc94..dc9c with y inside the zone's vertical span, the
-        // pointer sits in a horizontal scroll band.
-        if y >= rect.y0 && y < rect.y1 {
-            // = seg000:dc9e..dca8 within 0x32 left of the zone: the left arrow.
-            if (rect.x0.wrapping_sub(x) as u16) < 0x32 {
-                return CursorShapeId::Left;
-            }
-            // = seg000:dcaa..dcb5 within 0x32 right of it: the right arrow.
-            if (x.wrapping_sub(rect.x1) as u16) < 0x32 {
-                return CursorShapeId::Right;
-            }
-        } else if x >= rect.x0 && x < rect.x1 {
-            // = seg000:dcb9..dcc0 the vertical scroll bands.
-            // = seg000:dcc2..dccd within 0x19 above the zone: the up arrow.
-            if (rect.y0.wrapping_sub(y) as u16) < 0x19 {
-                return CursorShapeId::Up;
-            }
-            // = seg000:dccf..dcda within 0x19 below it: the down arrow.
-            if (y.wrapping_sub(rect.y1) as u16) < 0x19 {
-                return CursorShapeId::Down;
-            }
-        }
-        // = seg000:dcdc bp = cursor_shape_arrow.
-        CursorShapeId::Arrow
     }
 }

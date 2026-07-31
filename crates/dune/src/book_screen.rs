@@ -19,23 +19,10 @@
 //! invisible top-left hotspot ui_elements[23] (seg000:b1ee).
 
 use crate::{
-    GameState, TaskId, command_strings as cmd, gfx,
-    room_game_screen::{CMD_GREY, CMD_HIGHLIGHT, CommandMenuRecord, ScreenElement, rec},
+    GameState, TaskId, gfx,
+    menu_defs::{CMD_HIGHLIGHT, MenuRef},
     sprite_bank,
 };
-
-/// = seg001:2032 menu_book — the book's verb menu (the leading 0xff priority
-/// word lives in the MenuBuffer). book_menu_update_topic_availability rewrites
-/// the topic entries' grey bits on open; the topic verbs move the 0x8000
-/// highlight between the first four entries.
-#[rustfmt::skip]
-pub(crate) const MENU_BOOK: [CommandMenuRecord; 5] = [
-    rec(cmd::ALL_TOPICS,          0xaf58), // -> menu_callback_choice_book_all_topics
-    rec(cmd::TOPIC_PAUL_ON_DUNE,  0xaf60),
-    rec(cmd::TOPIC_SPICE,         0xaf68),
-    rec(cmd::TOPIC_THE_FREMEN,    0xaf70),
-    rec(cmd::CLOSE_BOOK,          0xb18b), // -> callback_ui_element_book_close
-];
 
 /// = seg001:2426 book_video_page_words — the 12 page words whose pages carry
 /// an HNM video; index i maps to video resource id 0x19+i (and camera icon
@@ -88,7 +75,7 @@ impl GameState {
         // = seg000:af32 book_topic_filter = 0 — all topics.
         self.book_topic_filter = 0;
         // = seg000:af38..af40 push menu_book (bx = fn_0d917_noop, no cleanup).
-        self.screen_element_stack_push(ScreenElement::BookScreen);
+        self.menu_stack_push(MenuRef::MenuBook, None);
         // = seg000:af43 falls through into the cover draw.
         self.callback_transition_book_cover();
     }
@@ -120,11 +107,7 @@ impl GameState {
             let empty = self.book_find_first_page(filter).is_none();
             // = seg000:af17..af1b and id,0xbfff; or id,ax.
             let rec = &mut self.menu_book.records[slot];
-            rec.text_id = if empty {
-                rec.text_id | CMD_GREY
-            } else {
-                rec.text_id & !CMD_GREY
-            };
+            rec.set_grayed_if(empty);
         }
     }
 
@@ -632,7 +615,7 @@ mod tests {
     use std::sync::mpsc;
 
     use super::BOOK_VIDEO_PAGE_WORDS;
-    use crate::{GameState, dat_file::DatFile, room_game_screen::ScreenElement};
+    use crate::{GameState, dat_file::DatFile, menu_defs::MenuRef};
 
     // Open THE BOOK from the starting throne room with the played log seeded
     // the way the Ctrl+V cheat does (seg000:b270: the ten video page words at
@@ -659,10 +642,10 @@ mod tests {
             .extend_from_slice(&BOOK_VIDEO_PAGE_WORDS[2..]);
 
         // The book button: the cover comes up over the open-book frieze with
-        // menu_book as the active screen element.
+        // menu_book as the active menu.
         game.callback_main_ui_element_03();
         assert_eq!(game.data_000c6, 3, "book open + cover bits");
-        assert_eq!(game.get_active_screen_element(), ScreenElement::BookScreen);
+        assert_eq!(game.get_active_menu_ref(), MenuRef::MenuBook);
         game.screen
             .write_png_scaled(&game.palette, "book_cover.png")
             .expect("write book_cover.png");
@@ -696,9 +679,6 @@ mod tests {
         // Close: flags drop, the room base menu replaces menu_book in place.
         game.callback_ui_element_book_close();
         assert_eq!(game.data_000c6, 0);
-        assert_eq!(
-            game.get_active_screen_element(),
-            ScreenElement::RoomCommandMenu
-        );
+        assert_eq!(game.get_active_menu_ref(), MenuRef::CommandMenuBuf);
     }
 }

@@ -9,9 +9,7 @@
 //! on the player's current room. A click anywhere (or a second centre click)
 //! closes it again.
 
-use crate::{
-    GameState, Rect, game_ui::MouseHandlers, gfx, room_game_screen::ScreenElement, sprite_bank,
-};
+use crate::{GameState, Rect, game_ui::MouseHandlers, gfx, menu_defs::MenuRef, sprite_bank};
 
 // = seg001:120b _stru_206BB_icon_list — the PALPLAN.HSQ icon list drawn by
 // draw_icons_list_at_si (each entry is (sprite, x, y), 0xffff-terminated): the
@@ -81,8 +79,8 @@ impl GameState {
         // = seg000:18ee call get_active_screen_element; cmp bp,2012h (menu_done);
         //   jz menu_callback_choice_exit_menu — a second click closes the plan.
         //   menu_done (0x2012) is shared with the unported on-map troop screen;
-        //   PalacePlan is the only identity the port maps to it.
-        if self.get_active_screen_element() == ScreenElement::PalacePlan {
+        //   the palace plan is the only view the port pushes it for.
+        if self.get_active_menu_ref() == MenuRef::MenuDone {
             self.menu_callback_choice_exit_menu();
             return;
         }
@@ -118,10 +116,10 @@ impl GameState {
         //   the composed plan onto the visible screen.
         self.blit_fb1_to_screen_effect(0x10, PALACE_PLAN_RECT);
         // = seg000:193e bp=menu_done; bx=loc_019fc; jmp loc_0d323 — push the
-        //   overlay as the active screen element (cleanup = palace_plan_cleanup),
+        //   overlay as the active menu (cleanup = palace_plan_cleanup),
         //   fold the " Done" command strip on, then highlight the cursor's slot.
         self.screen_overlay_request_transition();
-        self.screen_element_stack_push(ScreenElement::PalacePlan);
+        self.menu_stack_push(MenuRef::MenuDone, Some(GameState::palace_plan_cleanup));
         self.play_pending_panel_fold();
         self.highlight_hovered_text_action_item();
     }
@@ -214,11 +212,11 @@ impl GameState {
     }
 
     // = seg000:19fc loc_019fc — the PALACE PLAN overlay's cleanup callback (the
-    // DOS bx passed to the screen-element push). Restore the room screen the plan
+    // DOS bx passed to the menu-stack push). Restore the room screen the plan
     // covered: clear the active mouse hotspot, copy the plan's backing rect back
     // from fb2 (the clean composed screen) into fb1, scroll-reveal it, and
-    // reselect the room mouse-handler table. screen_element_stack_pop_and_cleanup
-    // invokes it by the PalacePlan identity.
+    // reselect the room mouse-handler table. menu_stack_pop_and_cleanup runs it
+    // as the stack slot's stored cleanup func.
     pub(crate) fn palace_plan_cleanup(&mut self) {
         // = seg000:19fc call clear_mouse_nav_rect.
         self.clear_mouse_nav_rect();

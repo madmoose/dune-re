@@ -548,11 +548,63 @@ impl GameState {
         self.mouse_nav_rect = Some(rect);
     }
 
-    // ---- Not-yet-ported callees (no-op stubs, each linked to its DOS address).
+    // = seg000:d280 play_pending_panel_fold — when a verb-panel transition is pending (screen_overlay_request_transition
+    // armed in_transition to a small positive), reveal the fb1-staged panel with
+    // the 17-frame accordion fold (panel_anim) and clear the flag. The dialogue
+    // paths jmp here (talk_to_me 94da, the come-with-me troop tail 9652).
+    // in_transition < 0 (0x80, a full-screen transition already underway) or 0
+    // takes no action.
+    //
+    // Each fold frame is paced to 6 PIT ticks, and lip_sync_frame_task runs during
+    // that wait so the speaker's mouth keeps moving through the reveal.
+    pub(crate) fn play_pending_panel_fold(&mut self) {
+        // = seg000:d280 cmp in_transition,0; jle ret. <=0 (idle, or a full-screen
+        //   transition already underway) takes no action.
+        if (self.in_transition as i8) <= 0 {
+            return;
+        }
+        // = seg000:d28a in_transition = 0 — consume the pending flag now.
+        self.in_transition = 0;
+        // = seg000:d28f call ui_hud_open_hands — close the ICONES doors over the
+        //   panel sides (ui_elements[1]/[2].sprite_id -> %3 == 2) before folding.
+        self.ui_hud_open_hands();
+
+        // = seg000:d292 mov cx,0x11; d2b4 loop loc_0d295 — 17 fold frames, cx 0x11..1.
+        for frame in (1..=17u16).rev() {
+            // = seg000:d296 push pit_timer — the step-start tick, captured BEFORE the
+            //   fold blit so the d2a4 pace below spans the whole step.
+            let start = self.game_ticks();
+
+            // = seg000:d29a..d2a0 si=framebuffer_saved_seg; al=0x18; call
+            //   blit_fb1_to_screen_effect — render one fold frame straight to screen.
+            gfx::panel_anim_play_step(self, frame);
+            self.send_frame_to_display();
+
+            // = seg000:d2a4 loc_0d2a4 — keep the speaker's mouth moving by re-running
+            //   lip_sync_frame_task until 6 PIT ticks have elapsed since `start`.
+            loop {
+                // = seg000:d2a5 call lip_sync_frame_task — advance the talking-head
+                //   voice mouth one step (a no-op once the voice has drained).
+                self.tick_talking_head_voc();
+                // = seg000:d2a9 mov ax,pit_timer; sub ax,bx; cmp ax,6; jb loc_0d2a4.
+                if self.game_ticks().saturating_sub(start) >= 6 {
+                    break;
+                }
+                // DOS busy-spins re-calling lip_sync_frame_task; the port yields one
+                // PIT tick between calls so the game thread does not spin-wait.
+                let now = self.game_ticks();
+                self.sleep_ticks(now, 1);
+            }
+        }
+
+        // = seg000:d2b6 call ui_hud_close_hands — reopen the doors (%3 == 0),
+        //   revealing the new panel and restoring the date/time indicator.
+        self.ui_hud_close_hands();
+    }
 
     // = seg000:d2bd dismiss_stacked_overlays — before a view switch, tear down the
     // transient menus/overlays stacked over the base room menu, running each one's
-    // cleanup func (screen_element_stack_pop_and_cleanup). The drain stops at a
+    // cleanup func (menu_stack_pop_and_cleanup). The drain stops at a
     // base/locked entry: a leading priority byte of 0xff (the room command menu or
     // the look-away overlay) or one whose low nibble is 0. in_transition is forced
     // to 0x80 across the loop so the cleanups' repaints do not arm a panel fold,
@@ -564,8 +616,8 @@ impl GameState {
             // = seg000:d2c1 in_transition = 0x80.
             self.in_transition = 0x80;
             // = seg000:d2c6 si = [screen_element_stack_ptr]; si = [si]; al = [si] —
-            //   the top screen element's buffer leading priority byte.
-            let lead = self.menu_buffer(self.get_active_screen_element()).priority;
+            //   the top menu's buffer leading priority byte.
+            let lead = self.menu_buffer(self.get_active_menu_ref()).priority;
             // = seg000:d2cd cmp al,0ffh; jz — a 0xff-locked base/overlay stops here.
             if lead == 0xff {
                 break;
@@ -577,10 +629,75 @@ impl GameState {
             // = seg000:d2d5 call screen_element_stack_pop_and_cleanup — pop the top
             //   transient overlay and run its cleanup; never reached for a 0xff
             //   entry, so the loop always makes progress toward the base.
-            self.screen_element_stack_pop_and_cleanup();
+            self.menu_stack_pop_and_cleanup();
         }
         // = seg000:d2da pop ax; in_transition = al — restore.
         self.in_transition = saved;
+    }
+
+    // = seg000:d2df menu_callback_choice_music_cd_order_cancel — the submenu's
+    // Cancel: pop the submenu, then close the mixer panel (the fall-through
+    // into menu_callback_choice_exit_menu).
+    pub(crate) fn menu_callback_choice_music_cd_order_cancel(&mut self) {
+        // = seg000:d2df call screen_element_stack_pop_and_redraw.
+        self.menu_stack_pop_and_cleanup();
+        // = seg000:d2e2 falls into menu_callback_choice_exit_menu.
+        self.menu_callback_choice_exit_menu();
+    }
+
+    // = seg000:d2e2 menu_callback_choice_exit_menu — close the active overlay and
+    // reveal the menu beneath it with the command-panel fold. DOS chains three
+    // steps: screen_overlay_request_transition (arm the pending-transition flag so the repaint stages into
+    // fb1), screen_element_stack_pop_and_cleanup (run the popped element's cleanup func, pop it, and repaint
+    // the revealed menu), then `jmp play_pending_panel_fold` (fold it onto the
+    // screen). Reached from the mixer panel's LMB miss path (loc_0a576 -> a57e) and
+    // from the dialogue verb panel's STOP TALKING verb (record 0x94/0xd2e2).
+    pub(crate) fn menu_callback_choice_exit_menu(&mut self) {
+        // = seg000:d2e2 call screen_overlay_request_transition — arm in_transition (unless an HNM is
+        //   playing) so the menu repaint below stages into fb1 for the fold.
+        self.screen_overlay_request_transition();
+        // = seg000:d2e5 call screen_element_stack_pop_and_cleanup — cleanup + pop + repaint the revealed menu.
+        self.menu_stack_pop_and_cleanup();
+        // = seg000:d2e8 jmp play_pending_panel_fold — reveal the staged panel with
+        //   the 17-frame accordion fold.
+        self.play_pending_panel_fold();
+    }
+
+    // = seg000:d2ea screen_element_stack_pop_and_cleanup — run the active menu's cleanup func
+    // ([si+2], the stack slot's stored callback), pop it off the stack, and
+    // repaint the menu revealed beneath it (draw_command_menu with the new
+    // top). DOS skips the whole routine for a priority-0xf-locked entry (the
+    // mirror overlay, 0xff).
+    pub(crate) fn menu_stack_pop_and_cleanup(&mut self) {
+        // = seg000:d2f0 al = [di] & 0xf; cmp 0xf; jz loc_0d315 — a 0xf-locked
+        //   priority (the mirror overlay's 0xff) is never closed through here
+        //   (game_area_click / the 0x0eb9 verb pop it directly).
+        let Some(&(active, callback)) = self.menu_stack.last() else {
+            return;
+        };
+        if self.menu_buffer(active).priority & 0xf == 0xf {
+            return;
+        }
+
+        // = seg000:d2f8 mov ax,[si+2]; call ax — the element's cleanup func.
+        if let Some(callback) = callback {
+            callback(self);
+        }
+
+        // = seg000:d2fd screen_element_stack_pop_and_redraw — pop the entry unless already at the room base
+        //   (DOS `cmp si,21beh; jz`).
+        if self.menu_stack.len() <= 1 {
+            return;
+        }
+        self.menu_stack.pop();
+
+        // = seg000:d30e bp = [si]; cl = 0xff; call draw_command_menu — repaint
+        //   the now-active menu straight from its still-intact record buffer.
+        //   A pop is a pure reveal: nothing is rebuilt (DOS keeps every menu's
+        //   records alive in its static seg001 buffer; the port's owned
+        //   MenuBuffers give the same guarantee). With in_transition armed
+        //   above, redraw_active_command_menu paints into fb1 for the fold.
+        self.redraw_active_command_menu();
     }
 
     // = seg000:5adf reset_room_scene_state — reset the map/globe-view state
@@ -958,7 +1075,7 @@ impl GameState {
 
     // = seg000:1ae7 loc_01ae7 — the room-screen record's idle handler ([si] at
     // seg000:d88c). game_loop calls highlight_hovered_text_action_item just
-    // before this on the idle path. DOS: if the active screen element is
+    // before this on the idle path. DOS: if the active menu is
     // menu_NPC_actions and the npc_menu_idle_timer (base/limit pair armed by
     // arm_npc_menu_idle_timer, seg000:c85b) has expired, drive the NPC
     // idle/glance animation (loc_0c868) and re-arm the timer.

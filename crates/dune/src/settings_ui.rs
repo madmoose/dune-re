@@ -4,7 +4,7 @@
 //! interaction helpers (seg000:a3f9..a671, plus the cleanup loc_0a541). The
 //! panel is a MIXR.HSQ background with three volume sliders (PCM / music /
 //! voice), one stereo balance/pan knob below each slider, and a button grid for
-//! the voice-subtitle mode + language. It is shown as a screen-element overlay
+//! the voice-subtitle mode + language. It is shown as a menu overlay
 //! with its own mouse-handler table (`MIXER_MOUSE_HANDLERS`, = seg001:1ad6).
 //!
 //! Dragging a slider (loc_0a5df, dispatched as the drag handler `[si+0ah]`)
@@ -25,8 +25,8 @@
 
 use crate::{
     GameState, Rect,
+    menu_defs::{self, CMD_HIGHLIGHT, MenuRef},
     rect::rect,
-    room_game_screen::{CMD_HIGHLIGHT, MENU_GLOBE_MUSIC, MENU_MIXER_PANEL, ScreenElement, grey_if},
     sprite_bank,
 };
 
@@ -118,7 +118,7 @@ impl GameState {
     // = seg000:a3f0 menu_callback_choice_mixer_panel — open the in-game mixer /
     // settings panel. Installs the panel's mouse handlers, drains pending UI
     // tasks, then draws the panel (settings_ui_draw, which also inserts it as
-    // the active screen element). Wired from dispatch_command_handler's 0xa3f0
+    // the active menu). Wired from dispatch_command_handler's 0xa3f0
     // verb arm. `pub` so headless renders can open the panel directly.
     pub fn open_mixer_panel(&mut self) {
         // = a3f0 mov ax,1ad6h; call loc_0d95e — select the mixer handler table.
@@ -131,7 +131,7 @@ impl GameState {
 
     // = seg000:a3f9 settings_ui_draw — paint the whole panel (MIXR background,
     // sliders, balance knobs, language + voice buttons), then insert it as
-    // the active screen element. Also re-entered to repaint after an
+    // the active menu. Also re-entered to repaint after an
     // interaction (loc_0a5db / loc_0a5c8), in which case the panel is already
     // the active element so the insert is a no-op.
     fn settings_ui_draw(&mut self) {
@@ -155,8 +155,8 @@ impl GameState {
         // = a423 call loc_0ac3a — the music-playlist element flags (deferred).
         self.settings_ui_update_music_playlist_flags();
         // = a426 mov bx,0a541h; a429 jmp loc_0d32f — insert the panel as the
-        // active screen element WITH the command-panel fold transition (bx is the
-        // cleanup func loc_0a541, modelled by the MixerPanel identity). loc_0d32f
+        // active menu WITH the command-panel fold transition (bx is the
+        // cleanup func loc_0a541, settings_ui_cleanup). loc_0d32f
         // chains screen_overlay_request_transition -> screen_element_stack_insert
         // -> play_pending_panel_fold. The mixer panel itself was drawn straight to
         // the screen above (SETTINGS_RECT, rows 1..144); only the command/verb
@@ -171,8 +171,11 @@ impl GameState {
         //   in-place replace) and repaint the command menu (draw_command_menu).
         //   With in_transition armed, redraw_active_command_menu stages the verb
         //   strip into fb1 ready for the fold to reveal.
-        if self.get_active_screen_element() != ScreenElement::MixerPanel {
-            self.screen_element_stack.push(ScreenElement::MixerPanel);
+        if self.get_active_menu_ref() != MenuRef::MenuMixerPanel {
+            self.menu_stack.push((
+                MenuRef::MenuMixerPanel,
+                Some(GameState::settings_ui_cleanup),
+            ));
         }
         self.redraw_active_command_menu();
 
@@ -773,8 +776,8 @@ impl GameState {
     // three MUSIC entries when music is disabled. In DOS this toggles the static
     // menu's 0x40 flag bytes ([bp+3]/[bp+7]/[bp+0bh]) in place and leaves
     // bp = menu_mixer_panel so the following screen_element_stack_insert (the
-    // `jmp loc_0d32f` tail of settings_ui_draw) installs it; the flattened port
-    // rebuilds menu_mixer_panel.records from the template instead, which the tail's
+    // `jmp loc_0d32f` tail of settings_ui_draw) installs it; the port rebuilds
+    // menu_mixer_panel.records from the template instead, which the tail's
     // redraw_active_command_menu then paints (staged to fb1 for the panel fold).
     //
     // It also computes the `cl` pre-highlight DOS passes to draw_command_menu
@@ -793,12 +796,13 @@ impl GameState {
         // = ac3d..ac58 toggle the 0x40 grey bit on the three MUSIC entries of
         //   menu_mixer_panel in place (the static buffer, seg001:201a); the
         //   highlight bits are re-derived below, so rebuild from the template.
+        let template = menu_defs::MENU_MIXER_PANEL.records;
         self.menu_mixer_panel.records = vec![
-            grey_if(MENU_MIXER_PANEL[0], disabled),
-            grey_if(MENU_MIXER_PANEL[1], disabled),
-            grey_if(MENU_MIXER_PANEL[2], disabled),
-            MENU_MIXER_PANEL[3],
-            MENU_MIXER_PANEL[4],
+            template[0].grayed_if(disabled),
+            template[1].grayed_if(disabled),
+            template[2].grayed_if(disabled),
+            template[3],
+            template[4],
         ];
 
         // = ac49 cl = 0xff (no pre-highlight); ac4e jz loc_0ac6d — when music is
@@ -823,7 +827,7 @@ impl GameState {
     // ---- Music-menu verb handlers -----------------------------------------
     //
     // These are the MENU_MIXER_PANEL command-strip verbs and the CD-order
-    // submenu (MENU_GLOBE_MUSIC) the CD-STYLE verb pushes over them. EXIT GAME
+    // submenu (MENU_MUSIC) the CD-STYLE verb pushes over them. EXIT GAME
     // / " Done" are routed to their own handlers (menu_callback_choice_exit_
     // game / menu_callback_choice_exit_menu).
 
@@ -864,15 +868,15 @@ impl GameState {
         //   pre-highlight: 0 STANDARD ORDER, 1 SHUFFLE.
         // Stage menu_globe_music from its template with the pre-highlight
         // applied (clearing any highlight a previous open left behind).
-        let mut records = MENU_GLOBE_MUSIC.to_vec();
+        let mut records = menu_defs::MENU_MUSIC.records.to_vec();
         let cl = ((self.music_playlist_flags & 2) >> 1) as usize;
         // = loc_0d393 or [bx+si+3],80h — the pre-highlight bit on the record.
         records[cl].text_id |= CMD_HIGHLIGHT;
-        self.menu_globe_music.records = records;
+        self.menu_music.records = records;
         // = seg000:ac8d jmp loc_0d32f — request the panel transition, insert
         //   the submenu element, and fold it onto the screen.
         self.screen_overlay_request_transition();
-        self.screen_element_stack_push(ScreenElement::MusicCdOrderMenu);
+        self.menu_stack_push(MenuRef::MenuMusic, None);
         self.play_pending_panel_fold();
     }
 
@@ -909,7 +913,7 @@ impl GameState {
         //   CD-order submenu and redraw the mixer menu beneath (the port's
         //   pop_and_cleanup: MusicCdOrderMenu's cleanup is a no-op, matching
         //   the DOS fn_0d917_noop it was inserted with).
-        self.screen_element_stack_pop_and_cleanup();
+        self.menu_stack_pop_and_cleanup();
         // = seg000:acb4 call menu_callback_choice_exit_menu — close the mixer
         //   panel itself.
         self.menu_callback_choice_exit_menu();
@@ -917,16 +921,6 @@ impl GameState {
         self.cmd_args_memory &= !0x10;
         // = seg000:acbc jmp music_cd_playlist_restart (loc_0ad21).
         self.music_cd_playlist_restart();
-    }
-
-    // = seg000:d2df menu_callback_choice_music_cd_order_cancel — the submenu's
-    // Cancel: pop the submenu, then close the mixer panel (the fall-through
-    // into menu_callback_choice_exit_menu).
-    pub(crate) fn menu_callback_choice_music_cd_order_cancel(&mut self) {
-        // = seg000:d2df call screen_element_stack_pop_and_redraw.
-        self.screen_element_stack_pop_and_cleanup();
-        // = seg000:d2e2 falls into menu_callback_choice_exit_menu.
-        self.menu_callback_choice_exit_menu();
     }
 }
 
@@ -937,11 +931,11 @@ mod tests {
     use crate::{
         GameState,
         dat_file::DatFile,
+        menu_defs::{CMD_HIGHLIGHT, MenuRef},
         music::MUSIC_CD_STANDARD_ORDER,
-        room_game_screen::{CMD_HIGHLIGHT, ScreenElement},
     };
 
-    // The mixer panel's music verbs (MENU_MIXER_PANEL / MENU_GLOBE_MUSIC):
+    // The mixer panel's music verbs (MENU_MIXER_PANEL / MENU_MUSIC):
     // MUSIC OFF (seg000:aeaf) sets cmd_args_memory bit 4, closes the mixer and
     // silences the song; MUSIC ON GAME RELATIVE (seg000:ac6e) clears the bit
     // and re-picks the situation song; MUSIC ON CD-STYLE (seg000:ac7e) opens
@@ -972,14 +966,11 @@ mod tests {
         // MUSIC ON (GAME RELATIVE): clears the off bit, closes the mixer, and
         // re-picks the situation song, which the service then starts.
         game.open_mixer_panel();
-        assert_eq!(game.get_active_screen_element(), ScreenElement::MixerPanel);
+        assert_eq!(game.get_active_menu_ref(), MenuRef::MenuMixerPanel);
         game.menu_callback_choice_music_on_game_relative();
         assert_eq!(game.cmd_args_memory & 0x10, 0);
         assert_eq!(game.music_playlist_flags, 0);
-        assert_eq!(
-            game.get_active_screen_element(),
-            ScreenElement::RoomCommandMenu
-        );
+        assert_eq!(game.get_active_menu_ref(), MenuRef::CommandMenuBuf);
         assert_ne!(game.music_desired_song, 0, "no situation song picked");
         game.service_midi_music();
         assert_eq!(game.midi.current_song(), Some(game.music_desired_song));
@@ -988,10 +979,7 @@ mod tests {
         game.open_mixer_panel();
         game.menu_callback_choice_music_off();
         assert_eq!(game.cmd_args_memory & 0x10, 0x10);
-        assert_eq!(
-            game.get_active_screen_element(),
-            ScreenElement::RoomCommandMenu
-        );
+        assert_eq!(game.get_active_menu_ref(), MenuRef::CommandMenuBuf);
         assert_eq!(game.midi.current_song(), None);
         assert!(!game.midi.is_playing(), "the song was not silenced");
 
@@ -999,10 +987,7 @@ mod tests {
         // clear the STANDARD ORDER slot is pre-highlighted (cl = 0).
         game.open_mixer_panel();
         game.menu_callback_choice_music_on_cd_style();
-        assert_eq!(
-            game.get_active_screen_element(),
-            ScreenElement::MusicCdOrderMenu
-        );
+        assert_eq!(game.get_active_menu_ref(), MenuRef::MenuMusic);
         assert_eq!(game.active_menu_records().len(), 3);
         assert_ne!(game.active_menu_records()[0].text_id & CMD_HIGHLIGHT, 0);
 
@@ -1011,10 +996,7 @@ mod tests {
         game.menu_callback_choice_music_cd_order_standard();
         assert_eq!(game.music_playlist_flags, 1);
         assert_eq!(game.cmd_args_memory & 0x10, 0);
-        assert_eq!(
-            game.get_active_screen_element(),
-            ScreenElement::RoomCommandMenu
-        );
+        assert_eq!(game.get_active_menu_ref(), MenuRef::CommandMenuBuf);
         assert_eq!(game.music_cd_playlist, MUSIC_CD_STANDARD_ORDER);
         assert_eq!(game.music_cd_playlist_cursor, 1);
         assert_eq!(game.midi.current_song(), Some(9));
@@ -1049,10 +1031,7 @@ mod tests {
         assert_eq!(game.music_cd_playlist[9], 0xff);
         assert_eq!(game.music_cd_playlist_cursor, 1);
         assert_eq!(game.midi.current_song(), Some(game.music_cd_playlist[0]));
-        assert_eq!(
-            game.get_active_screen_element(),
-            ScreenElement::RoomCommandMenu
-        );
+        assert_eq!(game.get_active_menu_ref(), MenuRef::CommandMenuBuf);
 
         // Re-opening the submenu now pre-highlights SHUFFLE (cl = 1); Cancel
         // closes both menus and changes nothing.
@@ -1064,9 +1043,6 @@ mod tests {
         game.menu_callback_choice_music_cd_order_cancel();
         assert_eq!(game.music_playlist_flags, flags);
         assert_eq!(game.midi.current_song(), song);
-        assert_eq!(
-            game.get_active_screen_element(),
-            ScreenElement::RoomCommandMenu
-        );
+        assert_eq!(game.get_active_menu_ref(), MenuRef::CommandMenuBuf);
     }
 }

@@ -274,60 +274,6 @@ impl GameState {
         self.menu_callback_choice_talk_to_me();
     }
 
-    // = seg000:d280 play_pending_panel_fold — when a verb-panel transition is pending (screen_overlay_request_transition
-    // armed in_transition to a small positive), reveal the fb1-staged panel with
-    // the 17-frame accordion fold (panel_anim) and clear the flag. The dialogue
-    // paths jmp here (talk_to_me 94da, the come-with-me troop tail 9652).
-    // in_transition < 0 (0x80, a full-screen transition already underway) or 0
-    // takes no action.
-    //
-    // Each fold frame is paced to 6 PIT ticks, and lip_sync_frame_task runs during
-    // that wait so the speaker's mouth keeps moving through the reveal.
-    pub(crate) fn play_pending_panel_fold(&mut self) {
-        // = seg000:d280 cmp in_transition,0; jle ret. <=0 (idle, or a full-screen
-        //   transition already underway) takes no action.
-        if (self.in_transition as i8) <= 0 {
-            return;
-        }
-        // = seg000:d28a in_transition = 0 — consume the pending flag now.
-        self.in_transition = 0;
-        // = seg000:d28f call ui_hud_open_hands — close the ICONES doors over the
-        //   panel sides (ui_elements[1]/[2].sprite_id -> %3 == 2) before folding.
-        self.ui_hud_open_hands();
-
-        // = seg000:d292 mov cx,0x11; d2b4 loop loc_0d295 — 17 fold frames, cx 0x11..1.
-        for frame in (1..=17u16).rev() {
-            // = seg000:d296 push pit_timer — the step-start tick, captured BEFORE the
-            //   fold blit so the d2a4 pace below spans the whole step.
-            let start = self.game_ticks();
-
-            // = seg000:d29a..d2a0 si=framebuffer_saved_seg; al=0x18; call
-            //   blit_fb1_to_screen_effect — render one fold frame straight to screen.
-            gfx::panel_anim_play_step(self, frame);
-            self.send_frame_to_display();
-
-            // = seg000:d2a4 loc_0d2a4 — keep the speaker's mouth moving by re-running
-            //   lip_sync_frame_task until 6 PIT ticks have elapsed since `start`.
-            loop {
-                // = seg000:d2a5 call lip_sync_frame_task — advance the talking-head
-                //   voice mouth one step (a no-op once the voice has drained).
-                self.tick_talking_head_voc();
-                // = seg000:d2a9 mov ax,pit_timer; sub ax,bx; cmp ax,6; jb loc_0d2a4.
-                if self.game_ticks().saturating_sub(start) >= 6 {
-                    break;
-                }
-                // DOS busy-spins re-calling lip_sync_frame_task; the port yields one
-                // PIT tick between calls so the game thread does not spin-wait.
-                let now = self.game_ticks();
-                self.sleep_ticks(now, 1);
-            }
-        }
-
-        // = seg000:d2b6 call ui_hud_close_hands — reopen the doors (%3 == 0),
-        //   revealing the new panel and restoring the date/time indicator.
-        self.ui_hud_close_hands();
-    }
-
     // = seg000:93df set_dialogue_speaker — record the active dialogue speaker:
     // mark them as met and as the current conversation partner, prime the dialogue
     // sentence cursor + verb mask, and push the per-NPC dialogue verb panel.
@@ -577,6 +523,29 @@ impl GameState {
             // = seg000:957d..9580 this = game_time.
             *this = game_time;
         }
+    }
+
+    // = seg000:95c1 menu_callback_choice_come_with_me_troop — the Fremen
+    // chief's COME WITH ME verb: the charisma check records its outcome in
+    // pending_room_action (0 pass / 2 fail) for the topic-5 record's
+    // conditions, then falls into menu_callback_choice_come_with_me.
+    pub(crate) fn menu_callback_choice_come_with_me_troop(&mut self) {
+        // = seg000:95c1..95de — the charisma check: outcome ah = 0 (the chief
+        //   agrees) unless the allied population total has reached 1000
+        //   (seg000:95c4) and (100 - charisma)/4 exceeds the staged troop's
+        //   ds:36 motivation modifier — then 2. The topic-5 record's
+        //   conditions read the outcome from pending_room_action to pick the
+        //   acceptance or refusal line; a charisma above 100 always passes
+        //   (the jb at seg000:95d0).
+        let mut outcome = 0;
+        if self.data_000ac >= 0x3e8 {
+            let (deficit, borrow) = 100u8.overflowing_sub(self.charisma);
+            if !borrow && deficit >> 2 > self.troop_condit.motivation_modifier {
+                outcome = 2;
+            }
+        }
+        self.pending_room_action = outcome;
+        self.menu_callback_choice_come_with_me();
     }
 
     // = seg000:95e2 menu_callback_choice_come_with_me — the COME WITH ME
@@ -1046,7 +1015,7 @@ impl GameState {
     // = seg000:c85b arm_npc_menu_idle_timer — (re)arm the NPC-actions-menu
     // inactivity timer: base = the PIT counter now, limit = 0x1770 (6000 ticks,
     // 30 s). The room mouse hook loc_01ae7 (seg000:1ae7, unported) watches the
-    // pair while menu_NPC_actions is the active screen element and fires
+    // pair while menu_NPC_actions is the active menu and fires
     // loc_0c868 on expiry.
     fn arm_npc_menu_idle_timer(&mut self) {
         self.npc_menu_idle_timer_base = self.game_ticks() as u16;
@@ -1157,7 +1126,7 @@ impl GameState {
             self.update_screen_palette();
             self.present_game_area();
             // = seg000:a0bd cmp data_04774,0; jnz -> a0c5 call loc_02ebf — while
-            //   a dialogue is active, push the screen element at [data_02220].
+            //   a dialogue is active, push the menu at [data_02220].
             //   TODO: that element (the dialogue text window) is not modelled.
         }
         // = seg000:a0c9 loc_0a0c9 — start the voice unless suppressed.
@@ -1268,7 +1237,7 @@ impl GameState {
             return;
         }
         // = seg000:98cb..98d3 si = 1bf0h; [si+8] = 0; ui_hud_elements[20].flags
-        //   = 0 — retire the overlay's screen-element entries.
+        //   = 0 — retire the overlay's menu-stack entries.
         self.ui_elements[19].flags = 0;
         self.ui_elements[20].flags = 0;
         // = seg000:98d9 call copy_rect_fb2_to_fb1 — restore the game area under

@@ -11,25 +11,18 @@ use crate::{
     input::SharedInput,
     locations::LOCATIONS,
     map_renderer::MapRenderer,
+    menu_defs::{self, MenuRef},
     midi::{self, Midi},
     mouse::{MOUSE_START_X, MOUSE_START_Y, SharedCursor},
     pcm_player::{self, PcmPlayer},
     recorder::Recorder,
-    room_game_screen::{
-        MENU_CHANGE_DESTINATION_IGNORE_WARNING, MENU_DONE, MENU_EXIT_GAME_CONFIRMATION,
-        MENU_GLOBE_LOAD_GAME, MENU_GLOBE_MUSIC, MENU_GLOBE_SAVE_GAME, MENU_GO_TOWARDS_THIS_PLACE,
-        MENU_MIXER_PANEL, MENU_NPC_ACTIONS_INIT, MENU_PALACE_MIRROR_ROOM, MenuBuffer,
-        ROOM_PERSON_TABLE_INIT, RoomPerson, ScreenElement,
-    },
+    room_game_screen::{ROOM_PERSON_TABLE_INIT, RoomPerson},
     settings_ui::{SETTINGS_RECORDS_INIT, SettingsRecord},
     sprite::Sprite,
     sprite_bank::Banks,
     sprite_blitter,
     tablat::Tablat,
     travel_map_screen::MapLocationMarker,
-    troop_map_screen::{
-        MENU_MAP_MAIN, MENU_MAP_TROOP_CONTACT_CYCLE, MENU_MAP_TROOP_DIALOG, MENU_MAP_TROOP_MOVING,
-    },
     troops::{TROOPS, Troop},
 };
 
@@ -812,89 +805,137 @@ pub struct GameState {
     // = seg001:1ae4 _word_20F94_ui_elements — the in-game HUD element table.
     pub(crate) ui_elements: [UiElement; 24],
 
-    // = the seg001 command-menu record buffers, one owned mutable MenuBuffer
-    // per menu exactly as DOS compiles them in and patches them in place. The
-    // ScreenElement identity on the screen_element_stack is the port's `bp`;
+    // = the seg001 command-menu record buffers, one owned mutable Menu per
+    // menu exactly as DOS compiles them in and patches them in place. The
+    // MenuRef identity on the menu_stack is the port's `bp`;
     // GameState::menu_buffer resolves it to the buffer. A stack pop reveals
     // the buffer as-it-is — nothing is rebuilt (= seg000:d30e).
     //
     // = seg001:1f0e command_menu_buf — the room (and map-mode) verb list
     // build_room_command_records assembles.
-    pub(crate) command_menu_buf: MenuBuffer,
+    pub(crate) command_menu_buf: menu_defs::Menu,
+
     // = seg001:1f7e menu_NPC_actions — the dialogue verb panel. Record 0's
     // text id is the TALK TO ME verb set_talk_to_me_verb_text patches in
     // place (seg000:d621): 0x90 while a voice line plays, 0x9f once it stops.
     // setup_npc_dialogue_menu splices only slot 1 (the per-NPC verb).
-    pub(crate) menu_npc_actions: MenuBuffer,
+    pub(crate) menu_npc_actions: menu_defs::Menu,
+
     // = seg001:1f92 menu_go_towards_this_place — the fly-over divert menu.
-    pub(crate) menu_go_towards_this_place: MenuBuffer,
+    pub(crate) menu_go_towards_this_place: menu_defs::Menu,
+
     // = seg001:1f9e menu_change_destination_ignore_warning — the fly-over
     // hostile-zone warning menu.
-    pub(crate) menu_change_destination_ignore_warning: MenuBuffer,
+    pub(crate) menu_destination_warning: menu_defs::Menu,
+
+    // = seg001:1fae menu_prospector_troop_after_specializing_in_spice.
+    pub(crate) menu_prospector_continue: menu_defs::Menu,
+
+    // = seg001:1fba menu_multiple_provide_continue_option.
+    pub(crate) menu_continue: menu_defs::Menu,
+
+    // = seg001:1fc2 menu_dynamic.
+    pub(crate) menu_dynamic: menu_defs::Menu,
+
+    // = seg001:1ff2 menu_comms_room_messages_viewed.
+    pub(crate) menu_comms_room_messages_viewed: menu_defs::Menu,
+
+    // = seg001:1ffe menu_argue_accept_refuse.
+    pub(crate) menu_argue_accept_refuse: menu_defs::Menu,
+
     // = seg001:2012 menu_done — the PALACE PLAN's single " Done" strip.
-    pub(crate) menu_done: MenuBuffer,
+    pub(crate) menu_done: menu_defs::Menu,
+
     // = seg001:201a menu_mixer_panel — the mixer's music menu strip;
     // settings_ui_update_music_playlist_flags greys its MUSIC entries in
     // place.
-    pub(crate) menu_mixer_panel: MenuBuffer,
+    pub(crate) menu_mixer_panel: menu_defs::Menu,
+
+    // = seg001:2032 menu_book.
+    pub(crate) menu_book: menu_defs::Menu,
+
+    // = seg001:204a menu_globe.
+    pub(crate) menu_globe: menu_defs::Menu,
+
+    // = seg001:2062 menu_globe_default_click_on_globe.
+    pub(crate) menu_globe_default_click_on_globe: menu_defs::Menu,
+
     // = seg001:206a menu_globe_music — the CD-order submenu.
-    pub(crate) menu_globe_music: MenuBuffer,
+    pub(crate) menu_music: menu_defs::Menu,
+
     // = seg001:207a menu_globe_save_game — the save-slot submenu (records
     // restaged with slot flags/labels on every open).
-    pub(crate) menu_globe_save_game: MenuBuffer,
+    pub(crate) menu_save_game: menu_defs::Menu,
+
     // = seg001:208a menu_globe_load_game — the load-slot submenu.
-    pub(crate) menu_globe_load_game: MenuBuffer,
+    pub(crate) menu_load_game: menu_defs::Menu,
+
+    // = seg001:20a2 menu_restart_load_exit_game.
+    pub(crate) menu_restart_load_exit_game: menu_defs::Menu,
+
     // = seg001:20b6 menu_exit_game_confirmation — the EXIT GAME submenu.
-    pub(crate) menu_exit_game_confirmation: MenuBuffer,
+    pub(crate) menu_exit_game_confirmation: menu_defs::Menu,
+
     // = seg001:20c2 menu_palace_mirror_room — the LOOK AT MIRROR menu.
-    pub(crate) menu_palace_mirror_room: MenuBuffer,
-    // = seg001:212e menu_multiple_cancel — the map/globe main view's Cancel
-    // strip (map_screen_open installs the caller's record set here).
-    pub(crate) menu_multiple_cancel: MenuBuffer,
+    pub(crate) menu_palace_mirror_room: menu_defs::Menu,
+
+    // = seg001:20da menu_multiple_move_to_location_flying_an_orni /
+    // seg001:20e6 riding_a_worm — the GO THERE command menu the location
+    // popup folds in; the records are set per open (map_click_location_marker).
+    pub(crate) menu_go_there_flying_an_orni: menu_defs::Menu,
+
+    // = seg001:20e6 menu_multiple_move_to_location_riding_a_worm.
+    pub(crate) menu_go_there_riding_a_worm: menu_defs::Menu,
 
     // = seg001:20f2 menu_map_main — the SEE DUNE MAP view's verb menu (EXIT
     // MAPS / CONTACT FREMEN TROOPS / SEE SPICE DENSITY / TAKE AN ORNITHOPTER /
     // FIND PROSPECTORS). map_setup_main_menu (seg000:878c) rewrites the ids
     // and grey bits before every push.
-    pub(crate) menu_map_main: MenuBuffer,
-
-    // = seg001:2032 menu_book — the book screen's verb menu (ALL TOPICS / the
-    // three TOPIC: filters / " Close book"). book_menu_update_topic_
-    // availability rewrites the grey bits on open, the topic verbs move the
-    // 0x8000 highlight.
-    pub(crate) menu_book: MenuBuffer,
+    pub(crate) menu_map_troops: menu_defs::Menu,
 
     // = seg001:210a menu_map_troop_dialog — the contacted troop's order menu
     // (ASK FOR MORE INFORMATION / CHANGE TROOP OCCUPATION / MODIFY EQUIPMENT /
     // MOVE TROOP / NO MORE ORDERS). map_open_troop_contact_menu rewrites the
     // last slot's id and map_setup_troop_dialog_menu the grey bits before
     // every push.
-    pub(crate) menu_map_troop_dialog: MenuBuffer,
+    pub(crate) menu_troop_dialog: menu_defs::Menu,
+
     // = seg001:2122 menu_map_troop_contact_cycle_troops — the NEXT TROOP / NO
     // MORE ORDERS menu for a troop that cannot be ordered.
-    pub(crate) menu_map_troop_contact_cycle: MenuBuffer,
-    // = seg001:214a menu_map_troop_moving_change_destination_next_troop — the
-    // CHANGE DESTINATION / NEXT TROOP / Cancel menu for a troop on the move.
-    pub(crate) menu_map_troop_moving: MenuBuffer,
-    // = the five occupation submenus (seg001:215a/216e/2182/219a/21a6); the
-    // records are set per open by the CHANGE TROOP OCCUPATION verb.
-    pub(crate) menu_map_troop_occupation: MenuBuffer,
+    pub(crate) menu_next_troop: menu_defs::Menu,
+
+    // = seg001:212e menu_multiple_cancel — the map/globe main view's Cancel
+    // strip (map_screen_open installs the caller's record set here).
+    pub(crate) menu_cancel: menu_defs::Menu,
 
     // = seg001:2136 menu_map_move_prospectors — the prospector's
     // multi-destination pick menu (MOVE TROOP on troops[2]).
-    pub(crate) menu_map_move_prospectors: MenuBuffer,
+    pub(crate) menu_move_prospectors: menu_defs::Menu,
 
-    // = seg001:1fba menu_multiple_provide_continue_option / seg001:1fae
-    // menu_prospector_troop_after_specializing_in_spice — the two
-    // " Continue…" panels of a scripted continue-sequence (sequence.rs).
-    pub(crate) menu_sequence_continue: MenuBuffer,
-    pub(crate) menu_sequence_prospector: MenuBuffer,
+    // = seg001:214a menu_map_troop_moving_change_destination_next_troop — the
+    // CHANGE DESTINATION / NEXT TROOP / Cancel menu for a troop on the move.
+    pub(crate) menu_change_troop_destination: menu_defs::Menu,
+
+    // = seg001:215a menu_map_select_troop_occupation.
+    pub(crate) menu_select_troop_occupation: menu_defs::Menu,
+
+    // = seg001:216e menu_map_troop_change_troop_occupation_for_spice_troop.
+    pub(crate) menu_occupation_for_spice_troop: menu_defs::Menu,
+
+    // = seg001:2182 menu_map_troop_change_troop_occupation_for_army_troop.
+    pub(crate) menu_occupation_for_army_troop: menu_defs::Menu,
+
+    // = seg001:219a menu_map_troop_change_troop_occupation_for_army_troop_doing_espionage_at_harkonnen_fortress
+    pub(crate) menu_occupation_for_espionage_troop: menu_defs::Menu,
+
+    // = seg001:21a6 menu_map_troop_change_troop_occupation_for_ecology_troop
+    pub(crate) menu_occupation_for_ecology_troop: menu_defs::Menu,
 
     // = seg001:2220 menu_ptr_02220 — which of the two the scene currently
     // shows (change_menu_to_continue_menu / ..._special_menu_after_
     // specializing_prospector_troop_in_spice). Static init = the prospector
     // panel.
-    pub(crate) sequence_menu: ScreenElement,
+    pub(crate) sequence_menu: MenuRef,
 
     // = seg001:477a data_0477a — the active continue-sequence script and its
     // read cursor (DOS keeps a cs pointer; the port keeps the slice plus an
@@ -927,14 +968,13 @@ pub struct GameState {
     // = seg001:21fd data_021fd — the SKIP TO DESTINATION command template's
     // flags byte (the seg001:21fc record's text-id high byte; 0x40 = greyed).
     // DOS patches the static template in place
-    // (set_skip_to_destination_verb_flags); the flattened port keeps the
-    // template const and applies this byte when build_room_command_records
-    // copies it.
+    // (set_skip_to_destination_verb_flags); the port keeps the template const
+    // and applies this byte when build_room_command_records copies it.
     pub(crate) cmd_skip_to_destination_flags: u8,
 
-    // = seg001:21da screen_element_stack — the z-ordered active screen-element
-    // stack.
-    pub(crate) screen_element_stack: Vec<ScreenElement>,
+    // = seg001:21da screen_element_stack — the z-ordered stack of active
+    // menus, each with its cleanup func (the DOS slot's [si+2]).
+    pub(crate) menu_stack: Vec<(MenuRef, Option<menu_defs::MenuCleanupFn>)>,
 
     // = seg001:227d data_0227d — suppresses the secondary 240..255 sky-palette
     // span. loc_039b9 / loc_0391d / loc_0398c write+fade an extra 16 colours
@@ -1306,11 +1346,6 @@ pub struct GameState {
     // = the data_01668 record's runtime rect.
     pub(crate) map_location_popup_rect: Rect,
 
-    // = seg001:20da menu_multiple_move_to_location_flying_an_orni /
-    // seg001:20e6 riding_a_worm — the GO THERE command menu the location
-    // popup folds in; the records are set per open (map_click_location_marker).
-    pub(crate) map_move_menu: MenuBuffer,
-
     // = seg001:46fc data_046fc — the map screen's hover state, maintained by
     // map_mouse_hover_tracker (seg000:4586) and consumed by the LMB
     // destination click: 0 = pointer outside the map window; a location ptr
@@ -1614,7 +1649,7 @@ pub struct GameState {
     // arm_npc_menu_idle_timer (seg000:c85b) arms: base = PIT counter at the last
     // spoken line, limit = 0x1770 (6000 ticks, 30 s). The room mouse hook
     // loc_01ae7 (seg000:1ae7, unported) watches them while menu_NPC_actions is
-    // the active screen element and fires loc_0c868 on expiry.
+    // the active menu and fires loc_0c868 on expiry.
     pub(crate) npc_menu_idle_timer_base: u16,
     pub(crate) npc_menu_idle_timer_limit: u16,
 
@@ -2098,10 +2133,6 @@ impl GameState {
             map_location_popup_loc: None,
             map_location_popup_class: 0,
             map_location_popup_rect: Rect::default(),
-            map_move_menu: MenuBuffer {
-                priority: ScreenElement::MoveToLocationMenu.initial_priority(),
-                records: Vec::new(),
-            },
             map_renderer: MapRenderer::new(),
             globe_renderer: None,
             globe_rotation: 0,
@@ -2110,89 +2141,44 @@ impl GameState {
             // = the static seg001 menu buffers, initialized to their compiled-in
             // contents (priority byte + records; command_menu_buf and
             // menu_multiple_cancel start empty and are filled by their builders).
-            command_menu_buf: MenuBuffer {
-                priority: ScreenElement::RoomCommandMenu.initial_priority(),
-                records: Vec::new(),
-            },
-            menu_npc_actions: MenuBuffer {
-                priority: ScreenElement::NpcActionsMenu.initial_priority(),
-                records: MENU_NPC_ACTIONS_INIT.to_vec(),
-            },
-            menu_go_towards_this_place: MenuBuffer {
-                priority: ScreenElement::GoTowardsThisPlace.initial_priority(),
-                records: MENU_GO_TOWARDS_THIS_PLACE.to_vec(),
-            },
-            menu_change_destination_ignore_warning: MenuBuffer {
-                priority: ScreenElement::ChangeDestinationIgnoreWarning.initial_priority(),
-                records: MENU_CHANGE_DESTINATION_IGNORE_WARNING.to_vec(),
-            },
-            menu_done: MenuBuffer {
-                priority: ScreenElement::PalacePlan.initial_priority(),
-                records: MENU_DONE.to_vec(),
-            },
-            menu_mixer_panel: MenuBuffer {
-                priority: ScreenElement::MixerPanel.initial_priority(),
-                records: MENU_MIXER_PANEL.to_vec(),
-            },
-            menu_globe_music: MenuBuffer {
-                priority: ScreenElement::MusicCdOrderMenu.initial_priority(),
-                records: MENU_GLOBE_MUSIC.to_vec(),
-            },
-            menu_globe_save_game: MenuBuffer {
-                priority: ScreenElement::SaveGameMenu.initial_priority(),
-                records: MENU_GLOBE_SAVE_GAME.to_vec(),
-            },
-            menu_globe_load_game: MenuBuffer {
-                priority: ScreenElement::LoadGameMenu.initial_priority(),
-                records: MENU_GLOBE_LOAD_GAME.to_vec(),
-            },
-            menu_exit_game_confirmation: MenuBuffer {
-                priority: ScreenElement::ExitGameConfirmation.initial_priority(),
-                records: MENU_EXIT_GAME_CONFIRMATION.to_vec(),
-            },
-            menu_palace_mirror_room: MenuBuffer {
-                priority: ScreenElement::LookAwayFromMirror.initial_priority(),
-                records: MENU_PALACE_MIRROR_ROOM.to_vec(),
-            },
-            menu_multiple_cancel: MenuBuffer {
-                priority: ScreenElement::TravelMapScreen.initial_priority(),
-                records: Vec::new(),
-            },
-            menu_map_main: MenuBuffer {
-                priority: ScreenElement::TroopMapScreen.initial_priority(),
-                records: MENU_MAP_MAIN.to_vec(),
-            },
-            menu_book: MenuBuffer {
-                priority: ScreenElement::BookScreen.initial_priority(),
-                records: crate::book_screen::MENU_BOOK.to_vec(),
-            },
-            menu_map_troop_dialog: MenuBuffer {
-                priority: ScreenElement::MapTroopDialog.initial_priority(),
-                records: MENU_MAP_TROOP_DIALOG.to_vec(),
-            },
-            menu_map_troop_contact_cycle: MenuBuffer {
-                priority: ScreenElement::MapTroopContactCycle.initial_priority(),
-                records: MENU_MAP_TROOP_CONTACT_CYCLE.to_vec(),
-            },
-            menu_map_troop_moving: MenuBuffer {
-                priority: ScreenElement::MapTroopMovingMenu.initial_priority(),
-                records: MENU_MAP_TROOP_MOVING.to_vec(),
-            },
-            menu_map_move_prospectors: MenuBuffer {
-                priority: ScreenElement::MapMoveProspectors.initial_priority(),
-                records: crate::troop_map_screen::MENU_MAP_MOVE_PROSPECTORS.to_vec(),
-            },
-            menu_sequence_continue: MenuBuffer {
-                priority: ScreenElement::SequenceContinue.initial_priority(),
-                records: crate::sequence::MENU_SEQUENCE_CONTINUE.to_vec(),
-            },
-            menu_sequence_prospector: MenuBuffer {
-                priority: ScreenElement::SequenceProspectorContinue.initial_priority(),
-                records: crate::sequence::MENU_SEQUENCE_PROSPECTOR.to_vec(),
-            },
+            command_menu_buf: menu_defs::COMMAND_MENU_BUF.into(),
+            menu_npc_actions: menu_defs::MENU_NPC_ACTIONS.into(),
+            menu_go_towards_this_place: menu_defs::MENU_GO_TOWARDS_THIS_PLACE.into(),
+            menu_destination_warning: menu_defs::MENU_DESTINATION_WARNING.into(),
+            menu_prospector_continue: menu_defs::MENU_PROSPECTOR_CONTINUE.into(),
+            menu_continue: menu_defs::MENU_CONTINUE.into(),
+            menu_dynamic: menu_defs::MENU_DYNAMIC.into(),
+            menu_comms_room_messages_viewed: menu_defs::MENU_COMMS_ROOM_MESSAGES_VIEWED.into(),
+            menu_argue_accept_refuse: menu_defs::MENU_ARGUE_ACCEPT_REFUSE.into(),
+            menu_done: menu_defs::MENU_DONE.into(),
+            menu_mixer_panel: menu_defs::MENU_MIXER_PANEL.into(),
+            menu_book: menu_defs::MENU_BOOK.into(),
+            menu_globe: menu_defs::MENU_GLOBE.into(),
+            menu_globe_default_click_on_globe: menu_defs::MENU_GLOBE_DEFAULT_CLICK_ON_GLOBE.into(),
+            menu_music: menu_defs::MENU_MUSIC.into(),
+            menu_save_game: menu_defs::MENU_SAVE_GAME.into(),
+            menu_load_game: menu_defs::MENU_LOAD_GAME.into(),
+            menu_restart_load_exit_game: menu_defs::MENU_RESTART_LOAD_EXIT_GAME.into(),
+            menu_exit_game_confirmation: menu_defs::MENU_EXIT_GAME_CONFIRMATION.into(),
+            menu_palace_mirror_room: menu_defs::MENU_PALACE_MIRROR_ROOM.into(),
+            menu_go_there_flying_an_orni: menu_defs::MENU_GO_THERE_FLYING_AN_ORNI.into(),
+            menu_go_there_riding_a_worm: menu_defs::MENU_GO_THERE_RIDING_A_WORM.into(),
+            menu_map_troops: menu_defs::MENU_MAP_TROOPS.into(),
+            menu_troop_dialog: menu_defs::MENU_TROOP_DIALOG.into(),
+            menu_next_troop: menu_defs::MENU_NEXT_TROOP.into(),
+            menu_cancel: menu_defs::MENU_CANCEL.into(),
+            menu_move_prospectors: menu_defs::MENU_MOVE_PROSPECTORS.into(),
+            menu_change_troop_destination: menu_defs::MENU_CHANGE_TROOP_DESTINATION.into(),
+            menu_select_troop_occupation: menu_defs::MENU_SELECT_TROOP_OCCUPATION.into(),
+            menu_occupation_for_spice_troop: menu_defs::MENU_OCCUPATION_FOR_SPICE_TROOP.into(),
+            menu_occupation_for_army_troop: menu_defs::MENU_OCCUPATION_FOR_ARMY_TROOP.into(),
+            menu_occupation_for_espionage_troop: menu_defs::MENU_OCCUPATION_FOR_ESPIONAGE_TROOP
+                .into(),
+            menu_occupation_for_ecology_troop: menu_defs::MENU_OCCUPATION_FOR_ECOLOGY_TROOP.into(),
+
             // = seg001:2220 dw menu_prospector_troop_after_specializing_in_
             //   spice — the static initial value.
-            sequence_menu: ScreenElement::SequenceProspectorContinue,
+            sequence_menu: MenuRef::MenuProspectorContinue,
             sequence_script: None,
             sequence_cursor: 0,
             sequence_return_cursor: None,
@@ -2200,12 +2186,8 @@ impl GameState {
             sequence_blink: false,
             prospector_pick_queue: [0; 4],
             prospector_pick_count: 0,
-            menu_map_troop_occupation: MenuBuffer {
-                priority: ScreenElement::MapTroopOccupationMenu.initial_priority(),
-                records: Vec::new(),
-            },
             cmd_skip_to_destination_flags: 0,
-            screen_element_stack: vec![ScreenElement::RoomCommandMenu],
+            menu_stack: vec![(MenuRef::CommandMenuBuf, None)],
             data_0227d: 1,
             sky_skydn_selector: 0,
             active_mouse_handlers: &ROOM_MOUSE_HANDLERS,

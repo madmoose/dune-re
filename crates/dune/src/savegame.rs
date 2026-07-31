@@ -15,7 +15,7 @@ use std::{io, path::Path};
 use crate::{
     GameState, container,
     locations::Equipment,
-    room_game_screen::{CMD_GREY, CMD_HIGHLIGHT, CommandMenuRecord, ScreenElement},
+    menu_defs::{self, CMD_GREY, CMD_HIGHLIGHT, MenuItem, MenuRef},
 };
 
 /// = the uncompressed save-image size (create_save_in_memory returns cx = 0x567a).
@@ -813,7 +813,7 @@ impl GameState {
     // (`flag_mask` = DOS's cx): 0x8000 marks existing saves on the save menu,
     // 0x4000 greys missing slots on the load menu (the seg000:b33c..b345
     // `sbb/not/and` combination).
-    fn refresh_save_slot_rows(&mut self, records: &mut [CommandMenuRecord], flag_mask: u16) {
+    fn refresh_save_slot_rows(&mut self, records: &mut [MenuItem], flag_mask: u16) {
         for rec in records.iter_mut() {
             let id = rec.text_id & 0xfff;
             if !(0x10f..=0x112).contains(&id) {
@@ -842,15 +842,15 @@ impl GameState {
     pub(crate) fn menu_callback_choice_mirror_room_save_game(&mut self) {
         // = seg000:b292/b295 cx = 8000h, si = the slot rows; call
         //   load_save_game_timestamp.
-        let mut records = crate::room_game_screen::MENU_GLOBE_SAVE_GAME.to_vec();
+        let mut records = menu_defs::MENU_SAVE_GAME.records.to_vec();
         self.refresh_save_slot_rows(&mut records, CMD_HIGHLIGHT);
-        self.menu_globe_save_game.records = records;
+        self.menu_save_game.records = records;
         // = seg000:b28f call loc_0b2aa — suspend_game_clock, then push the
         //   menu with cleanup func resume_game_clock (loc_0d323) and fold it
         //   onto the screen (the b29b redraw_active_command_menu tail).
         self.suspend_game_clock();
         self.screen_overlay_request_transition();
-        self.screen_element_stack_push(ScreenElement::SaveGameMenu);
+        self.menu_stack_push(MenuRef::MenuSaveGame, Some(GameState::resume_game_clock));
         self.play_pending_panel_fold();
     }
 
@@ -859,13 +859,13 @@ impl GameState {
     // plus the LAST ENTERING autosaves), missing slots greyed.
     pub(crate) fn menu_callback_choice_mirror_room_load_game(&mut self) {
         // = seg000:b29e/b2a1 cx = 4000h, si = the slot rows.
-        let mut records = crate::room_game_screen::MENU_GLOBE_LOAD_GAME.to_vec();
+        let mut records = menu_defs::MENU_LOAD_GAME.records.to_vec();
         self.refresh_save_slot_rows(&mut records, CMD_GREY);
-        self.menu_globe_load_game.records = records;
+        self.menu_load_game.records = records;
         // = seg000:b2a7 bp = menu_globe_load_game; falls into loc_0b2aa.
         self.suspend_game_clock();
         self.screen_overlay_request_transition();
-        self.screen_element_stack_push(ScreenElement::LoadGameMenu);
+        self.menu_stack_push(MenuRef::MenuLoadGame, Some(GameState::resume_game_clock));
         self.play_pending_panel_fold();
     }
 

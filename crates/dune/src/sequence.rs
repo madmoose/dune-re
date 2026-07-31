@@ -16,25 +16,7 @@
 //! index — 0x0e selects entry 7 and 0x10 entry 8 (seg000:172f `mov bx,ax`
 //! then `jmp [array + bx]`).
 
-use crate::{
-    GameState, TaskId, command_strings as cmd,
-    room_game_screen::{CommandMenuRecord, ScreenElement, rec},
-};
-
-/// = seg001:1fba menu_multiple_provide_continue_option — the plain
-/// " Continue…" panel (its slot steps the script).
-#[rustfmt::skip]
-pub(crate) const MENU_SEQUENCE_CONTINUE: [CommandMenuRecord; 1] = [
-    rec(cmd::CONTINUE, 0x1707)
-];
-
-/// = seg001:1fae menu_prospector_troop_after_specializing_in_spice — the
-/// prospector scene's panel: " Continue…" plus the WHAT? replay slot.
-#[rustfmt::skip]
-pub(crate) const MENU_SEQUENCE_PROSPECTOR: [CommandMenuRecord; 2] = [
-    rec(cmd::CONTINUE, 0x1707),
-    rec(cmd::WHAT,     0x9ed5),
-];
+use crate::{GameState, TaskId, menu_defs::MenuRef};
 
 const SCRIPT_SHOW_SPICE_MAP: u8 = 0x0e; // action 7
 const SCRIPT_HIDE_SPICE_MAP: u8 = 0x10; // action 8
@@ -132,20 +114,20 @@ impl GameState {
         // = seg000:2ebf/2ec3/2ec6 bp = [menu_ptr_02220]; bx = nullsub_00f66;
         //   jmp screen_element_stack_push.
         let element = self.sequence_menu;
-        self.screen_element_stack_push(element);
+        self.menu_stack_push(element, None);
     }
 
     // = seg000:1392 change_menu_to_continue_menu — menu_ptr_02220 =
     // menu_multiple_provide_continue_option (seg001:1fba).
     fn change_menu_to_continue_menu(&mut self) {
-        self.sequence_menu = ScreenElement::SequenceContinue;
+        self.sequence_menu = MenuRef::MenuContinue;
     }
 
     // = seg000:1399 change_menu_to_special_menu_after_specializing_prospector_
     // troop_in_spice — menu_ptr_02220 =
     // menu_prospector_troop_after_specializing_in_spice (seg001:1fae).
     fn change_menu_to_prospector_menu(&mut self) {
-        self.sequence_menu = ScreenElement::SequenceProspectorContinue;
+        self.sequence_menu = MenuRef::MenuProspectorContinue;
     }
 
     // = seg000:1707 menu_callback_choice_continue_for_sequence — the
@@ -154,7 +136,7 @@ impl GameState {
     // (menu_callback_choice_what); anything else steps the script.
     pub(crate) fn menu_callback_choice_continue_for_sequence(&mut self) {
         // = seg000:1707/170d cmp [menu_ptr_02220],1faeh; jnz continue.
-        if self.sequence_menu == ScreenElement::SequenceProspectorContinue {
+        if self.sequence_menu == MenuRef::MenuProspectorContinue {
             // = seg000:170f..1715 di = ui_hud_elements[8]; rect_contains.
             let e = self.ui_elements[8];
             let (x, y) = (self.mouse_pos_x, self.mouse_pos_y);

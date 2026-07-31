@@ -14,18 +14,11 @@ use crate::{
     game_ui::{MouseHandlers, NAV_PANEL_ALT},
     gfx,
     locations::{location_index_from_ptr, location_ptr},
+    menu_defs::{self, MenuItem, MenuRef},
     rect::rect,
-    room_game_screen::{CommandMenuRecord, RoomPerson, ScreenElement, rec},
+    room_game_screen::RoomPerson,
     sprite_bank,
 };
-
-/// = seg001:212e menu_multiple_cancel — the single-record command strip the
-/// map screen folds in (map_screen_open_with_cancel_menu, bp = 0x212e). DOS
-/// stores a leading priority word (0x00f8) and a trailing 0-word fence, both
-/// implicit here. The lone verb closes the map screen back to the room.
-pub(crate) const MENU_MULTIPLE_CANCEL: [CommandMenuRecord; 1] = [
-    rec(0x00a3, 0xd2e2), // menu_callback_choice_exit_menu
-];
 
 // = seg001:14b4 icon_list_ornypan_cockpit — the full ORNYPAN.HSQ ornithopter
 // cockpit interior. The final entry doubles as ORNYPAN_WINDOW_OVERLAY_ICONS
@@ -176,7 +169,7 @@ pub(crate) struct MapLocationMarker {
 
 impl GameState {
     // = seg000:42d9 menu_callback_choice_map_main_take_an_ornithopter — the map
-    // main menu's (MENU_MAP_MAIN) TAKE AN ORNITHOPTER slot, reached from the SEE
+    // main menu's (MENU_MAP_TROOPS) TAKE AN ORNITHOPTER slot, reached from the SEE
     // DUNE MAP view: board from the current location's outdoor room 1, leave the
     // full-planet map for the room view, then fall through into the notransition
     // tail that opens the cockpit map.
@@ -225,22 +218,22 @@ impl GameState {
     pub(crate) fn map_screen_open_with_cancel_menu(&mut self) {
         // = seg000:4308 call loc_049ea — reset the travel path scratch.
         self.travel_reset_trail();
-        self.map_screen_open(MENU_MULTIPLE_CANCEL.to_vec());
+        self.map_screen_open(menu_defs::MENU_CANCEL.records.to_vec());
     }
 
     // = seg000:430b map_screen_open — open the map main view. DOS bp = the
     // command-menu record buffer to fold in (the port's `records`).
-    pub(crate) fn map_screen_open(&mut self, records: Vec<CommandMenuRecord>) {
+    pub(crate) fn map_screen_open(&mut self, records: Vec<MenuItem>) {
         // = seg000:430b bx=map_screen_cleanup; call loc_0d323 — request the
-        //   panel transition, push the screen element (cleanup func =
-        //   map_screen_cleanup by the MapScreen identity), fold the menu in,
-        //   then refresh the hover highlight.
+        //   panel transition, push the menu with the
+        //   map_screen_cleanup func, fold the menu in, then refresh the hover
+        //   highlight.
         self.screen_overlay_request_transition();
         // = the caller's record buffer (bp) — installed into menu_multiple_
         //   cancel (seg001:212e) before the push, like DOS building the buffer
         //   it is about to insert.
-        self.menu_multiple_cancel.records = records;
-        self.screen_element_stack_push(ScreenElement::TravelMapScreen);
+        self.menu_cancel.records = records;
+        self.menu_stack_push(MenuRef::MenuCancel, Some(GameState::map_screen_cleanup));
         self.play_pending_panel_fold();
         self.highlight_hovered_text_action_item();
         // = seg000:4311 ax=mouse_handlers_01ac8; call set_active_mouse_handlers.
@@ -492,16 +485,19 @@ impl GameState {
         }
         // = seg000:5f83..5f8d the active element's priority byte: a locked base
         //   (0xff, no menu) closes directly (loc_05f91); a menu exits.
-        if self.get_active_screen_element() == ScreenElement::MoveToLocationMenu {
+        if matches!(
+            self.get_active_menu_ref(),
+            MenuRef::MenuGoThereFlyingAnOrni | MenuRef::MenuGoThereRidingAWorm
+        ) {
             self.menu_callback_choice_exit_menu();
         } else {
             self.map_close_location_popup();
         }
     }
 
-    // = seg000:4415 map_screen_cleanup — the map screen element's cleanup func
-    // (the DOS bx passed to the screen-element push at seg000:430b), run when
-    // the element pops (the Cancel verb / menu_callback_choice_exit_menu).
+    // = seg000:4415 map_screen_cleanup — the map screen menu's cleanup func
+    // (the DOS bx passed to the menu-stack push at seg000:430b), run when
+    // the menu pops (the Cancel verb / menu_callback_choice_exit_menu).
     pub(crate) fn map_screen_cleanup(&mut self) {
         // = seg000:4415 xor al,al; xchg al,[data_046eb]; jnz — only once per
         //   open; data_046eb also drops back to the room nav panel.
@@ -1783,7 +1779,7 @@ impl GameState {
         //   `> 0` gate re-enters the flight minimap view on close.
         self.travel_minimap_state = 1;
         // = seg000:497d bp = menu_multiple_cancel; 4985 jmp map_screen_open.
-        self.map_screen_open(MENU_MULTIPLE_CANCEL.to_vec());
+        self.map_screen_open(menu_defs::MENU_CANCEL.records.to_vec());
     }
 
     // = seg000:50a5 menu_callback_choice_back_to_starting_point — the BACK TO
@@ -2713,9 +2709,9 @@ impl GameState {
             println!("map_confirm_travel_and_close: night-attack teardown (loc_00b21) not ported");
         }
         // = seg000:4727 call screen_element_stack_pop_and_cleanup — pop the
-        //   map screen element; map_screen_cleanup keeps the mode flags now
+        //   map screen menu; map_screen_cleanup keeps the mode flags now
         //   travel_destination_ptr is armed.
-        self.screen_element_stack_pop_and_cleanup();
+        self.menu_stack_pop_and_cleanup();
         // = seg000:472a call loc_04d00 — remove the command-panel overlay
         //   task (frame_task_callback_04bb9); the port never arms it.
         // = seg000:472d..4730 with the old flags already in a travel mode
@@ -2798,7 +2794,7 @@ impl GameState {
 mod tests {
     use std::sync::mpsc;
 
-    use crate::{GameState, dat_file::DatFile, room_game_screen::ScreenElement};
+    use crate::{GameState, dat_file::DatFile, menu_defs::MenuRef};
 
     #[test]
     #[ignore = "needs assets/DUNE.DAT"]
@@ -2932,10 +2928,7 @@ mod tests {
         }
         assert!(cabin, "the fly-over cabin must rise");
         assert_eq!(game.pending_room_action, 3, "the spot arms room action 3");
-        assert_eq!(
-            game.get_active_screen_element(),
-            ScreenElement::GoTowardsThisPlace
-        );
+        assert_eq!(game.get_active_menu_ref(), MenuRef::MenuGoTowardsThisPlace);
 
         // = seg000:4944/50be — the divert is a homing travel at the spotted
         //   location, and the rebuilt strip beneath offers SKIP TO DESTINATION.
@@ -2949,7 +2942,7 @@ mod tests {
         // The windshield region of fb1 holds the pre-stamp desert frame, not
         // the minimap: it must differ from the back buffer's minimap in the
         // restore rect.
-        let yoff = game.y_offset as u16;
+        let yoff = game.y_offset;
         let mut same = 0;
         let mut total = 0;
         for y in 4..60u16 {
@@ -2968,7 +2961,7 @@ mod tests {
 
     // TAKE AN ORNITHOPTER (seg000:42e9) opens the map screen: the ORNYPAN
     // cockpit frames a one-cell-per-pixel map window centred on the player's
-    // map position, the Cancel menu folds in, and the map screen element owns
+    // map position, the Cancel menu folds in, and the map screen menu owns
     // the stack; Cancel (menu_callback_choice_exit_menu) restores the room.
     // Asset-gated; run with:
     //   cargo test -p dune --lib -- --ignored ornithopter
@@ -2987,10 +2980,7 @@ mod tests {
 
         game.menu_callback_choice_map_main_take_an_ornithopter_notransition();
 
-        assert_eq!(
-            game.get_active_screen_element(),
-            ScreenElement::TravelMapScreen
-        );
+        assert_eq!(game.get_active_menu_ref(), MenuRef::MenuCancel);
         assert_eq!(game.map_ornithopter_mode, 1);
         assert_eq!(game.game_screen_mode_flags, 4);
         assert_eq!(game.travel_vehicle_mode, 2);
@@ -3159,10 +3149,7 @@ mod tests {
         // Cancel closes the map screen back to the room verbs and disarms the
         // caption (map_screen_cleanup -> seg000:442f).
         game.menu_callback_choice_exit_menu();
-        assert_eq!(
-            game.get_active_screen_element(),
-            ScreenElement::RoomCommandMenu
-        );
+        assert_eq!(game.get_active_menu_ref(), MenuRef::CommandMenuBuf);
         assert_eq!(game.data_046eb, 0);
         assert_eq!(game.game_screen_mode_flags, 0);
         assert!(game.map_caption_text.is_empty(), "caption not disarmed");
@@ -3377,10 +3364,7 @@ mod tests {
         // room element owns the stack again, the hot-zone is gone, and the
         // mode flags folded the map bit into the orni-travel bit — kept by
         // the cleanup because a travel is pending.
-        assert_eq!(
-            game.get_active_screen_element(),
-            ScreenElement::RoomCommandMenu
-        );
+        assert_eq!(game.get_active_menu_ref(), MenuRef::CommandMenuBuf);
         assert!(game.mouse_nav_rect.is_none(), "hot-zone not cleared");
         assert_eq!(game.game_screen_mode_flags, 5, "mode flags dropped");
         assert_eq!(game.data_046eb, 0);
@@ -3691,7 +3675,7 @@ mod tests {
             game.current_location_index as usize, dest,
             "did not arrive at the clicked destination"
         );
-        assert_eq!(game.last_location_index as usize, dest);
+        assert_eq!(game.last_location_index, dest);
         assert_eq!(game.travel_destination_ptr, 0);
         assert_eq!(game.game_screen_mode_flags, 0);
         // The arrival's scene reload ran the landing sequence
@@ -3806,7 +3790,7 @@ mod tests {
         assert_eq!(game.travel_active, 0xff, "the travel pump disarmed");
         assert_eq!(
             game.travel_destination_ptr,
-            location_ptr(target.location_index as u16),
+            location_ptr(target.location_index),
             "the destination did not change"
         );
 
@@ -4038,10 +4022,7 @@ mod tests {
         game.mouse_pos_x = game.orni_hotspot_x + 16;
         game.mouse_pos_y = game.orni_hotspot_y + 16;
         game.game_loop_dispatch_lmb_press();
-        assert_eq!(
-            game.get_active_screen_element(),
-            ScreenElement::TravelMapScreen
-        );
+        assert_eq!(game.get_active_menu_ref(), MenuRef::MenuCancel);
         assert_eq!(game.map_ornithopter_mode, 1);
 
         // The same press did not leak into the map screen as a destination
@@ -4054,9 +4035,6 @@ mod tests {
         // The map screen owns the game area now: the hit test's room-view gate
         // (game_screen_mode_flags != 0) keeps further orni clicks inert.
         game.callback_main_ui_element_21_22();
-        assert_eq!(
-            game.get_active_screen_element(),
-            ScreenElement::TravelMapScreen
-        );
+        assert_eq!(game.get_active_menu_ref(), MenuRef::MenuCancel);
     }
 }

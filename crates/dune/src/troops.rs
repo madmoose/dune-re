@@ -2649,9 +2649,7 @@ impl GameState {
         if li != self.current_location_index as usize {
             return;
         }
-        if self.get_active_screen_element()
-            != crate::room_game_screen::ScreenElement::RoomCommandMenu
-        {
+        if self.get_active_menu_ref() != crate::menu_defs::MenuRef::CommandMenuBuf {
             return;
         }
         let room = if self.night_attack_stage == 0 { 2 } else { 1 };
