@@ -111,12 +111,14 @@ impl GameState {
         }
     }
 
-    // = seg000:af58/af60/af68/af70 the four topic menu verbs, dispatched from
-    // dispatch_command_handler: each loads its filter word (bx) and menu-entry
-    // offset (bp = slot*4) and joins book_topic_select_common.
-    pub(crate) fn menu_callback_choice_book_topic(&mut self, slot: usize) {
+    // = seg000:af58/af60/af68/af70 the four topic menu verbs — DOS gives each
+    // row its own trampoline loading the filter word (bx) and menu-entry
+    // offset (bp = slot*4); the port shares one callback and derives both
+    // from the clicked slot index.
+    pub(crate) fn menu_callback_choice_book_topic(&mut self, _text_id: u16, index: usize) {
         // = seg000:af58 bx=0 bp=0 / af60 bx=0x41c bp=4 / af68 bx=0x81c bp=8 /
         // af70 bx=0xc1c bp=0xc.
+        let slot = index;
         let filter = if slot == 0 {
             0
         } else {

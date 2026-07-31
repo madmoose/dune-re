@@ -839,7 +839,11 @@ impl GameState {
     // = seg000:b28c menu_callback_choice_mirror_room_save_game — the SAVE GAME
     // verb: suspend the game clock, stage the two-slot save submenu (existing
     // slots highlighted, labels showing each save's day/time) and fold it in.
-    pub(crate) fn menu_callback_choice_mirror_room_save_game(&mut self) {
+    pub(crate) fn menu_callback_choice_mirror_room_save_game(
+        &mut self,
+        _text_id: u16,
+        _index: usize,
+    ) {
         // = seg000:b292/b295 cx = 8000h, si = the slot rows; call
         //   load_save_game_timestamp.
         let mut records = menu_defs::MENU_SAVE_GAME.records.to_vec();
@@ -857,7 +861,11 @@ impl GameState {
     // = seg000:b29e menu_callback_choice_mirror_room_load_game — the LOAD GAME
     // verb: same staging with the four-slot load submenu (the two manual slots
     // plus the LAST ENTERING autosaves), missing slots greyed.
-    pub(crate) fn menu_callback_choice_mirror_room_load_game(&mut self) {
+    pub(crate) fn menu_callback_choice_mirror_room_load_game(
+        &mut self,
+        _text_id: u16,
+        _index: usize,
+    ) {
         // = seg000:b29e/b2a1 cx = 4000h, si = the slot rows.
         let mut records = menu_defs::MENU_LOAD_GAME.records.to_vec();
         self.refresh_save_slot_rows(&mut records, CMD_GREY);
@@ -871,8 +879,10 @@ impl GameState {
 
     // = seg000:b35a menu_callback_choice_globe_save_game — a save-slot row:
     // save the game to that slot, show the status line, and close the submenu
-    // on success. `slot` is DOS's cx (the menu row), `text_id` its ax.
-    pub(crate) fn menu_callback_choice_globe_save_game(&mut self, slot: u8, text_id: u16) {
+    // on success. `index` is DOS's cx (the menu row = the save slot),
+    // `text_id` its ax (the row's label).
+    pub(crate) fn menu_callback_choice_globe_save_game(&mut self, text_id: u16, index: usize) {
+        let slot = index as u8;
         // = seg000:b35a — record game_time as the last-save stamp (_unk_2CCC6,
         //   what loc_0b2cd formats); the port passes it straight through.
         // = seg000:b362 call call_restore_cursor.
@@ -891,13 +901,15 @@ impl GameState {
         // = seg000:b382/b385 — close the submenu on success; on error leave it
         //   up (the seg000:b388 ret).
         if result.is_ok() {
-            self.menu_callback_choice_exit_menu();
+            self.menu_callback_choice_exit_menu(0, 0);
         }
     }
 
     // = seg000:b3b0 menu_callback_choice_globe_load_game — a load-slot row:
-    // restore the slot's file and rebuild the active screen.
-    pub(crate) fn menu_callback_choice_globe_load_game(&mut self, slot: u8) {
+    // restore the slot's file and rebuild the active screen. `index` is DOS's
+    // cx (the menu row = the load slot).
+    pub(crate) fn menu_callback_choice_globe_load_game(&mut self, _text_id: u16, index: usize) {
+        let slot = index as u8;
         // = seg000:b3b0..b3b7 loc_00e49 — drain a pending room-screen request
         //   first (the port clears the request and the lip-sync id; the
         //   loc_00e6c transition draw is not ported).
@@ -930,7 +942,7 @@ impl GameState {
             //   refresh the date/time indicator, fade the song out
             //   (midi_begin_song_fade_out is not ported; draw_room_game_screen
             //   restarts the room music), and rebuild the room screen.
-            self.dismiss_stacked_overlays();
+            self.dismiss_stacked_menus();
             self.ui_redraw_date_and_time_indicator();
             self.draw_room_game_screen();
         } else {

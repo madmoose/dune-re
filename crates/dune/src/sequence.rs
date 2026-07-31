@@ -134,7 +134,11 @@ impl GameState {
     // " Continue…" slot. While the prospector panel is the active one a click
     // inside the talking-head HUD element (8) replays the line instead
     // (menu_callback_choice_what); anything else steps the script.
-    pub(crate) fn menu_callback_choice_continue_for_sequence(&mut self) {
+    pub(crate) fn menu_callback_choice_continue_for_sequence(
+        &mut self,
+        _text_id: u16,
+        _index: usize,
+    ) {
         // = seg000:1707/170d cmp [menu_ptr_02220],1faeh; jnz continue.
         if self.sequence_menu == MenuRef::MenuProspectorContinue {
             // = seg000:170f..1715 di = ui_hud_elements[8]; rect_contains.
@@ -142,7 +146,7 @@ impl GameState {
             let (x, y) = (self.mouse_pos_x, self.mouse_pos_y);
             if x > e.x0 && x < e.x1 && y > e.y0 && y < e.y1 {
                 // = seg000:1717 jmp menu_callback_choice_what.
-                self.menu_callback_choice_what();
+                self.menu_callback_choice_what(0, 0);
                 return;
             }
         }

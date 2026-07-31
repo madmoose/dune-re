@@ -452,7 +452,7 @@ impl GameState {
     // (seg000:b1ac), which must not flip room_view_toggle. Drain pending UI
     // tasks, reset the scene, restore the voice/subtitle mode from its default.
     pub(crate) fn ui_enter_room_view_tail(&mut self) {
-        self.dismiss_stacked_overlays();
+        self.dismiss_stacked_menus();
         self.reset_room_scene_state();
         // = seg000:187d voice_subtitle_mode = voice_subtitle_mode_default.
         self.voice_subtitle_mode = self.voice_subtitle_mode_default;
@@ -602,14 +602,14 @@ impl GameState {
         self.ui_hud_close_hands();
     }
 
-    // = seg000:d2bd dismiss_stacked_overlays — before a view switch, tear down the
-    // transient menus/overlays stacked over the base room menu, running each one's
+    // = seg000:d2bd dismiss_stacked_menus — before a view switch, tear down the
+    // transient menus stacked over the base room menu, running each one's
     // cleanup func (menu_stack_pop_and_cleanup). The drain stops at a
     // base/locked entry: a leading priority byte of 0xff (the room command menu or
     // the look-away overlay) or one whose low nibble is 0. in_transition is forced
     // to 0x80 across the loop so the cleanups' repaints do not arm a panel fold,
     // then restored.
-    pub(crate) fn dismiss_stacked_overlays(&mut self) {
+    pub(crate) fn dismiss_stacked_menus(&mut self) {
         // = seg000:d2bd al = in_transition; push — saved and restored around the loop.
         let saved = self.in_transition;
         loop {
@@ -638,11 +638,15 @@ impl GameState {
     // = seg000:d2df menu_callback_choice_music_cd_order_cancel — the submenu's
     // Cancel: pop the submenu, then close the mixer panel (the fall-through
     // into menu_callback_choice_exit_menu).
-    pub(crate) fn menu_callback_choice_music_cd_order_cancel(&mut self) {
+    pub(crate) fn menu_callback_choice_music_cd_order_cancel(
+        &mut self,
+        _text_id: u16,
+        _index: usize,
+    ) {
         // = seg000:d2df call screen_element_stack_pop_and_redraw.
         self.menu_stack_pop_and_cleanup();
         // = seg000:d2e2 falls into menu_callback_choice_exit_menu.
-        self.menu_callback_choice_exit_menu();
+        self.menu_callback_choice_exit_menu(0, 0);
     }
 
     // = seg000:d2e2 menu_callback_choice_exit_menu — close the active overlay and
@@ -652,7 +656,7 @@ impl GameState {
     // the revealed menu), then `jmp play_pending_panel_fold` (fold it onto the
     // screen). Reached from the mixer panel's LMB miss path (loc_0a576 -> a57e) and
     // from the dialogue verb panel's STOP TALKING verb (record 0x94/0xd2e2).
-    pub(crate) fn menu_callback_choice_exit_menu(&mut self) {
+    pub(crate) fn menu_callback_choice_exit_menu(&mut self, _text_id: u16, _index: usize) {
         // = seg000:d2e2 call screen_overlay_request_transition — arm in_transition (unless an HNM is
         //   playing) so the menu repaint below stages into fb1 for the fold.
         self.screen_overlay_request_transition();
@@ -965,7 +969,7 @@ impl GameState {
         // = seg000:18d2 call loc_04d00 — remove the command-panel overlay
         //   frame task (frame_task_callback_04bb9); never armed in the port.
         // = seg000:18d5 call dismiss_stacked_overlays.
-        self.dismiss_stacked_overlays();
+        self.dismiss_stacked_menus();
         // = seg000:18d8 call loc_04aca — data_011ca = 1.
         self.data_011ca = 1;
         // = seg000:18db call reset_scene_lip_sync_state.

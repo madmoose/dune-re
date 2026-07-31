@@ -146,7 +146,7 @@ impl GameState {
             if self.events_pump_active != 0 {
                 return;
             }
-            self.dismiss_stacked_overlays();
+            self.dismiss_stacked_menus();
             self.call_restore_cursor();
             self.ui_present_room_screen(0x2a);
             self.ui_hud_draw_companions();

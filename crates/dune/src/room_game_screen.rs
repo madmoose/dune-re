@@ -16,7 +16,7 @@ use crate::{
     cmd,
     game_ui::{NAV_PANEL_BLANK, NAV_PANEL_FLIGHT, NAV_PANEL_RECORD_OFFSET},
     gfx,
-    menu_defs::{self, CMD_GREY, MenuCleanupFn, MenuItem, MenuRef, item},
+    menu_defs::{self, CMD_GREY, MenuCleanupFn, MenuItem, MenuItemCallback, MenuRef, item},
     sprite_bank,
 };
 
@@ -32,9 +32,11 @@ use crate::{
 // = 21dc: "TAKE AN ORNITHOPTER" — appended on the special-room dl==1 path
 // (the location's entry room) when the night-attack stage is not active.
 // Greyed until orni_count >= 1.
-const CMD_TAKE_ORNITHOPTER: MenuItem = item(0x00a7, 0x42e9, |s| {
-    s.menu_callback_choice_map_main_take_an_ornithopter_notransition()
-});
+const CMD_TAKE_ORNITHOPTER: MenuItem = item(
+    0x00a7,
+    0x42e9,
+    GameState::menu_callback_choice_map_main_take_an_ornithopter_notransition,
+);
 // = 21e0: "WAIT FOR EVENING" — plain-room time-skip verb when the in-game
 // time-of-day phase is < 0x0b (i.e. before evening).
 const CMD_WAIT_FOR_EVENING: MenuItem = item(
@@ -52,21 +54,22 @@ const CMD_WAIT_FOR_MORNING: MenuItem = item(
 // = 21e8: "VIEW NEW MESSAGES" — the palace communications-room verb
 // (bh==1, dl==8) for reading newly-received transmissions; gated on
 // data_000c8 != 0 (a new message is queued).
-const CMD_VIEW_NEW_MESSAGES: MenuItem = item(cmd::VIEW_NEW_MESSAGES, 0x283a, |_| {
+const CMD_VIEW_NEW_MESSAGES: MenuItem = item(cmd::VIEW_NEW_MESSAGES, 0x283a, |_, _, _| {
     println!("menu: VIEW NEW MESSAGES (seg000:283a) not ported")
 });
 // = 21ec: "Messages already seen" — the communications-room companion
 // verb to CMD_VIEW_NEW_MESSAGES (replay previously-viewed messages).
-const CMD_MESSAGES_ALREADY_SEEN: MenuItem = item(cmd::MESSAGES_ALREADY_SEEN, 0x283e, |_| {
+const CMD_MESSAGES_ALREADY_SEEN: MenuItem = item(cmd::MESSAGES_ALREADY_SEEN, 0x283e, |_, _, _| {
     println!("menu: Messages already seen (seg000:283e) not ported")
 });
 // = 21f0: "LOOK AT MIRROR" — the palace bedroom verb (bh==1, dl==9; Paul's
 // room with the mirror).
-const CMD_LOOK_AT_MIRROR: MenuItem = item(cmd::LOOK_AT_MIRROR, 0x0ea6, GameState::look_at_mirror);
+const CMD_LOOK_AT_MIRROR: MenuItem =
+    item(cmd::LOOK_AT_MIRROR, 0x0ea6, |s, _, _| s.look_at_mirror());
 // = 21f4: "Mixer Panel" — the always-available audio mixer-panel verb,
 // appended at the tail of the special-room and plain-room verb lists. The
 // CD release of Dune exposes its in-game music/voice mixer here.
-const CMD_MIXER_PANEL: MenuItem = item(cmd::MIXER_PANEL, 0xa3f0, GameState::open_mixer_panel);
+const CMD_MIXER_PANEL: MenuItem = item(cmd::MIXER_PANEL, 0xa3f0, |s, _, _| s.open_mixer_panel());
 // = 21f8: "CHANGE DESTINATION" — the map/book-mode travel verb (the third
 // slot in both map sub-modes).
 const CMD_CHANGE_DESTINATION: MenuItem = item(
@@ -97,20 +100,21 @@ const CMD_TOWARDS_NEAREST_PLACE: MenuItem = item(
 );
 // = 220c: "SEE DUNE MAP" — the leading verb on every special-room and
 // plain-room verb list (opens the planet-map view).
-const CMD_SEE_DUNE_MAP: MenuItem = item(cmd::SEE_DUNE_MAP, 0x186b, GameState::ui_toggle_room_view);
+const CMD_SEE_DUNE_MAP: MenuItem =
+    item(cmd::SEE_DUNE_MAP, 0x186b, |s, _, _| s.ui_toggle_room_view());
 // = 2214: "CALL A WORM" — the worm-summon verb. Greyed until game_phase
 // >= 0x4f. Appears on plain rooms and on the night-attack sietch (dl==1).
-const CMD_CALL_A_WORM: MenuItem = item(cmd::CALL_A_WORM, 0x42d1, |_| {
+const CMD_CALL_A_WORM: MenuItem = item(cmd::CALL_A_WORM, 0x42d1, |_, _, _| {
     println!("menu: CALL A WORM (seg000:42d1) not ported")
 });
 // = 2218: "MASSIVE ATTACK" — the first night-attack stage verb (special
 // room dl==1 with night_attack_stage != 0).
-const CMD_MASSIVE_ATTACK: MenuItem = item(cmd::MASSIVE_ATTACK, 0x7317, |_| {
+const CMD_MASSIVE_ATTACK: MenuItem = item(cmd::MASSIVE_ATTACK, 0x7317, |_, _, _| {
     println!("menu: MASSIVE ATTACK (seg000:7317) not ported")
 });
 // = 221c: "FIGHT FOR A WHOLE DAY" — the second night-attack stage verb,
 // adjacent to CMD_MASSIVE_ATTACK.
-const CMD_FIGHT_FOR_A_WHOLE_DAY: MenuItem = item(cmd::FIGHT_FOR_A_WHOLE_DAY, 0x0fc5, |_| {
+const CMD_FIGHT_FOR_A_WHOLE_DAY: MenuItem = item(cmd::FIGHT_FOR_A_WHOLE_DAY, 0x0fc5, |_, _, _| {
     println!("menu: FIGHT FOR A WHOLE DAY (seg000:0fc5) not ported")
 });
 
@@ -175,53 +179,43 @@ const fn rp(
     }
 }
 
+// = the DOS `jmp word ptr [si+4]` of a room-person entry (seg000:9234 /
+// seg000:d451): resolve the entry's trampoline offset to its ported routine.
+// seg000:92f2..936f are the per-character `mov al,N; jmp
+// common_code_for_ui_dialogue_related_functions` trampolines — map the offset
+// back to the speaker's lip-sync resource index N and run the shared dialogue
+// entry. The Harkonnen-Captain / Fremen-1 trampolines stage their troop's
+// CONDIT block first, and the Fremen-2 one (seg000:937e) decodes its
+// fremen2_troop_ptrs slot from the record's text id (DOS ax at the jmp).
+pub(crate) fn room_person_callback(handler: u16) -> MenuItemCallback {
+    match handler {
+        0x92f2 => |s, _, _| s.common_dialogue(0x0), // Duke Leto Atreides
+        0x92f7 => |s, _, _| s.common_dialogue(0x1), // Lady Jessica Atreides
+        0x92fc => |s, _, _| s.common_dialogue(0x2), // Thufir Hawat
+        0x9301 => |s, _, _| s.common_dialogue(0x3), // Duncan Idaho
+        0x9306 => |s, _, _| s.common_dialogue(0x4), // Gurney Halleck
+        0x930b => |s, _, _| s.common_dialogue(0x5), // Stilgar
+        0x9310 => |s, _, _| s.common_dialogue(0x6), // Liet Kynes
+        0x9315 => |s, _, _| s.common_dialogue(0x7), // Chani
+        0x931a => |s, _, _| s.common_dialogue(0x8), // Harah
+        0x931f => |s, _, _| s.common_dialogue(0x9), // Baron Vladimir Harkonnen
+        0x9324 => |s, _, _| s.common_dialogue(0xa), // Feyd-Rautha Harkonnen
+        0x9329 => |s, _, _| s.common_dialogue(0xb), // Emperor Shaddam IV
+        0x932e => |s, _, _| s.ui_dialogue_related_to_harkonnen_captains(),
+        0x936f => |s, _, _| s.common_dialogue(0xd), // Smugglers
+        0x9373 => |s, _, _| s.ui_dialogue_related_to_fremen1(),
+        0x937e => |s, text_id, _| s.ui_dialogue_related_to_fremen2(text_id),
+        _ => |_, _, _| println!("menu: room-person row with an unexpected handler"),
+    }
+}
+
 // = the runtime-built room-person verb record: the DOS record stores the
-// entry's trampoline offset and is dispatched as `jmp word ptr [si+4]` with
-// ax = text_id (seg000:9234 / seg000:d451). Both words are known when the
-// record is built, so the port binds the equivalent
-// dispatch_command_handler call as the record's callback here.
+// entry's trampoline offset; the port binds the resolved callback alongside.
 fn room_person_menu_item(text_id: u16, handler: u16) -> MenuItem {
-    let callback: fn(&mut GameState) = if handler == 0x937e {
-        // = seg000:937e sub ax,87h — the Fremen-2 trampoline decodes its
-        // fremen2_troop_ptrs slot from the record's text id.
-        match text_id & 0x0fff {
-            0x87 => |s| s.dispatch_command_handler(0x937e, 0x87),
-            0x88 => |s| s.dispatch_command_handler(0x937e, 0x88),
-            0x89 => |s| s.dispatch_command_handler(0x937e, 0x89),
-            0x8a => |s| s.dispatch_command_handler(0x937e, 0x8a),
-            0x8b => |s| s.dispatch_command_handler(0x937e, 0x8b),
-            0x8c => |s| s.dispatch_command_handler(0x937e, 0x8c),
-            0x8d => |s| s.dispatch_command_handler(0x937e, 0x8d),
-            0x8e => |s| s.dispatch_command_handler(0x937e, 0x8e),
-            0x8f => |s| s.dispatch_command_handler(0x937e, 0x8f),
-            _ => |_| println!("menu: Fremen-2 row with an unexpected text id"),
-        }
-    } else {
-        // = the per-character trampolines (seg000:92f2..9373); none of them
-        // reads the text id.
-        match handler {
-            0x92f2 => |s| s.dispatch_command_handler(0x92f2, 0),
-            0x92f7 => |s| s.dispatch_command_handler(0x92f7, 0),
-            0x92fc => |s| s.dispatch_command_handler(0x92fc, 0),
-            0x9301 => |s| s.dispatch_command_handler(0x9301, 0),
-            0x9306 => |s| s.dispatch_command_handler(0x9306, 0),
-            0x930b => |s| s.dispatch_command_handler(0x930b, 0),
-            0x9310 => |s| s.dispatch_command_handler(0x9310, 0),
-            0x9315 => |s| s.dispatch_command_handler(0x9315, 0),
-            0x931a => |s| s.dispatch_command_handler(0x931a, 0),
-            0x931f => |s| s.dispatch_command_handler(0x931f, 0),
-            0x9324 => |s| s.dispatch_command_handler(0x9324, 0),
-            0x9329 => |s| s.dispatch_command_handler(0x9329, 0),
-            0x932e => |s| s.dispatch_command_handler(0x932e, 0),
-            0x936f => |s| s.dispatch_command_handler(0x936f, 0),
-            0x9373 => |s| s.dispatch_command_handler(0x9373, 0),
-            _ => |_| println!("menu: room-person row with an unexpected handler"),
-        }
-    };
     MenuItem {
         text_id,
         handler,
-        callback,
+        callback: room_person_callback(handler),
     }
 }
 
@@ -530,11 +524,7 @@ impl GameState {
     // (read_command_menu_record_for_slot), and unless it has no handler or is
     // greyed, dispatch it (DOS `jmp bx`).
     pub(crate) fn dispatch_command_menu_slot(&mut self, slot: usize) {
-        // = seg000:d454 read_command_menu_record_for_slot — the active screen
-        // element's record buffer = the active buffer's [slot]: the room verbs
-        // normally, or menu_palace_mirror_room while the LOOK AT MIRROR still
-        // is up. The "Look away from the mirror" row (slot 4, handler 0x0eb9)
-        // dispatches through dispatch_command_handler below.
+        // = seg000:d454 read_command_menu_record_for_slot
         let Some(rec) = self.active_menu_records().get(slot).copied() else {
             return;
         };
@@ -546,227 +536,10 @@ impl GameState {
         if rec.text_id & CMD_GREY != 0 {
             return;
         }
-        // = seg000:d451 jmp bx — run the record's bound callback (the ported
-        // `bx`; DOS leaves the record's text id in ax, which the port binds
-        // into the callback when the record is built).
-        (rec.callback)(self);
-    }
-
-    // The `jmp bx` target: resolve the verb handler offset to its ported routine.
-    // A match (not an `if`) because this is the verb-dispatch table; the TODO arm
-    // below is where the remaining handlers slot in. `text_id` is DOS's ax at
-    // the jmp — the dispatched record's text id (0 when the caller has none).
-    pub(crate) fn dispatch_command_handler(&mut self, handler: u16, text_id: u16) {
-        match handler {
-            // = seg000:92f2..9371 the per-character dialogue trampolines, each a
-            // `mov al,N; jmp common_code_for_ui_dialogue_related_functions`
-            // (seg000:93aa). room_persons[].handler holds the trampoline offset;
-            // map it back to the speaker's lip-sync resource index N and run the
-            // shared dialogue entry (common_dialogue). The on-screen verb dispatch
-            // (callback_main_ui_element_21_22) and the command menu both arrive here.
-            0x92f2 => self.common_dialogue(0x0), // Duke Leto Atreides
-            0x92f7 => self.common_dialogue(0x1), // Lady Jessica Atreides
-            0x92fc => self.common_dialogue(0x2), // Thufir Hawat
-            0x9301 => self.common_dialogue(0x3), // Duncan Idaho
-            0x9306 => self.common_dialogue(0x4), // Gurney Halleck
-            0x930b => self.common_dialogue(0x5), // Stilgar
-            0x9310 => self.common_dialogue(0x6), // Liet Kynes
-            0x9315 => self.common_dialogue(0x7), // Chani
-            0x931a => self.common_dialogue(0x8), // Harah
-            0x931f => self.common_dialogue(0x9), // Baron Vladimir Harkonnen
-            0x9324 => self.common_dialogue(0xa), // Feyd-Rautha Harkonnen
-            0x9329 => self.common_dialogue(0xb), // Emperor Shaddam IV
-            0x936f => self.common_dialogue(0xd), // Smugglers
-            // = seg000:932e ui_dialogue_related_to_HarkonnenCaptains — stage
-            // the captain's troop CONDIT block, then the shared tail with
-            // al = 0x0c. The middle (9335..9367: the map-position recompute,
-            // troop harvest_rate seed, subst_id_09) is not yet ported.
-            0x932e => {
-                if let Some(ti) = self.harkonnen_captain_troop {
-                    self.troop_prepare_troop_data_for_condit(ti);
-                }
-                self.common_dialogue(0x0c);
-            }
-            // = seg000:9373 ui_dialogue_related_to_Fremen1 — the Fremen chief:
-            // si = [fremen1_troop_ptr]; stage its CONDIT block; al = 0x0e.
-            0x9373 => {
-                if let Some(ti) = self.fremen1_troop {
-                    self.troop_prepare_troop_data_for_condit(ti);
-                }
-                self.common_dialogue(0x0e);
-            }
-            // = seg000:937e ui_dialogue_related_to_Fremen2 — al = text_id -
-            // 0x87 selects the fremen2_troop_ptrs slot; falls into the shared
-            // seg000:9381 body.
-            0x937e => {
-                // = seg000:937e sub ax,87h.
-                let idx = text_id.wrapping_sub(0x87) as u8;
-                self.ui_dialogue_related_to_common_and_fremen2(idx);
-            }
-            0x9472 => self.menu_callback_choice_talk_to_me(),
-            0x95e2 => self.menu_callback_choice_come_with_me(),
-            0x9533 => self.menu_callback_choice_stay_here(),
-            // = seg000:95c1 menu_callback_choice_come_with_me_troop — the
-            // Fremen chief's COME WITH ME verb: the charisma check records
-            // its outcome in pending_room_action (0 pass / 2 fail) for the
-            // topic-5 record's conditions, then falls into
-            // menu_callback_choice_come_with_me.
-            0x95c1 => self.menu_callback_choice_come_with_me_troop(),
-            // = seg000:9ed5 menu_callback_choice_what — the " WHAT ? " verb:
-            // replay the last-presented line's voice.
-            0x9ed5 => self.menu_callback_choice_what(),
-
-            // = seg000:0ea6 loc_00ea6 — LOOK AT MIRROR (palace bedroom, slot 1 /
-            // seg000:d43e).
-            0x0ea6 => self.look_at_mirror(),
-            // = seg000:0eb9 menu_callback_choice_palace_look_away_from_mirror —
-            // the "Look away from the mirror" verb (mirror menu slot 4 /
-            // data_020d4). DOS jmps straight to 0eb9 and leaves the mirror entry
-            // on the menu stack: its 0xff priority is locked against
-            // screen_element_stack_pop_and_cleanup (which skips priority&0xf==0xf), so draw_room_game_screen
-            // just re-pushes the room menu above it. The port pops the overlay
-            // directly to make the room menu active again — the same dismissal
-            // game_area_click performs.
-            0x0eb9 => {
-                self.menu_stack.pop();
-                self.look_away_from_mirror();
-            }
-            // = seg000:a3f0 menu_callback_choice_mixer_panel — the always-
-            // available "Mixer Panel" verb (CMD_MIXER_PANEL). Opens the in-game
-            // audio mixer / settings overlay (settings_ui.rs).
-            0xa3f0 => self.open_mixer_panel(),
-            // = the mixer panel's music-menu verbs (MENU_MIXER_PANEL), shown in
-            // the command strip while the mixer is open, and the CD-order
-            // submenu (MENU_MUSIC) the CD-STYLE verb pushes over it.
-            0xaeaf => self.menu_callback_choice_music_off(),
-            0xac6e => self.menu_callback_choice_music_on_game_relative(),
-            0xac7e => self.menu_callback_choice_music_on_cd_style(),
-            0xac97 => self.menu_callback_choice_music_cd_order_standard(),
-            0xac90 => self.menu_callback_choice_music_cd_order_shuffle(),
-            0xd2df => self.menu_callback_choice_music_cd_order_cancel(),
-            // = seg000:0e3e menu_callback_choice_exit_game — the EXIT GAME verb
-            // (mixer + mirror menus): opens the YES/NO confirmation submenu.
-            0x0e3e => self.menu_callback_choice_exit_game(),
-            // = seg000:003a exit_to_dos — the confirmation submenu's YES verb
-            // (menu_exit_game_confirmation 0xb8): quit the game to the OS.
-            0x003a => self.exit_to_dos(),
-            // = seg000:42e9 — the TAKE AN ORNITHOPTER room verb (CMD_TAKE_
-            // ORNITHOPTER): open the map screen in ornithopter mode.
-            0x42e9 => self.menu_callback_choice_map_main_take_an_ornithopter_notransition(),
-            // = the map-mode travel verbs (build_room_command_records'
-            // game_screen_mode_flags & 3 panel).
-            0x4ffb => self.menu_callback_choice_skip_to_destination(),
-            0x497a => self.menu_callback_choice_change_destination(),
-            0x50a5 => self.menu_callback_choice_back_to_starting_point(),
-            0x50c4 => self.menu_callback_choice_towards_nearest_place(),
-            // = seg000:0f48 menu_callback_choice_wait_for_evening — the plain-room
-            // "WAIT FOR EVENING" time-skip verb (CMD_WAIT_FOR_EVENING).
-            0x0f48 => self.menu_callback_choice_wait_for_evening(),
-            // = seg000:0f67 menu_callback_choice_wait_for_morning — the plain-room
-            // "WAIT FOR MORNING" time-skip verb (CMD_WAIT_FOR_MORNING).
-            0x0f67 => self.menu_callback_choice_wait_for_morning(),
-            // = seg000:186b ui_toggle_room_view — the SEE DUNE MAP room verb
-            // (CMD_SEE_DUNE_MAP) and the map main menu's EXIT MAPS verb: both
-            // sides of the room <-> full-map toggle dispatch the same handler.
-            0x186b => self.ui_toggle_room_view(),
-            // = seg000:5a03 loc_05a03 — the dialogue panel's GIVE ORDERS TO
-            // TROOP verb (setup_npc_dialogue_menu gives it to the Fremen-2
-            // person, seg000:90de): leave the room for the map with this troop
-            // contacted.
-            0x5a03 => self.menu_callback_choice_give_orders_to_troop(),
-            // = seg000:86cc menu_callback_choice_map_main_contact_fremen_troops
-            // — the map main menu's contact slot, "CONTACT FREMEN TROOPS" over
-            // the whole planet or "GIVE ORDERS TO TROOP" at short visibility.
-            0x86cc => self.menu_callback_choice_map_main_contact_fremen_troops(),
-            // = the troop-contact menus' verbs (menu_map_troop_dialog /
-            // _contact_cycle_troops / _moving_change_destination_next_troop).
-            // = seg000:86fa menu_callback_choice_map_troop_contact_next_troop.
-            0x86fa => self.menu_callback_choice_map_troop_contact_next_troop(),
-            // = seg000:8763 menu_callback_choice_multiple_no_more_orders — the
-            // order menu's NO MORE ORDERS / CUT CONTACT slot.
-            0x8763 => self.menu_callback_choice_multiple_no_more_orders(),
-            // = seg000:8770 menu_callback_choice_map_troop_contact_no_more_orders
-            // — the cycle menu's NO MORE ORDERS slot.
-            0x8770 => self.menu_callback_choice_map_troop_contact_no_more_orders(),
-            // = seg000:7bed — ASK FOR MORE INFORMATION: the contacted troop's
-            // next dialogue line.
-            0x7bed => self.menu_callback_choice_map_troop_dialogue_ask_for_more_information(),
-            // = seg000:69b3 — CHANGE / SELECT TROOP OCCUPATION: the occupation
-            // submenu for the troop's current occupation class.
-            0x69b3 => self.menu_callback_choice_map_troop_dialogue_change_troop_occupation(),
-            // = the occupation submenus' verbs: each reassigns the contacted
-            // troop through troop_apply_occupation_choice (apply, let the troop react, take it back
-            // if it refuses).
-            0x6a71 => self.menu_callback_choice_troop_occupation_specialize_in_spice(),
-            0x6a83 => self.menu_callback_choice_troop_occupation_specialize_in_army(),
-            0x6a87 => self.menu_callback_choice_troop_occupation_specialize_in_ecology(),
-            0x6a2b => self.menu_callback_choice_troop_occupation_assembly_wind_trap(),
-            // = seg000:6a45/6a2f — ESPIONAGE and ATTACK reassign the troop the
-            // same way, then MOVE it onto the Harkonnen holding through the
-            // unported troop-command core (troop_location_082da / 084a6).
-            0x6a45 => println!("dispatch: ESPIONAGE (0x6a45) not ported"),
-            0x6a2f => println!("dispatch: ATTACK (0x6a2f) not ported"),
-            // = seg000:7734/775c/776d — the per-class GO & SEARCH FOR
-            // EQUIPMENT verbs.
-            0x7734 | 0x775c | 0x776d => {
-                println!("dispatch: GO & SEARCH FOR EQUIPMENT ({handler:#06x}) not ported")
-            }
-            // = seg000:7cbb — MODIFY EQUIPMENT.
-            0x7cbb => println!("dispatch: MODIFY EQUIPMENT (0x7cbb) not ported"),
-            // = seg000:8064 — MOVE TROOP / CHANGE DESTINATION.
-            0x8064 => self.menu_callback_choice_multiple_move_troop(),
-            // = seg000:80c7 — ADD A DESTINATION (a plain ret: the map click
-            //   does the adding; the slot is a label).
-            0x80c7 => {}
-            // = seg000:80d9 — GIVE NEW DESTINATIONS.
-            0x80d9 => self.menu_callback_choice_map_move_prospectors_give_new_destinations(),
-            // = seg000:8214 — Done (the prospector menu).
-            0x8214 => self.menu_callback_choice_map_move_prospectors_done(),
-            // = the map main menu's remaining verbs (MENU_MAP_TROOPS) — the
-            // troop-command flows are not ported yet.
-            // = seg000:53f1 menu_callback_choice_map_main_see_spice_density.
-            // = seg000:53f1 menu_callback_choice_map_main_see_spice_density.
-            0x53f1 => self.menu_callback_choice_map_main_see_spice_density(),
-            // = seg000:42d9 menu_callback_choice_map_main_take_an_ornithopter —
-            // commit_room_move + ui_toggle_room_view into the notransition
-            // entry.
-            0x42d9 => self.menu_callback_choice_map_main_take_an_ornithopter(),
-            // = seg000:5b1e menu_callback_choice_map_main_find_prospectors.
-            0x5b1e => println!("dispatch: FIND PROSPECTORS (0x5b1e) not ported"),
-            // = the location popup's GO THERE verbs (loc_05fb0's menu).
-            0x50db => self.menu_callback_choice_move_to_location_orni(),
-            0x50ea => self.menu_callback_choice_move_to_location_worm(),
-            // = seg000:b28c/b29e the mirror-menu SAVE GAME / LOAD GAME verbs —
-            // push the slot submenu (savegame.rs).
-            0xb28c => self.menu_callback_choice_mirror_room_save_game(),
-            0xb29e => self.menu_callback_choice_mirror_room_load_game(),
-            // = seg000:b35a/b3b0 the slot rows of those submenus. DOS passes
-            // the row in cx; the port derives the slot from the row's label id
-            // (0x10f..0x112, fixed per slot).
-            0xb35a => {
-                let slot = ((text_id & 0xfff) - 0x10f) as u8;
-                self.menu_callback_choice_globe_save_game(slot, text_id);
-            }
-            0xb3b0 => {
-                let slot = ((text_id & 0xfff) - 0x10f) as u8;
-                self.menu_callback_choice_globe_load_game(slot);
-            }
-            // = seg000:af58/af60/af68/af70 the book's topic verbs (ALL TOPICS
-            // / TOPIC: PAUL ON DUNE / TOPIC: SPICE / TOPIC: THE FREMEN).
-            0xaf58 => self.menu_callback_choice_book_topic(0),
-            0xaf60 => self.menu_callback_choice_book_topic(1),
-            0xaf68 => self.menu_callback_choice_book_topic(2),
-            0xaf70 => self.menu_callback_choice_book_topic(3),
-            // = seg000:b18b — the " Close book" verb (also the book's close
-            // hotspots' UI-element handler).
-            0xb18b => self.callback_ui_element_book_close(),
-            // TODO: the remaining mirror-menu verb (RESTART 0x0e47) and the
-            // room verbs (CALL A WORM 0x42d1, ...) are not ported.
-            0xd2e2 => self.menu_callback_choice_exit_menu(),
-            _ => {
-                println!("dispatch_command_handler: unhandled 0x{handler:04x}");
-            }
-        }
+        // = seg000:d451 jmp bx — run the record's bound callback with the
+        // record's text id (DOS's ax at the jmp) and the clicked slot (DOS's
+        // cx, loaded by the per-row trampolines d443..d42f).
+        (rec.callback)(self, rec.text_id, slot);
     }
 
     // = seg000:0f48 menu_callback_choice_wait_for_evening — the plain-room "WAIT
@@ -775,7 +548,7 @@ impl GameState {
     // scheduled events for each skipped period. When it is still pre-dawn (phase
     // < 2) the sky is first brightened one step toward phase+2 so the jump does
     // not snap straight from night to dusk.
-    pub(crate) fn menu_callback_choice_wait_for_evening(&mut self) {
+    pub(crate) fn menu_callback_choice_wait_for_evening(&mut self, _text_id: u16, _index: usize) {
         // = seg000:0f48 ax = game_time; bx = ax; al &= 0x0f — the phase nibble.
         let game_time = self.game_time;
         let phase = (game_time & 0x0f) as u8;
@@ -802,7 +575,7 @@ impl GameState {
     // the next day (morning), running the scheduled events for each skipped
     // period. When it is still dusk (phase 0x0b or 0x0c) the sky is first darkened
     // one step toward phase+2 so the jump does not snap straight to dawn.
-    pub(crate) fn menu_callback_choice_wait_for_morning(&mut self) {
+    pub(crate) fn menu_callback_choice_wait_for_morning(&mut self, _text_id: u16, _index: usize) {
         // = seg000:0f67 ax = game_time; bx = ax; al &= 0x0f — the phase nibble.
         let game_time = self.game_time;
         let phase = (game_time & 0x0f) as u8;
@@ -870,7 +643,7 @@ impl GameState {
     // (menu_exit_game_confirmation) as the active command menu, revealed with the
     // panel fold. DOS: bx = nullsub_00f66 (no-op cleanup), bp = menu_exit_game_
     // confirmation, jmp loc_0d323.
-    pub(crate) fn menu_callback_choice_exit_game(&mut self) {
+    pub(crate) fn menu_callback_choice_exit_game(&mut self, _text_id: u16, _index: usize) {
         // = seg000:d323 call screen_overlay_request_transition — arm in_transition
         //   so the submenu repaint stages into fb1 for the fold.
         self.screen_overlay_request_transition();
@@ -1064,9 +837,23 @@ impl GameState {
         self.transition(4, |s| s.callback_transition_look_at_mirror());
     }
 
-    // = seg000:0eb9 menu_callback_choice_palace_look_away_from_mirror — leave the
-    // mirror still and return to the bedroom: clear the suspend, re-arm the room
-    // screen, and redraw it.
+    // = seg000:0eb9 menu_callback_choice_palace_look_away_from_mirror — the
+    // "Look away from the mirror" verb (mirror menu slot 4). DOS jmps straight
+    // to 0eb9 and leaves the mirror entry on the menu stack: its 0xff priority
+    // is locked against menu_stack_pop_and_cleanup, and draw_room_game_screen's
+    // re-insert replaces it in place. The port pops the overlay directly so the
+    // room menu is active again — the same dismissal game_area_click performs.
+    pub(crate) fn menu_callback_choice_palace_look_away_from_mirror(
+        &mut self,
+        _text_id: u16,
+        _index: usize,
+    ) {
+        self.menu_stack.pop();
+        self.look_away_from_mirror();
+    }
+
+    // = seg000:0eb9 (the loc_00eb9 body) — leave the mirror still and return to
+    // the bedroom: clear the suspend, re-arm the room screen, and redraw it.
     fn look_away_from_mirror(&mut self) {
         // = seg000:0eb9 data_047c3 = 0. TODO: data_047c3 not modelled.
         // = seg000:0ebe call reset_game_suspend.
@@ -1143,14 +930,11 @@ impl GameState {
             //   seg000:9436..9458) are not ported.
             return;
         }
-        // = seg000:9430 call screen_element_stack_pop_and_cleanup. DOS leaves the 0xff-locked mirror entry on
-        // the stack (screen_element_stack_pop_and_cleanup skips priority&0xf==0xf) for the room menu's
-        // re-insert to replace in place; the port pops it directly so the room
-        // menu is active again. Same dismissal as the verb path
-        // (dispatch_command_handler 0x0eb9).
-        self.menu_stack.pop();
+        // = seg000:9430 call screen_element_stack_pop_and_cleanup — a no-op in
+        // DOS (it skips the mirror entry's 0xf-locked priority); the pop lives
+        // in the shared verb path below.
         // = seg000:9433 jmp menu_callback_choice_palace_look_away_from_mirror.
-        self.look_away_from_mirror();
+        self.menu_callback_choice_palace_look_away_from_mirror(0, 0);
     }
 
     // = seg000:9215 callback_main_ui_element_21_22 — the game-area / person click
@@ -1183,9 +967,9 @@ impl GameState {
                 // = seg000:925c push cx; call dismiss_stacked_overlays; pop cx;
                 //   9261 jmp loc_09234 — drop the dialogue panel and dispatch
                 //   the other companion's handler: the conversation switches.
-                self.dismiss_stacked_overlays();
+                self.dismiss_stacked_menus();
                 let handler = self.room_persons[pid as usize].handler;
-                self.dispatch_command_handler(handler, 0);
+                (room_person_callback(handler))(self, 0, 0);
             }
             return;
         }
@@ -1215,7 +999,7 @@ impl GameState {
         // ornithopter opens the map screen in ornithopter mode (jmp
         // menu_callback_choice_map_main_take_an_ornithopter_notransition).
         if person_id == 0x2f {
-            self.menu_callback_choice_map_main_take_an_ornithopter_notransition();
+            self.menu_callback_choice_map_main_take_an_ornithopter_notransition(0, 0);
             return;
         }
         // = seg000:922f cmp cl,0fh; jnb loc_09240 — person index < 0x0f
@@ -1224,7 +1008,7 @@ impl GameState {
             // = seg000:9234 al=0x10; mul cl; si = room_persons + cl*0x10;
             // jmp word ptr [si+4] — dispatch the matched person's handler.
             let handler = self.room_persons[person_id as usize].handler;
-            self.dispatch_command_handler(handler, 0);
+            (room_person_callback(handler))(self, 0, 0);
         } else {
             // = seg000:9240 loc_09240 — sub cl,0fh; mov al,cl; jmp
             // ui_dialogue_related_to_common_and_Fremen2: a click on a
@@ -1233,6 +1017,35 @@ impl GameState {
             // text-id decode.
             self.ui_dialogue_related_to_common_and_fremen2(person_id - 0x0f);
         }
+    }
+
+    // = seg000:932e ui_dialogue_related_to_HarkonnenCaptains — stage the
+    // captain's troop CONDIT block, then the shared dialogue entry with
+    // al = 0x0c. The middle (9335..9367: the map-position recompute, troop
+    // harvest_rate seed, subst_id_09) is not yet ported.
+    pub(crate) fn ui_dialogue_related_to_harkonnen_captains(&mut self) {
+        if let Some(ti) = self.harkonnen_captain_troop {
+            self.troop_prepare_troop_data_for_condit(ti);
+        }
+        self.common_dialogue(0x0c);
+    }
+
+    // = seg000:9373 ui_dialogue_related_to_Fremen1 — the Fremen chief:
+    // si = [fremen1_troop_ptr]; stage its CONDIT block; al = 0x0e.
+    pub(crate) fn ui_dialogue_related_to_fremen1(&mut self) {
+        if let Some(ti) = self.fremen1_troop {
+            self.troop_prepare_troop_data_for_condit(ti);
+        }
+        self.common_dialogue(0x0e);
+    }
+
+    // = seg000:937e ui_dialogue_related_to_Fremen2 — the verb-record entry:
+    // al = text_id - 0x87 selects the fremen2_troop_ptrs slot; falls into the
+    // shared seg000:9381 body.
+    pub(crate) fn ui_dialogue_related_to_fremen2(&mut self, text_id: u16) {
+        // = seg000:937e sub ax,87h.
+        let idx = text_id.wrapping_sub(0x87) as u8;
+        self.ui_dialogue_related_to_common_and_fremen2(idx);
     }
 
     // = seg000:9381 ui_dialogue_related_to_common_and_Fremen2 — enter the
@@ -1285,7 +1098,7 @@ impl GameState {
             return;
         }
         // = seg000:946f jnz menu_callback_choice_talk_to_me.
-        self.menu_callback_choice_talk_to_me();
+        self.menu_callback_choice_talk_to_me(0, 0);
     }
 
     // = seg000:d41b get_active_screen_element — return the identity of the top
@@ -1639,14 +1452,16 @@ impl GameState {
             // = seg000:90c0 the Harkonnen-Captain prisoner: while the captain
             // (persons_in_room bit 0x1000) stands in the room and room_persons[12]
             // is not yet flagged 0x10, offer OVERPOWER THE PRISONER.
-            item(0x9c, 0x9584, |_| {
+            item(0x9c, 0x9584, |_, _, _| {
                 println!("menu: OVERPOWER THE PRISONER (seg000:9584) not ported")
             })
         } else if pi == 0x0f {
             // = seg000:90d9 person 0x0f: text 0x93, handler loc_05a03.
-            item(0x93, 0x5a03, |s| {
-                s.menu_callback_choice_give_orders_to_troop()
-            })
+            item(
+                0x93,
+                0x5a03,
+                GameState::menu_callback_choice_give_orders_to_troop,
+            )
         } else if pi == 0x0e {
             // = seg000:90e3 person 0x0e: text 0x96, bumped to 0x97 once Paul-event
             // bit 0x10 is set; handler loc_095c1.
@@ -1667,7 +1482,7 @@ impl GameState {
                 // = seg000:90fd greyed COME WITH ME (text 0x91 | 0x4000). DOS
                 // leaves the callback (dx) stale; the verb is disabled, so it is
                 // never dispatched.
-                item(0x4091, 0, |_| {})
+                item(0x4091, 0, |_, _, _| {})
             } else if (flags & 0x40) != 0 {
                 // = seg000:910d the NPC already travels with you, so offer STAY
                 // HERE (text 0x92, handler menu_callback_choice_stay_here).
@@ -2378,11 +2193,9 @@ impl GameState {
         }
         let base = self.command_menu_buf.records.len() - run_len;
         // = seg000:311a mov word ptr [di], 0x8f — patch the text_id (the
-        //   handler word is untouched, so rebind the callback to the new id:
-        //   the Fremen-2 trampoline decodes the slot from it).
-        let handler = self.command_menu_buf.records[base + target_within_run].handler;
-        self.command_menu_buf.records[base + target_within_run] =
-            room_person_menu_item(0x8f, handler);
+        //   handler word is untouched; the callback reads the id at dispatch,
+        //   so nothing else needs rebinding).
+        self.command_menu_buf.records[base + target_within_run].text_id = 0x8f;
     }
 
     // = seg000:3127 init_room_persons — reset the scene's dynamic person slots
@@ -3267,7 +3080,7 @@ mod tests {
 
         // STOP TALKING: the dialogue panel's text 0x94 verb dispatches 0xd2e2 =
         // menu_callback_choice_exit_menu, whose NpcActionsMenu cleanup un-zooms.
-        game.menu_callback_choice_exit_menu();
+        game.menu_callback_choice_exit_menu(0, 0);
 
         // The talking head is gone and the room is back to its un-zoomed self: the
         // restored game area matches the plain room far more closely than the zoom
@@ -3350,7 +3163,7 @@ mod tests {
 
         // Second click: the 40E8 entry's first sentence. The separator arms
         // the continuation; the entry is neither spoken nor advanced past.
-        game.menu_callback_choice_talk_to_me();
+        game.menu_callback_choice_talk_to_me(0, 0);
         assert_eq!(game.current_subtitle_id, 0x932, "line 2: part 1");
         assert!(
             game.dialogue_text_continuation.is_some(),
@@ -3376,7 +3189,7 @@ mod tests {
 
         // Third click: the continuation presents sentence 2, steps the voc
         // part nibble, and only now fires the entry bookkeeping.
-        game.menu_callback_choice_talk_to_me();
+        game.menu_callback_choice_talk_to_me(0, 0);
         assert_eq!(game.current_subtitle_id, 0x1932, "line 3: part 2 (+0x1000)");
         assert!(
             game.dialogue_text_continuation.is_none(),
@@ -3525,7 +3338,7 @@ mod tests {
         // condition 32 `(byte[1b] == 0) |. (rand_bits & 4)` holds on the first
         // ask (ds:1b is still 0), and the line carries the stay-here event 2,
         // which drops the interrupt gate — Leto does not join.
-        game.dispatch_command_handler(0x95e2, 0);
+        game.menu_callback_choice_come_with_me(0, 0);
         let phrase = game.current_subtitle_id;
         assert!(
             (0x800..=0xbff).contains(&phrase),
@@ -3550,7 +3363,7 @@ mod tests {
         // her and ask.
         game.common_dialogue(0x1);
         game.game_phase = 6;
-        game.dispatch_command_handler(0x95e2, 0);
+        game.menu_callback_choice_come_with_me(0, 0);
         assert_eq!(game.dialogue_interrupt_gate, 0xff, "gate must stay armed");
         assert_ne!(game.room_persons[1].flags & 0x40, 0, "flags bit 0x40");
         assert_ne!(game.persons_travelling_with & 2, 0, "travelling bit");
@@ -3562,7 +3375,7 @@ mod tests {
         // menu_npc_actions_cleanup, seg000:97cf) assigns the travelling
         // speaker to companion HUD slot 1 (npc_assign_companion_slot,
         // seg000:9855) and arms its 8-blink counter.
-        game.menu_callback_choice_exit_menu();
+        game.menu_callback_choice_exit_menu(0, 0);
         assert_eq!(game.companion_1, 1, "Jessica in companion slot 1");
         assert_eq!(game.companion_2, -1, "slot 2 stays empty");
         assert_eq!(game.ui_hud_companion_blink[0], 0x10, "blink armed");
@@ -3627,7 +3440,7 @@ mod tests {
             "one dialogue panel after the portrait clicks"
         );
         // Close the reopened dialogue before the STAY HERE checks below.
-        game.menu_callback_choice_exit_menu();
+        game.menu_callback_choice_exit_menu(0, 0);
 
         // A travelling companion is talked to from the HUD portrait, not from a
         // figure standing in the room: her location_and_room (0x2004) is not the
@@ -3648,7 +3461,7 @@ mod tests {
         // Click STAY HERE: the travelling state is cleared again.
         // time_dismissed stays 0: the debounce reads time_joined (= game_time),
         // and game_time has not advanced 2 ticks since.
-        game.dispatch_command_handler(0x9533, 0);
+        game.menu_callback_choice_stay_here(0, 0);
         assert_eq!(game.room_persons[1].flags & 0x40, 0, "flag cleared");
         assert_eq!(
             game.persons_travelling_with & 2,
@@ -3666,7 +3479,7 @@ mod tests {
         // cleanup takes the non-zoom path (loc_0982e) and, with the speaker no
         // longer travelling, calls npc_remove_companion_slot — clearing the slot
         // and its blink counter and reverting the portrait to the empty frame.
-        game.menu_callback_choice_exit_menu();
+        game.menu_callback_choice_exit_menu(0, 0);
         assert_eq!(game.companion_1, -1, "STAY HERE removes the portrait");
         assert_eq!(game.ui_hud_companion_blink[0], 0, "blink cleared");
         assert_eq!(game.ui_elements[21].sprite_id, 0x40, "empty button frame");
@@ -3692,7 +3505,7 @@ mod tests {
         game.pending_room_action = 0;
 
         // TALK TO ME resets the ds:1b counter (seg000:947a).
-        game.menu_callback_choice_talk_to_me();
+        game.menu_callback_choice_talk_to_me(0, 0);
         assert_eq!(game.data_0001b, 0, "TALK TO ME clears the use counter");
     }
 
@@ -4118,7 +3931,7 @@ mod tests {
             }
             game.common_dialogue(0x0);
             while game.game_phase == 1 && game.dialogue_text_continuation.is_some() {
-                game.menu_callback_choice_talk_to_me();
+                game.menu_callback_choice_talk_to_me(0, 0);
             }
         }
         assert_eq!(game.game_phase, 2, "Leto's mission line advances the phase");
@@ -4281,7 +4094,7 @@ mod tests {
 
         // Talk to him: the trampoline stages his troop CONDIT block and runs
         // the common dialogue entry with the FRM head.
-        game.dispatch_command_handler(0x9373, chief.text_id);
+        game.ui_dialogue_related_to_fremen1();
         assert_eq!(game.current_lip_sync_resource_id, 0x0e);
         assert_eq!(game.troop_condit.troop_id, 1, "troop block staged");
         assert_eq!(game.location_condit.spice_density, 0x54, "location staged");
@@ -4296,7 +4109,7 @@ mod tests {
         // and charisma rise, and the re-classified chief now stands behind
         // Fremen 2 (his entry matches the room again).
         let charisma_before = game.charisma;
-        game.dispatch_command_handler(0x95c1, 0x96);
+        game.menu_callback_choice_come_with_me_troop(0x96, 0);
         assert_eq!(game.number_of_rallied_troops, 1, "troop rallied");
         assert_eq!(game.troops[0].occupation, 2, "rallied, awaiting orders");
         assert_eq!(game.charisma, charisma_before + 1);
@@ -4321,7 +4134,7 @@ mod tests {
             1,
             "one NpcActionsMenu entry after the panel rebuild"
         );
-        game.dispatch_command_handler(0xd2e2, 0x94);
+        game.menu_callback_choice_exit_menu(0x94, 0);
         assert_eq!(
             game.get_active_menu_ref(),
             MenuRef::CommandMenuBuf,
@@ -4426,13 +4239,14 @@ mod tests {
         game.build_persons_in_room_records();
         assert_eq!(game.fremen1_troop, Some(2), "chief troop classified");
 
-        // Talk to him: FRM1 with the variant-2 expression.
-        let chief = game
+        // Talk to him through his verb record's bound callback: FRM1 with the
+        // variant-2 expression.
+        let chief = *game
             .active_menu_records()
             .iter()
             .find(|r| r.text_id == 0x78 + 14)
             .expect("the chief's &Person verb");
-        game.dispatch_command_handler(0x9373, chief.text_id);
+        (chief.callback)(&mut game, chief.text_id, 0);
         let head = game
             .talking_head
             .as_ref()
@@ -4530,7 +4344,7 @@ mod tests {
         // rect gets an fb2 save-under and the tiled ICONES background in fb1.
         game.voice_subtitle_mode = 1;
         game.voice_subtitle_mode_default = 1;
-        game.menu_callback_choice_talk_to_me();
+        game.menu_callback_choice_talk_to_me(0, 0);
         let bubble = game.subtitle_bubble.as_ref().expect("balloon overlay");
         assert!(!bubble.strip, "mode 1 draws the balloon");
         assert!(!bubble.saved_fb2.is_empty(), "fb2 save-under grabbed");
@@ -4646,12 +4460,12 @@ mod tests {
         // room and leaves no overlay either way.
         game.voice_subtitle_mode = 2;
         game.voice_subtitle_mode_default = 2;
-        game.menu_callback_choice_talk_to_me();
+        game.menu_callback_choice_talk_to_me(0, 0);
         // The prior balloon was restored and (the line being voiced) no new
         // overlay was drawn.
         assert!(game.subtitle_bubble.is_none(), "mode 2 draws nothing");
 
-        game.menu_callback_choice_exit_menu();
+        game.menu_callback_choice_exit_menu(0, 0);
         assert!(game.subtitle_bubble.is_none(), "cleanup leaves no overlay");
     }
 
@@ -4802,7 +4616,7 @@ we might make in the deep desert of Arrakis where the great worms roam";
         // unchanged, its voice reloads and the head speaks again, and the
         // TALK TO ME verb flips back to its talking variant.
         let phrase = game.current_subtitle_id;
-        game.dispatch_command_handler(0x9ed5, 0x95);
+        game.menu_callback_choice_what(0x95, 0);
         assert_eq!(game.current_subtitle_id, phrase, "the same line replays");
         let head = game.talking_head.as_ref().unwrap();
         assert!(

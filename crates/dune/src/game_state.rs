@@ -1868,7 +1868,7 @@ pub struct GameState {
 
     // = seg001:dce6 _byte_2D196_in_transition? — set while a screen transition /
     // deferred-task drain is in progress; draw_room_game_screen clears it before
-    // the render. See dismiss_stacked_overlays.
+    // the render. See dismiss_stacked_menus.
     pub(crate) in_transition: u8,
 
     // = seg001:dc4b data_0dc4b — set by the post-arrival path
@@ -2686,7 +2686,7 @@ impl GameState {
                     if nibble & 0x05 == 0x05 {
                         // = seg000:d8a8 call call_restore_cursor; call loc_01707.
                         self.call_restore_cursor();
-                        self.menu_callback_choice_continue_for_sequence();
+                        self.menu_callback_choice_continue_for_sequence(0, 0);
                     }
                 } else {
                     // = seg000:d8b1 test al,5; jnz loc_0d8ba — if the LMB is not

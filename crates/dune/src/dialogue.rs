@@ -4,8 +4,8 @@
 //! the zoomed throne room and plays "I am the Duke Leto Atreides, your father."
 //!
 //! Mirrors the contiguous DOS block around seg000:92f2..9472: the per-character
-//! trampolines (dispatched in [`crate::room_game_screen`]'s
-//! `dispatch_command_handler`), the shared setup
+//! trampolines (resolved by [`crate::room_game_screen`]'s
+//! `room_person_callback`), the shared setup
 //! `common_code_for_ui_dialogue_related_functions` (seg000:93aa), and its
 //! callees. Functions are laid out here in DOS address order.
 //!
@@ -271,7 +271,7 @@ impl GameState {
         // Its tail reveals the staged verb panel (play_pending_panel_fold) when
         // a line was presented, or pops it (menu_callback_choice_exit_menu)
         // when the speaker has nothing to say.
-        self.menu_callback_choice_talk_to_me();
+        self.menu_callback_choice_talk_to_me(0, 0);
     }
 
     // = seg000:93df set_dialogue_speaker — record the active dialogue speaker:
@@ -344,7 +344,7 @@ impl GameState {
     // line, 9f9e). Only ONE sentence is presented per talk action; a presented
     // line reveals the staged verb panel (94da jmp play_pending_panel_fold), an
     // exhausted walk pops it (94c0 jmp menu_callback_choice_exit_menu).
-    pub(crate) fn menu_callback_choice_talk_to_me(&mut self) {
+    pub(crate) fn menu_callback_choice_talk_to_me(&mut self, _text_id: u16, _index: usize) {
         // = seg000:9472 call loc_09f40.
         self.prepare_dialogue_presentation();
         // = seg000:9475 data_0226d = 0x0a — not modelled.
@@ -434,7 +434,7 @@ impl GameState {
             if self.current_lip_sync_resource_id != 0x0d || retried_with_auto_mask {
                 // = seg000:94c0 jmp menu_callback_choice_exit_menu — nothing to
                 //   say: pop the dialogue verb panel.
-                self.menu_callback_choice_exit_menu();
+                self.menu_callback_choice_exit_menu(0, 0);
                 return;
             }
             // = seg000:94c3..94d8 — the special-room person (0xd): restart at
@@ -457,7 +457,7 @@ impl GameState {
     // (offered in place of COME WITH ME once the NPC travels with Paul): present
     // the speaker's topic-6 (stay-here) line, then — unless a spoken-line event
     // dropped the interrupt gate — clear their travelling state.
-    pub(crate) fn menu_callback_choice_stay_here(&mut self) {
+    pub(crate) fn menu_callback_choice_stay_here(&mut self, _text_id: u16, _index: usize) {
         // = seg000:9533 call arm_dialogue_interrupt_gate — gate = 0xff.
         self.dialogue_interrupt_gate = 0xff;
         // = seg000:9536 ax = 6; call get_dialogue_topic_record.
@@ -529,7 +529,7 @@ impl GameState {
     // chief's COME WITH ME verb: the charisma check records its outcome in
     // pending_room_action (0 pass / 2 fail) for the topic-5 record's
     // conditions, then falls into menu_callback_choice_come_with_me.
-    pub(crate) fn menu_callback_choice_come_with_me_troop(&mut self) {
+    pub(crate) fn menu_callback_choice_come_with_me_troop(&mut self, text_id: u16, index: usize) {
         // = seg000:95c1..95de — the charisma check: outcome ah = 0 (the chief
         //   agrees) unless the allied population total has reached 1000
         //   (seg000:95c4) and (100 - charisma)/4 exceeds the staged troop's
@@ -545,7 +545,7 @@ impl GameState {
             }
         }
         self.pending_room_action = outcome;
-        self.menu_callback_choice_come_with_me();
+        self.menu_callback_choice_come_with_me(text_id, index);
     }
 
     // = seg000:95e2 menu_callback_choice_come_with_me — the COME WITH ME
@@ -555,7 +555,7 @@ impl GameState {
     // Paul: room-person flags bit 0x40 (which flips their verb to STAY HERE)
     // and their persons_travelling_with bit (which moves them out of the room
     // renders and along on travel).
-    pub(crate) fn menu_callback_choice_come_with_me(&mut self) {
+    pub(crate) fn menu_callback_choice_come_with_me(&mut self, _text_id: u16, _index: usize) {
         // = seg000:95e2 call arm_dialogue_interrupt_gate — gate = 0xff; the
         //   presented line's event callback may change it (event 2 -> 0,
         //   event 7 -> 0x80).
@@ -741,7 +741,7 @@ impl GameState {
     // replay the last-presented line's voice. current_subtitle_id still holds
     // that line's phrase id (show_voice_subtitle), so re-running the
     // loc_09efd load-and-play chain speaks it again with fresh lip-sync.
-    pub(crate) fn menu_callback_choice_what(&mut self) {
+    pub(crate) fn menu_callback_choice_what(&mut self, _text_id: u16, _index: usize) {
         // = seg000:9ed5..9ee6 a room speaker (< 0x10): spin loc_09985 until
         //   the idle head animation reaches a frame boundary (data_047ce & 7)
         //   and re-arm the portrait part-2 flag (data_047e1 0x81 -> 1). The

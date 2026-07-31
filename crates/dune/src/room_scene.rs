@@ -361,7 +361,7 @@ impl GameState {
     // is not ported (see start()).
     pub(crate) fn ui_click_move_room(&mut self, direction: usize) {
         // = seg000:3f28
-        self.dismiss_stacked_overlays();
+        self.dismiss_stacked_menus();
 
         // = seg000:3f2b
         self.pcm_player.end_loop();

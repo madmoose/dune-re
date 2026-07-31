@@ -170,7 +170,7 @@ impl GameState {
             return;
         }
         // = seg000:5a5d call dismiss_stacked_overlays.
-        self.dismiss_stacked_overlays();
+        self.dismiss_stacked_menus();
         // = seg000:5a60 call loc_04aca — data_011ca = 1 (suspend the pending
         //   room-swap machinery while the map owns the screen).
         self.data_011ca = 1;
@@ -257,7 +257,11 @@ impl GameState {
     // main menu's SEE SPICE DENSITY verb: a toggle. With the overlay up it
     // leaves it; otherwise it raises it with the map main menu as the panel's
     // menu (data_04720 = 0x1e6e).
-    pub(crate) fn menu_callback_choice_map_main_see_spice_density(&mut self) {
+    pub(crate) fn menu_callback_choice_map_main_see_spice_density(
+        &mut self,
+        _text_id: u16,
+        _index: usize,
+    ) {
         // = seg000:53f1 data_04722 = 0 — the spice-density mode (not the
         //   ecology one).
         self.map_overlay_mode = 0;
@@ -634,7 +638,11 @@ impl GameState {
     // destination-pick mode, show the instruction caption and push the pick
     // menu (the plain Cancel menu, or the prospector's multi-destination
     // menu for troops[2]).
-    pub(crate) fn menu_callback_choice_multiple_move_troop(&mut self) {
+    pub(crate) fn menu_callback_choice_multiple_move_troop(
+        &mut self,
+        _text_id: u16,
+        _index: usize,
+    ) {
         // = seg000:8064/8067 install mouse_handlers_01aac.
         self.active_mouse_handlers = &MOVE_TROOP_MOUSE_HANDLERS;
         // = seg000:806a call contact_verb_troop.
@@ -748,7 +756,7 @@ impl GameState {
         let y = self.mouse_pos_y as i16;
         // = seg000:81ef..81f6 the gate; a miss exits the menu (loc_08246).
         if !self.map_view_clip_rect().in_rect(x, y) {
-            self.menu_callback_choice_exit_menu();
+            self.menu_callback_choice_exit_menu(0, 0);
             self.open_onmap_spritesheet();
             return;
         }
@@ -813,7 +821,11 @@ impl GameState {
     // = seg000:8214 menu_callback_choice_map_move_prospectors_done — the
     // shared done path: also entered by a valid pick's fall-through with the
     // picked destination.
-    pub(crate) fn menu_callback_choice_map_move_prospectors_done(&mut self) {
+    pub(crate) fn menu_callback_choice_map_move_prospectors_done(
+        &mut self,
+        _text_id: u16,
+        _index: usize,
+    ) {
         self.move_troop_finalize_order(None);
     }
 
@@ -833,7 +845,7 @@ impl GameState {
             let head = self.prospector_destinations[0];
             if head == 0 {
                 // = seg000:8233 jz loc_08246.
-                self.menu_callback_choice_exit_menu();
+                self.menu_callback_choice_exit_menu(0, 0);
                 self.open_onmap_spritesheet();
                 return;
             }
@@ -847,7 +859,7 @@ impl GameState {
         // = seg000:8235/8238 the acknowledgement line; a spoken-line event
         //   that drops the gate refuses the order (loc_08246).
         if !self.troop_present_move_acknowledgement(ti, dest_li) {
-            self.menu_callback_choice_exit_menu();
+            self.menu_callback_choice_exit_menu(0, 0);
             self.open_onmap_spritesheet();
             return;
         }
@@ -878,7 +890,11 @@ impl GameState {
     // destinations — the GIVE NEW DESTINATIONS verb: reset the queue and
     // redraw (loc_08286: the overlay redraw is unported, the menu ungreys
     // and re-inserts).
-    pub(crate) fn menu_callback_choice_map_move_prospectors_give_new_destinations(&mut self) {
+    pub(crate) fn menu_callback_choice_map_move_prospectors_give_new_destinations(
+        &mut self,
+        _text_id: u16,
+        _index: usize,
+    ) {
         self.give_new_destinations_for_prospectors();
         self.move_prospectors_configure_menu();
         self.menu_stack_push(
@@ -962,7 +978,7 @@ impl GameState {
         if let Some(ti) = self.contact_verb_troop() {
             if self.map_contact_troop == Some(ti) {
                 self.dialogue_resume_entry_ptr = 0;
-                self.menu_callback_choice_map_troop_dialogue_ask_for_more_information();
+                self.menu_callback_choice_map_troop_dialogue_ask_for_more_information(0, 0);
             }
         }
         // = seg000:82d3 back to fb1.
@@ -1300,7 +1316,7 @@ impl GameState {
         //   through the no-more-orders path, folded back in.
         if self.map_selected_troop_id != 0 {
             self.screen_overlay_request_transition();
-            self.menu_callback_choice_multiple_no_more_orders();
+            self.menu_callback_choice_multiple_no_more_orders(0, 0);
             self.play_pending_panel_fold();
         }
     }
@@ -1491,7 +1507,11 @@ impl GameState {
     // = seg000:7bed menu_callback_choice_map_troop_dialogue_ask_for_more_
     // information — the order menu's first verb: ask the contacted troop for
     // its next line.
-    pub(crate) fn menu_callback_choice_map_troop_dialogue_ask_for_more_information(&mut self) {
+    pub(crate) fn menu_callback_choice_map_troop_dialogue_ask_for_more_information(
+        &mut self,
+        _text_id: u16,
+        _index: usize,
+    ) {
         // = seg000:7bed/7bf4 with the equipment spinners up (data_046f4) AND
         //   the spinner sub-mode armed (data_046f5) the verb is a spinner
         //   click instead (loc_07e97). Neither is ported, so the verb always
@@ -1507,7 +1527,11 @@ impl GameState {
     // occupation — the CHANGE / SELECT TROOP OCCUPATION verb: pick the
     // occupation submenu the troop's current occupation calls for, apply its
     // grey rules, and stage it over the order menu.
-    pub(crate) fn menu_callback_choice_map_troop_dialogue_change_troop_occupation(&mut self) {
+    pub(crate) fn menu_callback_choice_map_troop_dialogue_change_troop_occupation(
+        &mut self,
+        _text_id: u16,
+        _index: usize,
+    ) {
         // = seg000:69b3 call contact_verb_troop — the troop the contact verbs act on.
         let Some(ti) = self.contact_verb_troop() else {
             return;
@@ -1579,7 +1603,11 @@ impl GameState {
     // = seg000:6a71 menu_callback_choice_troop_occupation_specialize_in_spice
     // — SPECIALIZE IN SPICE: occupation 0 (spice mining), except the
     // Prospector troop, which prospects (1) instead.
-    pub(crate) fn menu_callback_choice_troop_occupation_specialize_in_spice(&mut self) {
+    pub(crate) fn menu_callback_choice_troop_occupation_specialize_in_spice(
+        &mut self,
+        _text_id: u16,
+        _index: usize,
+    ) {
         // = seg000:6a71/6a74 call contact_verb_troop; cl = 0.
         let Some(ti) = self.contact_verb_troop() else {
             return;
@@ -1600,7 +1628,11 @@ impl GameState {
 
     // = seg000:6a83 menu_callback_choice_troop_occupation_specialize_in_army —
     // SPECIALIZE IN ARMY: occupation 4 (military training).
-    pub(crate) fn menu_callback_choice_troop_occupation_specialize_in_army(&mut self) {
+    pub(crate) fn menu_callback_choice_troop_occupation_specialize_in_army(
+        &mut self,
+        _text_id: u16,
+        _index: usize,
+    ) {
         let Some(ti) = self.contact_verb_troop() else {
             return;
         };
@@ -1609,7 +1641,11 @@ impl GameState {
 
     // = seg000:6a87 menu_callback_choice_troop_occupation_specialize_in_ecology
     // — SPECIALIZE IN ECOLOGY: occupation 8 (irrigation and tree care).
-    pub(crate) fn menu_callback_choice_troop_occupation_specialize_in_ecology(&mut self) {
+    pub(crate) fn menu_callback_choice_troop_occupation_specialize_in_ecology(
+        &mut self,
+        _text_id: u16,
+        _index: usize,
+    ) {
         let Some(ti) = self.contact_verb_troop() else {
             return;
         };
@@ -1621,7 +1657,11 @@ impl GameState {
     // choice_troop_occupation_common_code: the verb keeps the troop's
     // occupation CLASS (bits 2-3) and replaces the job within it (al = 1 here,
     // so an ecology troop goes from irrigation 8 to wind-trap assembly 9).
-    pub(crate) fn menu_callback_choice_troop_occupation_assembly_wind_trap(&mut self) {
+    pub(crate) fn menu_callback_choice_troop_occupation_assembly_wind_trap(
+        &mut self,
+        _text_id: u16,
+        _index: usize,
+    ) {
         self.troop_occupation_within_class(1);
     }
 
@@ -1644,7 +1684,7 @@ impl GameState {
     fn troop_occupation_verb_apply(&mut self, ti: usize, new: u8) {
         // = seg000:6a8c..6a93 an unchanged occupation only closes the menu.
         if self.troops[ti].occupation & 0x0f == new {
-            self.menu_callback_choice_exit_menu();
+            self.menu_callback_choice_exit_menu(0, 0);
             return;
         }
         // = seg000:6a95..6a99 push the old occupation byte and the speech word
@@ -1676,7 +1716,7 @@ impl GameState {
         }
         // = seg000:6ab5 jmp menu_callback_choice_exit_menu — close the
         //   occupation submenu, revealing the order menu under it.
-        self.menu_callback_choice_exit_menu();
+        self.menu_callback_choice_exit_menu(0, 0);
     }
 
     // = seg000:7bb9 troop_present_reaction_line (+ loc_07bbe) — present one
@@ -1932,7 +1972,11 @@ impl GameState {
     // = seg000:5a03 loc_05a03 — GIVE ORDERS TO TROOP from the dialogue panel:
     // the Fremen leader you are talking to is contacted on the full-planet map
     // instead, with the map opened on him and his order menu already up.
-    pub(crate) fn menu_callback_choice_give_orders_to_troop(&mut self) {
+    pub(crate) fn menu_callback_choice_give_orders_to_troop(
+        &mut self,
+        _text_id: u16,
+        _index: usize,
+    ) {
         // = seg000:5a03 call subtitle_restore_prior — take the speech balloon
         //   down before the room goes away.
         self.subtitle_restore_prior();
@@ -1965,7 +2009,11 @@ impl GameState {
     // short enough that only the player's own location is reachable
     // (map_setup_main_menu picks the wording). Resumes the last contacted
     // troop when nothing is selected, else cycles to the next one.
-    pub(crate) fn menu_callback_choice_map_main_contact_fremen_troops(&mut self) {
+    pub(crate) fn menu_callback_choice_map_main_contact_fremen_troops(
+        &mut self,
+        _text_id: u16,
+        _index: usize,
+    ) {
         // = seg000:86cc call map_dismiss_rallied_troops_popup.
         self.map_close_rallied_troops_popup();
         // = seg000:86cf cmp number_of_rallied_troops,0; jz ret — no Fremen
@@ -1983,14 +2031,14 @@ impl GameState {
         //   the last contacted one (data_01955).
         // = seg000:86e0 or al,al; jnz — a live selection cycles on.
         if self.map_selected_troop_id != 0 {
-            self.menu_callback_choice_map_troop_contact_next_troop();
+            self.menu_callback_choice_map_troop_contact_next_troop(0, 0);
             return;
         }
         // = seg000:86e4/86e8 al = ah; or al,al; jz — nothing contacted yet
         //   either, so start the cycle from troop id 0.
         let last = self.map_last_selected_troop_id;
         if last == 0 {
-            self.menu_callback_choice_map_troop_contact_next_troop();
+            self.menu_callback_choice_map_troop_contact_next_troop(0, 0);
             return;
         }
         // = seg000:86ea data_01954 = ah; 86ed call get_address_of_troop_by_ID;
@@ -2004,7 +2052,7 @@ impl GameState {
         }
         // = seg000:86f5 data_01954 = 0; falls into the next-troop scan.
         self.map_selected_troop_id = 0;
-        self.menu_callback_choice_map_troop_contact_next_troop();
+        self.menu_callback_choice_map_troop_contact_next_troop(0, 0);
     }
 
     // = seg000:86b9 map_contact_troop_at_current_location — the GIVE ORDERS TO
@@ -2036,7 +2084,11 @@ impl GameState {
     // = seg000:86fa menu_callback_choice_map_troop_contact_next_troop — the
     // NEXT TROOP verb: of the troops with an icon on the map, contact the one
     // whose id follows the selected one cyclically.
-    pub(crate) fn menu_callback_choice_map_troop_contact_next_troop(&mut self) {
+    pub(crate) fn menu_callback_choice_map_troop_contact_next_troop(
+        &mut self,
+        _text_id: u16,
+        _index: usize,
+    ) {
         // = seg000:86fa si = troop_icon_count; lodsw; cx = ax; jcxz ret.
         if self.troop_icons.is_empty() {
             return;
@@ -2272,12 +2324,16 @@ impl GameState {
     // from the room's troop path (loc_05a03, which bumped
     // map_view_reentry_count) — returns to the room the orders were given
     // from. Also called by the map's LMB miss (seg000:5cdd).
-    pub(crate) fn menu_callback_choice_multiple_no_more_orders(&mut self) {
+    pub(crate) fn menu_callback_choice_multiple_no_more_orders(
+        &mut self,
+        _text_id: u16,
+        _index: usize,
+    ) {
         // = seg000:8763 cmp map_view_reentry_count,0; jz — the count is zeroed
         //   by the call below, so the room toggle is decided up front.
         let reentered = self.map_view_reentry_count != 0;
         // = seg000:8768/876a either way the contact is cut.
-        self.menu_callback_choice_map_troop_contact_no_more_orders();
+        self.menu_callback_choice_map_troop_contact_no_more_orders(0, 0);
         // = seg000:876d jmp ui_toggle_room_view.
         if reentered {
             self.ui_toggle_room_view();
@@ -2287,7 +2343,11 @@ impl GameState {
     // = seg000:8770 menu_callback_choice_map_troop_contact_no_more_orders — the
     // cycle menu's NO MORE ORDERS slot: put the map main menu back, which pops
     // the contact menu — and with it the teardown — on the way in.
-    pub(crate) fn menu_callback_choice_map_troop_contact_no_more_orders(&mut self) {
+    pub(crate) fn menu_callback_choice_map_troop_contact_no_more_orders(
+        &mut self,
+        _text_id: u16,
+        _index: usize,
+    ) {
         // = seg000:8770 cmp data_01954,0; jz ret — no troop is selected, so
         //   there is no contact to end.
         if self.map_selected_troop_id == 0 {
@@ -3164,7 +3224,11 @@ impl GameState {
 
     // = seg000:50db menu_callback_choice_move_to_location_orni — GO THERE
     // FLYING AN ORNI: set ornithopter travel and confirm it.
-    pub(crate) fn menu_callback_choice_move_to_location_orni(&mut self) {
+    pub(crate) fn menu_callback_choice_move_to_location_orni(
+        &mut self,
+        _text_id: u16,
+        _index: usize,
+    ) {
         // = seg000:50db travel_vehicle_mode = 2; map_ornithopter_mode = 1.
         self.travel_vehicle_mode = 2;
         self.map_ornithopter_mode = 1;
@@ -3175,7 +3239,11 @@ impl GameState {
 
     // = seg000:50ea menu_callback_choice_move_to_location_worm — GO THERE
     // RIDING A WORM: the worm setup (loc_04285, CALL A WORM) is not ported.
-    pub(crate) fn menu_callback_choice_move_to_location_worm(&mut self) {
+    pub(crate) fn menu_callback_choice_move_to_location_worm(
+        &mut self,
+        _text_id: u16,
+        _index: usize,
+    ) {
         println!("GO THERE RIDING A WORM: the worm setup (loc_04285) is not ported");
     }
 
@@ -3190,7 +3258,7 @@ impl GameState {
         };
         let destination = crate::locations::location_ptr(li as u16);
         // = seg000:50f5 call dismiss_stacked_overlays; 50f8 travel_reset_trail.
-        self.dismiss_stacked_overlays();
+        self.dismiss_stacked_menus();
         self.travel_reset_trail();
         // = seg000:50fb/50ff dx = location_and_room, bx = location_appearance —
         //   the room the player is standing in, read after the overlays are
@@ -3274,7 +3342,7 @@ mod tests {
         game.locations[13].status |= 0x10;
 
         // The SEE DUNE MAP verb (record seg001:220c, handler 0x186b).
-        game.dispatch_command_handler(0x186b, cmd::SEE_DUNE_MAP);
+        game.ui_toggle_room_view();
         while rx.try_recv().is_ok() {}
 
         assert_eq!(game.data_046eb, 0x80, "full-map mode owns the screen");
@@ -3458,7 +3526,7 @@ mod tests {
             .unwrap();
         // Cancel (the menu's second verb) pops the menu; its cleanup closes
         // the info panel.
-        game.dispatch_command_handler(0xd2e2, 0xa3);
+        game.menu_callback_choice_exit_menu(0xa3, 0);
         while rx.try_recv().is_ok() {}
         assert_eq!(game.map_location_popup_loc, None, "location popup closed");
         assert_eq!(game.map_popup_ptr, 0);
@@ -3594,7 +3662,7 @@ mod tests {
             .unwrap();
 
         // EXIT MAPS (menu_map_main record 0) back to the room.
-        game.dispatch_command_handler(0x186b, 0x63);
+        game.ui_toggle_room_view();
         while rx.try_recv().is_ok() {}
         assert_eq!(game.data_046eb, 0, "back in the plain room view");
         assert_eq!(
@@ -3632,9 +3700,9 @@ mod tests {
         assert_eq!(game.current_room, 6, "standing in an inner room");
 
         // SEE DUNE MAP, then GO THERE FLYING AN ORNI on a location popup.
-        game.dispatch_command_handler(0x186b, 0x98);
+        game.ui_toggle_room_view();
         game.map_location_popup_loc = Some(13);
-        game.dispatch_command_handler(0x50db, 0);
+        game.menu_callback_choice_move_to_location_orni(0, 0);
         while rx.try_recv().is_ok() {}
 
         // location_and_room already carries the first travel step's desert
@@ -3692,10 +3760,10 @@ mod tests {
         assert_eq!(game.current_room, 6, "standing in an inner room");
 
         // SEE DUNE MAP, then the map menu's TAKE AN ORNITHOPTER.
-        game.dispatch_command_handler(0x186b, cmd::SEE_DUNE_MAP);
+        game.ui_toggle_room_view();
         while rx.try_recv().is_ok() {}
         assert_eq!(game.data_046eb, 0x80, "full-map mode owns the screen");
-        game.dispatch_command_handler(0x42d9, cmd::TAKE_AN_ORNITHOPTER);
+        game.menu_callback_choice_map_main_take_an_ornithopter(cmd::TAKE_AN_ORNITHOPTER, 0);
         while rx.try_recv().is_ok() {}
 
         // The commit boarded from the pad room 1, rotating the inner room
@@ -3760,7 +3828,7 @@ mod tests {
         game.troops[2].occupation = 0x02;
         game.number_of_rallied_troops = 1;
         game.location_visibility_distance = 4;
-        game.dispatch_command_handler(0x186b, cmd::SEE_DUNE_MAP);
+        game.ui_toggle_room_view();
         while rx.try_recv().is_ok() {}
         let (px, plat) = game.get_map_position();
         game.troops[2].gps_coordinates_1 = px;
@@ -3772,7 +3840,10 @@ mod tests {
         // CHANGE TROOP OCCUPATION stages the occupation submenu over the
         // order menu — the verb below closes that submenu, so the order menu
         // (and with it the selection) survives the scene, as in the game.
-        game.dispatch_command_handler(0x69b3, cmd::CHANGE_TROOP_OCCUPATION);
+        game.menu_callback_choice_map_troop_dialogue_change_troop_occupation(
+            cmd::CHANGE_TROOP_OCCUPATION,
+            0,
+        );
         while rx.try_recv().is_ok() {}
         assert_eq!(
             game.get_active_menu_ref(),
@@ -3782,7 +3853,7 @@ mod tests {
 
         // SPECIALIZE IN SPICE: occupation 1, the first line, and the scene's
         // " Continue…" panel (the prospector variant, with the WHAT? slot).
-        game.dispatch_command_handler(0x6a71, cmd::SPECIALIZE_IN_SPICE);
+        game.menu_callback_choice_troop_occupation_specialize_in_spice(cmd::SPECIALIZE_IN_SPICE, 0);
         while rx.try_recv().is_ok() {}
         assert_eq!(
             game.troops[2].occupation & 0x0f,
@@ -3804,7 +3875,7 @@ mod tests {
         // plays over it.
         game.mouse_pos_x = 0;
         game.mouse_pos_y = 0;
-        game.menu_callback_choice_continue_for_sequence();
+        game.menu_callback_choice_continue_for_sequence(0, 0);
         while rx.try_recv().is_ok() {}
         assert_ne!(game.data_046eb & 0x40, 0, "the spice-density overlay is up");
         // (The panel registers itself in a popup slot as it is raised
@@ -3838,7 +3909,7 @@ mod tests {
             .unwrap();
 
         // Continue again: the overlay goes away and the closing line plays.
-        game.menu_callback_choice_continue_for_sequence();
+        game.menu_callback_choice_continue_for_sequence(0, 0);
         while rx.try_recv().is_ok() {}
         assert_eq!(game.data_046eb & 0x40, 0, "the overlay is down");
         assert_eq!(
@@ -3853,7 +3924,7 @@ mod tests {
 
         // The last Continue reads the 0xff fence: the scene ends and the
         // contacted troop's order menu comes back.
-        game.menu_callback_choice_continue_for_sequence();
+        game.menu_callback_choice_continue_for_sequence(0, 0);
         while rx.try_recv().is_ok() {}
         assert!(game.sequence_script.is_none(), "the scene ended");
         assert!(!game.is_dialogue_active, "the screen is handed back");
@@ -3890,12 +3961,12 @@ mod tests {
         game.troops[0].motivation = 80;
         game.number_of_rallied_troops = 1;
         game.location_visibility_distance = 4;
-        game.dispatch_command_handler(0x186b, cmd::SEE_DUNE_MAP);
+        game.ui_toggle_room_view();
         while rx.try_recv().is_ok() {}
         let (px, plat) = game.get_map_position();
         game.troops[0].gps_coordinates_1 = px;
         game.troops[0].gps_coordinates_2 = plat as u16;
-        game.dispatch_command_handler(0x86cc, cmd::CONTACT_FREMEN_TROOPS);
+        game.menu_callback_choice_map_main_contact_fremen_troops(cmd::CONTACT_FREMEN_TROOPS, 0);
         while rx.try_recv().is_ok() {}
         assert_eq!(game.map_selected_troop_id, 1, "troop 1 contacted");
         assert_eq!(
@@ -3906,7 +3977,7 @@ mod tests {
 
         // MOVE TROOP: the pick mode, its Cancel menu, and the instruction
         // caption in the popup box.
-        game.dispatch_command_handler(0x8064, cmd::MOVE_TROOP);
+        game.menu_callback_choice_multiple_move_troop(cmd::MOVE_TROOP, 0);
         while rx.try_recv().is_ok() {}
         assert_eq!(
             game.get_active_menu_ref(),
@@ -3987,7 +4058,7 @@ mod tests {
             MenuRef::MenuChangeTroopDestination,
             "a moving troop gets the CHANGE DESTINATION menu"
         );
-        game.dispatch_command_handler(0x8064, cmd::CHANGE_DESTINATION);
+        game.menu_callback_choice_multiple_move_troop(cmd::CHANGE_DESTINATION, 0);
         while rx.try_recv().is_ok() {}
         game.mouse_pos_x = 10;
         game.mouse_pos_y = 190;
@@ -4026,7 +4097,7 @@ mod tests {
         game.troops[2].motivation = 80;
         game.number_of_rallied_troops = 1;
         game.location_visibility_distance = 4;
-        game.dispatch_command_handler(0x186b, cmd::SEE_DUNE_MAP);
+        game.ui_toggle_room_view();
         while rx.try_recv().is_ok() {}
         let (px, plat) = game.get_map_position();
         game.troops[2].gps_coordinates_1 = px;
@@ -4036,7 +4107,7 @@ mod tests {
         while rx.try_recv().is_ok() {}
 
         // MOVE TROOP brings up the prospector menu with an empty queue.
-        game.dispatch_command_handler(0x8064, cmd::MOVE_TROOP);
+        game.menu_callback_choice_multiple_move_troop(cmd::MOVE_TROOP, 0);
         while rx.try_recv().is_ok() {}
         assert_eq!(
             game.get_active_menu_ref(),
@@ -4085,7 +4156,7 @@ mod tests {
         // this troop's dialogue takes here, so the assertions stop at the
         // queue. The accepted-order path is covered by move_troop_orders_a_
         // contacted_troop_to_a_marker.
-        game.dispatch_command_handler(0x8214, cmd::DONE);
+        game.menu_callback_choice_map_move_prospectors_done(cmd::DONE, 0);
         while rx.try_recv().is_ok() {}
         let head = crate::locations::location_ptr_from_index(sietches[0].location_index as usize);
         let second = crate::locations::location_ptr_from_index(sietches[1].location_index as usize);
@@ -4121,7 +4192,7 @@ mod tests {
         game.locations[13].status |= 0x10;
         game.number_of_rallied_troops = 2;
         game.location_visibility_distance = 4;
-        game.dispatch_command_handler(0x186b, cmd::SEE_DUNE_MAP);
+        game.ui_toggle_room_view();
         while rx.try_recv().is_ok() {}
         assert_eq!(
             game.menu_map_troops.records[1].text_id,
@@ -4141,7 +4212,7 @@ mod tests {
 
         // The verb with nothing selected and nothing contacted yet starts the
         // cycle from id 0, so the lowest rallied troop id wins.
-        game.dispatch_command_handler(0x86cc, cmd::CONTACT_FREMEN_TROOPS);
+        game.menu_callback_choice_map_main_contact_fremen_troops(cmd::CONTACT_FREMEN_TROOPS, 0);
         while rx.try_recv().is_ok() {}
         assert_eq!(game.map_selected_troop_id, 1, "troop 1 contacted");
         assert_eq!(game.map_last_selected_troop_id, 1, "latched in data_01955");
@@ -4231,7 +4302,10 @@ mod tests {
         // popup stays this troop's and the resume cursor moves on.
         let first_line = game.current_subtitle_id;
         let resume = game.dialogue_resume_entry_ptr;
-        game.dispatch_command_handler(0x7bed, cmd::ASK_FOR_MORE_INFORMATION);
+        game.menu_callback_choice_map_troop_dialogue_ask_for_more_information(
+            cmd::ASK_FOR_MORE_INFORMATION,
+            0,
+        );
         while rx.try_recv().is_ok() {}
         assert_eq!(game.map_contact_troop, Some(0), "still troop 1's popup");
         assert!(
@@ -4244,7 +4318,10 @@ mod tests {
         // menu: GO & SEARCH FOR EQUIPMENT (greyed below game_phase 0x10),
         // SPECIALIZE IN ARMY, SPECIALIZE IN ECOLOGY (greyed without the
         // Paul-events 0x20 bit) and Cancel.
-        game.dispatch_command_handler(0x69b3, cmd::CHANGE_TROOP_OCCUPATION);
+        game.menu_callback_choice_map_troop_dialogue_change_troop_occupation(
+            cmd::CHANGE_TROOP_OCCUPATION,
+            0,
+        );
         while rx.try_recv().is_ok() {}
         assert_eq!(
             game.get_active_menu_ref(),
@@ -4272,7 +4349,7 @@ mod tests {
             .unwrap();
         // Cancel pops it back to the order menu (the contact menu is 0xfc, the
         // submenu 0xf8, so the push deepened the stack rather than replacing).
-        game.dispatch_command_handler(0xd2e2, cmd::CANCEL);
+        game.menu_callback_choice_exit_menu(cmd::CANCEL, 0);
         while rx.try_recv().is_ok() {}
         assert_eq!(
             game.get_active_menu_ref(),
@@ -4286,7 +4363,10 @@ mod tests {
         game.troops[0].occupation = 0x08;
         game.bitfield_paul_events |= 0x20;
         game.game_phase = 0x10;
-        game.dispatch_command_handler(0x69b3, cmd::CHANGE_TROOP_OCCUPATION);
+        game.menu_callback_choice_map_troop_dialogue_change_troop_occupation(
+            cmd::CHANGE_TROOP_OCCUPATION,
+            0,
+        );
         while rx.try_recv().is_ok() {}
         let occ: Vec<u16> = game
             .menu_occupation_for_ecology_troop
@@ -4350,7 +4430,7 @@ mod tests {
         // test asserts the outcome that matches the gate.)
         game.troops[0].occupation = 0x08;
         let before = game.troops[0].occupation;
-        game.dispatch_command_handler(0x6a83, cmd::SPECIALIZE_IN_ARMY);
+        game.menu_callback_choice_troop_occupation_specialize_in_army(cmd::SPECIALIZE_IN_ARMY, 0);
         while rx.try_recv().is_ok() {}
         if game.dialogue_interrupt_gate == 0xff {
             assert_eq!(game.troops[0].occupation & 0x0f, 4, "the troop agreed");
@@ -4374,7 +4454,10 @@ mod tests {
         // An army troop's submenu is the army one, with the greys rebuilt for
         // the new occupation.
         game.troops[0].occupation = 0x04;
-        game.dispatch_command_handler(0x69b3, cmd::CHANGE_TROOP_OCCUPATION);
+        game.menu_callback_choice_map_troop_dialogue_change_troop_occupation(
+            cmd::CHANGE_TROOP_OCCUPATION,
+            0,
+        );
         while rx.try_recv().is_ok() {}
         let occ: Vec<u16> = game
             .menu_occupation_for_army_troop
@@ -4393,12 +4476,12 @@ mod tests {
             ],
             "the army troop's occupation menu, ESPIONAGE greyed with no Harkonnen area near"
         );
-        game.dispatch_command_handler(0xd2e2, cmd::CANCEL);
+        game.menu_callback_choice_exit_menu(cmd::CANCEL, 0);
         game.troops[0].occupation = 0x01;
         while rx.try_recv().is_ok() {}
 
         // NEXT TROOP walks to the next id above the selection, then wraps.
-        game.dispatch_command_handler(0x86fa, cmd::NEXT_TROOP);
+        game.menu_callback_choice_map_troop_contact_next_troop(cmd::NEXT_TROOP, 0);
         while rx.try_recv().is_ok() {}
         assert_eq!(
             game.map_selected_troop_id, second_id,
@@ -4411,14 +4494,14 @@ mod tests {
             cmd::CHANGE_TROOP_OCCUPATION,
             "a mining troop can be reassigned"
         );
-        game.dispatch_command_handler(0x86fa, cmd::NEXT_TROOP);
+        game.menu_callback_choice_map_troop_contact_next_troop(cmd::NEXT_TROOP, 0);
         while rx.try_recv().is_ok() {}
         assert_eq!(game.map_selected_troop_id, 1, "wrapped back to troop 1");
 
         // CUT CONTACT: map_setup_main_menu's 0xff push pops the contact menu,
         // whose cleanup drops the selection and the ring. data_01955 keeps the
         // id so the verb can resume it.
-        game.dispatch_command_handler(0x8763, cmd::CUT_CONTACT);
+        game.menu_callback_choice_multiple_no_more_orders(cmd::CUT_CONTACT, 0);
         while rx.try_recv().is_ok() {}
         assert_eq!(
             game.get_active_menu_ref(),
@@ -4432,7 +4515,7 @@ mod tests {
 
         // The verb again resumes the last contacted troop rather than starting
         // the cycle over.
-        game.dispatch_command_handler(0x86cc, cmd::CONTACT_FREMEN_TROOPS);
+        game.menu_callback_choice_map_main_contact_fremen_troops(cmd::CONTACT_FREMEN_TROOPS, 0);
         while rx.try_recv().is_ok() {}
         assert_eq!(game.map_selected_troop_id, 1, "resumed troop 1");
         game.screen
@@ -4441,9 +4524,9 @@ mod tests {
 
         // A troop on the move (occupation bit 6) gets the change-destination
         // menu instead of the order menu.
-        game.dispatch_command_handler(0x8763, cmd::CUT_CONTACT);
+        game.menu_callback_choice_multiple_no_more_orders(cmd::CUT_CONTACT, 0);
         game.troops[0].occupation |= 0x40;
-        game.dispatch_command_handler(0x86cc, cmd::CONTACT_FREMEN_TROOPS);
+        game.menu_callback_choice_map_main_contact_fremen_troops(cmd::CONTACT_FREMEN_TROOPS, 0);
         while rx.try_recv().is_ok() {}
         assert_eq!(game.map_selected_troop_id, 1);
         assert_eq!(
@@ -4454,7 +4537,7 @@ mod tests {
 
         // Out of visibility range (troop_07c63 > location_visibility_distance)
         // only the cycle menu is offered.
-        game.dispatch_command_handler(0x8763, cmd::CUT_CONTACT);
+        game.menu_callback_choice_multiple_no_more_orders(cmd::CUT_CONTACT, 0);
         game.troops[0].occupation = 0x01;
         game.troops[0].gps_coordinates_2 = (plat + 50) as u16;
         game.map_selected_troop_id = 1;
@@ -4486,7 +4569,7 @@ mod tests {
         game.set_headless();
         game.start(true);
         while rx.try_recv().is_ok() {}
-        game.dispatch_command_handler(0x186b, cmd::SEE_DUNE_MAP);
+        game.ui_toggle_room_view();
         while rx.try_recv().is_ok() {}
 
         for lat in [-0x4b, 0, 0x4b] {
@@ -4549,7 +4632,7 @@ mod tests {
         game.troops[ti].gps_coordinates_2 = plat as u16;
         let troop_id = game.troops[ti].troop_id;
 
-        game.dispatch_command_handler(0x5a03, cmd::GIVE_ORDERS_TO_TROOP);
+        game.menu_callback_choice_give_orders_to_troop(cmd::GIVE_ORDERS_TO_TROOP, 0);
         while rx.try_recv().is_ok() {}
 
         // The map view owns the screen, with that troop selected and contacted.
@@ -4578,7 +4661,7 @@ mod tests {
         );
 
         // NO MORE ORDERS returns to the room it was given from.
-        game.dispatch_command_handler(0x8763, cmd::NO_MORE_ORDERS);
+        game.menu_callback_choice_multiple_no_more_orders(cmd::NO_MORE_ORDERS, 0);
         while rx.try_recv().is_ok() {}
         assert_eq!(game.data_046eb, 0, "back in the room view");
         assert_eq!(game.map_view_reentry_count, 0, "the detour is over");

@@ -81,7 +81,7 @@ impl GameState {
         //   menu_done (0x2012) is shared with the unported on-map troop screen;
         //   the palace plan is the only view the port pushes it for.
         if self.get_active_menu_ref() == MenuRef::MenuDone {
-            self.menu_callback_choice_exit_menu();
+            self.menu_callback_choice_exit_menu(0, 0);
             return;
         }
         // = seg000:18fa cmp ah,20h; jnz ret / cmp al,1; jz ret — only open over a
@@ -94,7 +94,7 @@ impl GameState {
         //   click anywhere over the plan now closes it.
         self.active_mouse_handlers = &PALACE_PLAN_MOUSE_HANDLERS;
         // = seg000:190c call dismiss_stacked_overlays.
-        self.dismiss_stacked_overlays();
+        self.dismiss_stacked_menus();
         // = seg000:190f call set_fb1_as_active_framebuffer — compose offscreen.
         self.set_fb1_as_active_framebuffer();
         // = seg000:1912 si=data_0143c; al=0f1h; es=[_word_2D08A_framebuffer_
@@ -245,7 +245,7 @@ impl GameState {
     // = [si+2] of mouse_handlers_01aba — the LMB press is menu_callback_choice_
     // exit_menu (0xd2e2): a click anywhere over the plan closes it.
     fn palace_plan_lmb(&mut self) {
-        self.menu_callback_choice_exit_menu();
+        self.menu_callback_choice_exit_menu(0, 0);
     }
 
     // = [si+4]/[si+6]/[si+8]/[si+0ah]/[si+0ch] of mouse_handlers_01aba — the RMB,

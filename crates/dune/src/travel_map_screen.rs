@@ -173,7 +173,11 @@ impl GameState {
     // DUNE MAP view: board from the current location's outdoor room 1, leave the
     // full-planet map for the room view, then fall through into the notransition
     // tail that opens the cockpit map.
-    pub(crate) fn menu_callback_choice_map_main_take_an_ornithopter(&mut self) {
+    pub(crate) fn menu_callback_choice_map_main_take_an_ornithopter(
+        &mut self,
+        _text_id: u16,
+        _index: usize,
+    ) {
         // = seg000:42d9/42dd dx = location_and_room, bx = location_appearance;
         //   42e1 dl = 1 — the orni boards from the location's outdoor room 1
         //   (the pad), whatever room the map was opened from.
@@ -187,7 +191,7 @@ impl GameState {
         //   down and re-enter the room view.
         self.ui_toggle_room_view();
         // = seg000:42e9 falls through into the notransition entry.
-        self.menu_callback_choice_map_main_take_an_ornithopter_notransition();
+        self.menu_callback_choice_map_main_take_an_ornithopter_notransition(0, 0);
     }
 
     // = seg000:42e9 menu_callback_choice_map_main_take_an_ornithopter_notransition
@@ -195,7 +199,11 @@ impl GameState {
     // map screen in ornithopter (cockpit) mode. Also reached from the room
     // ornithopter click (callback_main_ui_element_21_22, seg000:9282) and as the
     // fall-through tail of the map-main-menu entry (seg000:42d9).
-    pub(crate) fn menu_callback_choice_map_main_take_an_ornithopter_notransition(&mut self) {
+    pub(crate) fn menu_callback_choice_map_main_take_an_ornithopter_notransition(
+        &mut self,
+        _text_id: u16,
+        _index: usize,
+    ) {
         // = seg000:42e9 call tear_down_prior_talking_head_overlay.
         self.tear_down_prior_talking_head_overlay();
         // = seg000:42ec call loc_038e1 — refresh the sky palette if the
@@ -468,7 +476,7 @@ impl GameState {
         let saved = self.in_transition;
         self.in_transition = 0x80;
         // = seg000:7b42 call menu_callback_choice_map_troop_contact_no_more_orders.
-        self.menu_callback_choice_map_troop_contact_no_more_orders();
+        self.menu_callback_choice_map_troop_contact_no_more_orders(0, 0);
         self.map_close_location_troop_popup();
         self.map_close_troop_info_popup();
         self.in_transition = saved;
@@ -489,7 +497,7 @@ impl GameState {
             self.get_active_menu_ref(),
             MenuRef::MenuGoThereFlyingAnOrni | MenuRef::MenuGoThereRidingAWorm
         ) {
-            self.menu_callback_choice_exit_menu();
+            self.menu_callback_choice_exit_menu(0, 0);
         } else {
             self.map_close_location_popup();
         }
@@ -1726,7 +1734,11 @@ impl GameState {
     // = seg000:4ffb menu_callback_choice_skip_to_destination — the SKIP TO
     // DESTINATION map-mode verb: fast-forward the travel to the destination
     // (or into the first hostile cell along the way).
-    pub(crate) fn menu_callback_choice_skip_to_destination(&mut self) {
+    pub(crate) fn menu_callback_choice_skip_to_destination(
+        &mut self,
+        _text_id: u16,
+        _index: usize,
+    ) {
         // = seg000:4ffb disarm the game-area hotspot (HUD element 20).
         self.ui_elements[20].flags = 0;
         // = seg000:5001 call hnm_close_resource — the flight HNM closes.
@@ -1772,7 +1784,7 @@ impl GameState {
 
     // = seg000:497a menu_callback_choice_change_destination — the CHANGE
     // DESTINATION map-mode verb: reopen the map main view over the flight.
-    pub(crate) fn menu_callback_choice_change_destination(&mut self) {
+    pub(crate) fn menu_callback_choice_change_destination(&mut self, _text_id: u16, _index: usize) {
         // = seg000:497a call reset_scene_lip_sync_state.
         self.reset_scene_lip_sync_state();
         // = seg000:4980 travel_minimap_state = 1 — the map-screen cleanup's
@@ -1785,7 +1797,11 @@ impl GameState {
     // = seg000:50a5 menu_callback_choice_back_to_starting_point — the BACK TO
     // STARTING POINT map-mode verb: aim the travel home at the starting
     // location.
-    pub(crate) fn menu_callback_choice_back_to_starting_point(&mut self) {
+    pub(crate) fn menu_callback_choice_back_to_starting_point(
+        &mut self,
+        _text_id: u16,
+        _index: usize,
+    ) {
         // = seg000:50a5/50a8 reopen the current flight clip at its first
         //   frame.
         self.hnm_load_first_frame_by_id(self.hnm_video_id, 0);
@@ -1803,7 +1819,11 @@ impl GameState {
 
     // = seg000:50c4 menu_callback_choice_towards_nearest_place — the TOWARDS
     // NEAREST PLACE map-mode verb: aim the travel at the nearest location.
-    pub(crate) fn menu_callback_choice_towards_nearest_place(&mut self) {
+    pub(crate) fn menu_callback_choice_towards_nearest_place(
+        &mut self,
+        _text_id: u16,
+        _index: usize,
+    ) {
         // = seg000:50c4 call get_map_position; 50c7 call iterate_over_
         //   locations_and_coordinates.
         let (x, lat) = self.get_map_position();
@@ -2846,7 +2866,7 @@ mod tests {
         game.start(true);
         while rx.try_recv().is_ok() {}
 
-        game.menu_callback_choice_map_main_take_an_ornithopter_notransition();
+        game.menu_callback_choice_map_main_take_an_ornithopter_notransition(0, 0);
         while rx.try_recv().is_ok() {}
         // 0xfff0 = the cursor was over bare map, not a location marker.
         game.map_confirm_travel_and_close(0xfff0, 200, 70);
@@ -2891,7 +2911,7 @@ mod tests {
         while rx.try_recv().is_ok() {}
 
         // Orni map + a directional desert takeoff.
-        game.menu_callback_choice_map_main_take_an_ornithopter_notransition();
+        game.menu_callback_choice_map_main_take_an_ornithopter_notransition(0, 0);
         while rx.try_recv().is_ok() {}
         game.map_confirm_travel_and_close(0xfff0, 200, 70);
         assert_eq!(game.travel_no_location_dest, 0xff, "directional flight");
@@ -2978,7 +2998,7 @@ mod tests {
         game.start(true);
         while rx.try_recv().is_ok() {}
 
-        game.menu_callback_choice_map_main_take_an_ornithopter_notransition();
+        game.menu_callback_choice_map_main_take_an_ornithopter_notransition(0, 0);
 
         assert_eq!(game.get_active_menu_ref(), MenuRef::MenuCancel);
         assert_eq!(game.map_ornithopter_mode, 1);
@@ -3148,7 +3168,7 @@ mod tests {
 
         // Cancel closes the map screen back to the room verbs and disarms the
         // caption (map_screen_cleanup -> seg000:442f).
-        game.menu_callback_choice_exit_menu();
+        game.menu_callback_choice_exit_menu(0, 0);
         assert_eq!(game.get_active_menu_ref(), MenuRef::CommandMenuBuf);
         assert_eq!(game.data_046eb, 0);
         assert_eq!(game.game_screen_mode_flags, 0);
@@ -3199,7 +3219,7 @@ mod tests {
         game.location_appearance = 0x180;
         game.draw_room_game_screen();
 
-        game.menu_callback_choice_map_main_take_an_ornithopter_notransition();
+        game.menu_callback_choice_map_main_take_an_ornithopter_notransition(0, 0);
         assert!(game.mouse_nav_rect.is_some(), "map hot-zone not installed");
 
         // The label strip: fg 0xfe pixels along the ornithopter-mode pen rows
@@ -3429,7 +3449,7 @@ mod tests {
         game.location_appearance = 0x180;
         game.draw_room_game_screen();
 
-        game.menu_callback_choice_map_main_take_an_ornithopter_notransition();
+        game.menu_callback_choice_map_main_take_an_ornithopter_notransition(0, 0);
 
         // The map screen installed map_view_redraw as the main-view drawing
         // function (seg000:4346); every scroll below dispatches through it
@@ -3604,7 +3624,7 @@ mod tests {
         game.draw_room_game_screen();
 
         // Depart: open the map and click a non-current location's marker.
-        game.menu_callback_choice_map_main_take_an_ornithopter_notransition();
+        game.menu_callback_choice_map_main_take_an_ornithopter_notransition(0, 0);
         let other = *game
             .visible_location_markers
             .iter()
@@ -3705,7 +3725,7 @@ mod tests {
 
     // The four map-mode verbs (TOWARDS NEAREST PLACE seg000:50c4, CHANGE
     // DESTINATION 497a, BACK TO STARTING POINT 50a5, SKIP TO DESTINATION
-    // 4ffb) driven mid-flight through dispatch_command_handler.
+    // 4ffb) driven mid-flight through their verb callbacks.
     // Asset-gated; run with:
     //   cargo test -p dune --bin dune -- --ignored map_mode_verbs
     #[test]
@@ -3727,7 +3747,7 @@ mod tests {
         game.draw_room_game_screen();
 
         // Depart towards some other location and fly a few steps out.
-        game.menu_callback_choice_map_main_take_an_ornithopter_notransition();
+        game.menu_callback_choice_map_main_take_an_ornithopter_notransition(0, 0);
         let other = *game
             .visible_location_markers
             .iter()
@@ -3757,7 +3777,7 @@ mod tests {
 
         // TOWARDS NEAREST PLACE re-arms a homing travel at the nearest
         // non-hidden location.
-        game.dispatch_command_handler(0x50c4, 0);
+        game.menu_callback_choice_towards_nearest_place(0, 0);
         let nearest = location_index_from_ptr(game.travel_destination_ptr);
         assert!(
             game.locations[nearest].status & 0x80 == 0,
@@ -3772,7 +3792,7 @@ mod tests {
 
         // CHANGE DESTINATION reopens the map view over the flight with the
         // Cancel menu; travel_minimap_state 1 re-enters the flight on close.
-        game.dispatch_command_handler(0x497a, 0);
+        game.menu_callback_choice_change_destination(0, 0);
         assert_eq!(game.data_046eb, 1, "the map view did not reopen");
         assert_eq!(game.travel_minimap_state, 1);
         assert!(game.mouse_nav_rect.is_some(), "map hot-zone not installed");
@@ -3796,7 +3816,7 @@ mod tests {
 
         // BACK TO STARTING POINT aims home at the departure location.
         let start = game.last_location_index;
-        game.dispatch_command_handler(0x50a5, 0);
+        game.menu_callback_choice_back_to_starting_point(0, 0);
         assert_eq!(game.travel_destination_ptr, location_ptr(start as u16));
         assert_eq!(game.travel_heading_mode, 0);
         assert_eq!(game.travel_no_location_dest, 0);
@@ -3805,7 +3825,7 @@ mod tests {
         // disarms, the mode flags clear and the start location's room is
         // re-entered with the orni parked back on its pad.
         let pad_ornis_before = game.locations[start].equipment.ornithopters;
-        game.dispatch_command_handler(0x4ffb, 0);
+        game.menu_callback_choice_skip_to_destination(0, 0);
         assert_eq!(game.travel_active, 0, "the skip did not land the travel");
         assert_eq!(game.travel_destination_ptr, 0);
         assert_eq!(game.game_screen_mode_flags, 0);
@@ -3843,7 +3863,7 @@ mod tests {
         game.location_and_room = 0x2001;
         game.location_appearance = 0x180;
         game.draw_room_game_screen();
-        game.menu_callback_choice_map_main_take_an_ornithopter_notransition();
+        game.menu_callback_choice_map_main_take_an_ornithopter_notransition(0, 0);
         let sietch = *game
             .visible_location_markers
             .iter()
@@ -3892,7 +3912,7 @@ mod tests {
         // Take an ornithopter again and select another sietch: the confirm
         // chain (head fold, departure re-render, takeoff animation, flight
         // view) must never disturb the UI span on the visible screen.
-        game.menu_callback_choice_map_main_take_an_ornithopter_notransition();
+        game.menu_callback_choice_map_main_take_an_ornithopter_notransition(0, 0);
         let target = *game
             .visible_location_markers
             .iter()
