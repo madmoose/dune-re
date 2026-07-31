@@ -756,21 +756,6 @@ impl GameState {
         self.ui_hud_draw_companions();
     }
 
-    // = seg000:d792 ui_set_and_draw_frieze_sides_map — the SEE DUNE MAP view's
-    // frieze sides (hud_sides_map). Unlike the closed-book entry there is no
-    // date/time + companion-button tail (d792 falls straight into the shared
-    // template body at d795).
-    pub(crate) fn ui_set_and_draw_frieze_sides_map(&mut self) {
-        self.ui_set_and_draw_frieze_sides(&FRIEZE_SIDES_MAP);
-    }
-
-    // = seg000:d7ad ui_set_and_draw_frieze_sides_open_book — the book screen's
-    // frieze sides (hud_sides_open_book). Like the map entry, no date/time +
-    // companion-button tail.
-    pub(crate) fn ui_set_and_draw_frieze_sides_open_book(&mut self) {
-        self.ui_set_and_draw_frieze_sides(&FRIEZE_SIDES_OPEN_BOOK);
-    }
-
     // = seg000:d763 the tail of ui_set_and_draw_frieze_sides_closed_book (also
     // reached from the command panel at seg000:2eef): redraw the two bottom-left
     // portraits (records 21,22).
@@ -786,6 +771,21 @@ impl GameState {
         self.ui_elements[22].sprite_id = self.companions[1] + 0x41;
         // = seg000:d78c cx=2; draw portraits over background.
         self.draw_ui_elements_list(21, 2);
+    }
+
+    // = seg000:d792 ui_set_and_draw_frieze_sides_map — the SEE DUNE MAP view's
+    // frieze sides (hud_sides_map). Unlike the closed-book entry there is no
+    // date/time + companion-button tail (d792 falls straight into the shared
+    // template body at d795).
+    pub(crate) fn ui_set_and_draw_frieze_sides_map(&mut self) {
+        self.ui_set_and_draw_frieze_sides(&FRIEZE_SIDES_MAP);
+    }
+
+    // = seg000:d7ad ui_set_and_draw_frieze_sides_open_book — the book screen's
+    // frieze sides (hud_sides_open_book). Like the map entry, no date/time +
+    // companion-button tail.
+    pub(crate) fn ui_set_and_draw_frieze_sides_open_book(&mut self) {
+        self.ui_set_and_draw_frieze_sides(&FRIEZE_SIDES_OPEN_BOOK);
     }
 
     // = seg000:d7b7 ui_hud_companion_blink_task — the game-loop blink step for
