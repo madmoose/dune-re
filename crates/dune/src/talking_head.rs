@@ -1608,7 +1608,8 @@ mod tests {
 
     // Duncan's "Here are our current stocks of spice." (phrase 0x08e8) fires
     // dialogue-line event 0x0a, which arms the sign he holds up: COMMAND string
-    // 0x30, "{word_A0h}0 kgs" — spice_in_stock times ten, in kg. Asset-gated:
+    // 0x30, "{word_A0h}0 kgs" — the appended "0" converts spice_in_stock's
+    // 10 kg batches to kg. Asset-gated:
     //   cargo test -p dune --bin dune -- --ignored duncan_spice_sign
     #[test]
     #[ignore = "needs assets/DUNE.DAT"]

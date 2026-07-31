@@ -99,7 +99,7 @@ impl GameState {
             3 => self.actions_time_in_day_3(),
             4 => self.actions_time_in_day_4(),
             8 => self.actions_time_in_day_8(),
-            0xf => self.randomly_increase_all_harkonnen_troops_head_count(),
+            15 => self.randomly_increase_all_harkonnen_troops_head_count(),
             _ => {}
         }
         // = seg000:1b82 call loc_01c18.

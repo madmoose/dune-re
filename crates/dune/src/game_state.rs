@@ -384,10 +384,11 @@ pub struct GameState {
     // = seg001:002b night_attack_stage.
     pub(crate) night_attack_stage: u8,
 
-    // = seg001:00a0 spice_in_stock — the player's spice, in the units the HUD
-    // and the smuggler trade read. The mining troops pay into it one tenth of
-    // what they harvest each time period (seg000:701b), the remainder carried
-    // in spice_harvest_remainder.
+    // = seg001:00a0 spice_in_stock — the palace spice stock, stored in batches
+    // of 10 kg (a value of 123 is 1230 kg; Duncan's sign appends a "0" to show
+    // it in kg). The mining troops pay their whole harvest into it each time
+    // period, divided by 10 to convert kg to batches (seg000:701b), the
+    // sub-batch kg carried in spice_harvest_remainder.
     pub(crate) spice_in_stock: u16,
 
     // = seg001:00a2/00a4 for_condit_area_controlled_by_Atreides/Harkonnen —
@@ -1150,8 +1151,9 @@ pub struct GameState {
     // and a plain palette+blit when the day/night state changed.
     pub(crate) data_046e0: u8,
 
-    // = seg001:46e1 data_046e1 — the carry of the spice split: what the last
-    // period's harvest left over towards the next whole unit of stock.
+    // = seg001:46e1 spice_harvest_remainder — kilograms of harvested spice not
+    // yet forming a full 10 kg batch of spice_in_stock, carried into the next
+    // mining period's division (seg000:701b).
     pub(crate) spice_harvest_remainder: u16,
 
     // = seg001:46e3 data_046e3_rect — the map window rect the map screen draws

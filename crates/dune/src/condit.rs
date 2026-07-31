@@ -245,7 +245,8 @@ impl GameState {
             0x4a => self.troop_condit.ds_4a,
             // = seg001:004e the staged location area+name word.
             0x4e => self.location_condit.area_and_name,
-            // = seg001:00a0 spice_in_stock — the player's spice.
+            // = seg001:00a0 spice_in_stock — the player's spice, in 10 kg
+            //   batches.
             0xa0 => self.spice_in_stock,
             // = seg001:00a2..00b2 the daily statistics block (events.rs).
             0xa2 => self.area_controlled_by_atreides,

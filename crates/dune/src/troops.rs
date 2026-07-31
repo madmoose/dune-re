@@ -1947,11 +1947,12 @@ impl GameState {
     }
 
     // = seg000:708a troop_update_harvest_rate — this time period's spice
-    // harvest for the troop. The mining callback adds the returned value
-    // straight into harvest_total, pays a tenth of it into spice_in_stock and
-    // takes the matching bite out of the field (seg000:6fff). The condit
-    // staging above tail-jumps here for the same figure, which is what makes it
-    // the panel's "Current: N kgs/h".
+    // harvest for the troop, in kg. The mining callback adds the returned
+    // value straight into harvest_total, pays all of it into spice_in_stock
+    // (converted to that stock's 10 kg batches) and takes the matching bite
+    // out of the field (seg000:6fff). The condit staging above tail-jumps here
+    // for the same figure, which is what makes it the panel's
+    // "Current: N kgs/h".
     //
     // Folds the trend into bitfield_10: bits 2..3 become 8 when the rate ROSE
     // (DOS `sub dx,ax` borrows, so old < new) and 4 when it fell. The new value
@@ -2136,8 +2137,8 @@ impl GameState {
     // = seg000:6fe5 callback_troop_location_for_troop_occupation_spice_mining —
     // one time period of spice mining: work out what the troop pulled out of
     // the ground (troop_update_harvest_rate), add it to the troop's running
-    // total, pay a tenth of it into the player's stock and take the matching
-    // bite out of the location's spice density.
+    // total, pay it into the player's stock (in the stock's 10 kg batches) and
+    // take the matching bite out of the location's spice density.
     fn troop_occupation_event_spice_mining(&mut self, ti: usize) {
         // = seg000:6fe5 call troop_location_do_stuff_upon_new_day_06e20 — the
         //   per-day location discovery countdown and motivation decay. Not
@@ -2186,20 +2187,37 @@ impl GameState {
         let old_total = self.troops[ti].harvest_total;
         let total = old_total.wrapping_add(harvested);
         self.troops[ti].harvest_total = total;
+
+        println!("troop {} harvested {} (total {})", ti, harvested, total);
+
         // = seg000:700b..7016 every time that total crosses a multiple of 128
         //   the troop gets better at mining (skill +1, marker 1).
         if (total ^ old_total) & 0xff80 != 0 {
             self.troop_increase_spice_skill(ti, 1, 0);
+            println!(
+                "troop {} increased spice skill to {}",
+                ti, self.troops[ti].spice_skill
+            );
         }
-        // = seg000:701b..702a the player's cut: a tenth of the harvest, the
-        //   remainder carried to the next period.
+        // = seg000:701b..702a the whole harvest goes to the player's stock,
+        //   converted from kg to spice_in_stock's 10 kg batches; the kg that
+        //   do not yet make a full batch carry to the next period.
         let pot = harvested.wrapping_add(self.spice_harvest_remainder);
         self.spice_harvest_remainder = pot % 10;
         self.spice_in_stock = self.spice_in_stock.wrapping_add(pot / 10);
-        // = seg000:702f..703a the ground's cut: (harvest + the location's
-        //   carry) / spice_amount is how much density goes, the remainder
-        //   staying in field_13 towards the next period. spice_amount is the
-        //   ground's yield per density point, so a rich field depletes slower.
+
+        println!(
+            "troop {} added {} to spice stock (remainder {})",
+            ti,
+            pot / 10,
+            self.spice_harvest_remainder
+        );
+
+        // = seg000:702f..703a the field depletion: the harvested kg come off
+        //   spice_density, converted at spice_amount kg per density point —
+        //   (harvest + the location's carry) / spice_amount points go, the
+        //   sub-point kg staying in field_13 towards the next period. A rich
+        //   field (high spice_amount) therefore depletes slower.
         let li = locations::location_index_from_ptr(self.troops[ti].offset_of_location);
         let Some(loc) = self.locations.get(li).copied() else {
             return;
@@ -3140,9 +3158,14 @@ mod tests {
             0,
             "and not marked stopped"
         );
-        // A tenth of it reached the stock, the rest carried.
-        assert_eq!(game.spice_in_stock, rate / 10, "a tenth into the stock");
-        assert_eq!(game.spice_harvest_remainder, rate % 10, "the rest carried");
+        // The harvest reached the stock in 10 kg batches, the leftover kg
+        // carried.
+        assert_eq!(game.spice_in_stock, rate / 10, "whole batches into stock");
+        assert_eq!(
+            game.spice_harvest_remainder,
+            rate % 10,
+            "leftover kg carried"
+        );
         // The field gave up rate / spice_amount of density, the remainder held
         // in field_13.
         let consumed = (rate + 0) / 4;

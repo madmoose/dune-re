@@ -138,13 +138,25 @@ impl GameState {
         let s = self.get_phrase_or_command_string(phrase_id).to_vec();
         let expanded = self.expand_phrase_tokens(&s);
         // = seg000:88d2..88d6 format into the 0xa6b0 buffer.
-        let text = self.format_interpolated_string(&expanded);
+        let mut text = self.format_interpolated_string(&expanded);
         // = seg000:88da cmp voice_subtitle_mode,2; jnb loc_08888 — voice-only
         //   mode presents no text (the 8888 element juggling only re-arms the
         //   overlay bookkeeping; nothing is drawn).
         if self.voice_subtitle_mode >= 2 {
             return;
         }
+
+        println!(
+            "show_voice_subtitle: phrase_id {phrase_id}, text {:?}",
+            sub_trace_text(&text)
+        );
+
+        // Fix type in Duncan's voc 21
+        if phrase_id == 2282 {
+            // Replace "You can notice than" with "You can notice that"
+            text[18] = b't';
+        }
+
         // = seg000:88e1 draw_subtitle_text_from_si.
         self.draw_subtitle_text(&text);
     }
