@@ -40,15 +40,17 @@ pub fn palette_flush(state: &mut GameState) {
 // Forces `code` even, wraps modulo 0x3e, and dispatches via the per-handler match below.
 // Mirrors the `jmp word ptr transition_dispatch_table[bx]` at segvga:2616.
 //
-// `dl` is the caller's dx low byte; only the scripted-curtain handler (code
-// 0x04) reads it, to pick the script-traversal direction.
-pub fn vga_transition(state: &mut GameState, code: u16, dl: u8) {
+// `dx` is the caller's dx register. The vertical fold (code 0x04) reads its
+// low byte to pick the script-traversal direction; the page turn (codes
+// 0x0c/0x0e) reads its sign to pick the turn direction.
+pub fn vga_transition(state: &mut GameState, code: u16, dx: i16) {
     let mut idx = code & 0xfe;
     while idx >= 0x3e {
         idx -= 0x3e;
     }
     match idx {
-        0x04 => transition_vertical_fold(state, dl),
+        0x04 => transition_vertical_fold(state, dx as u8),
+        0x0c | 0x0e => transition_page_turn(state, dx),
         0x10 => transition_dotted_columns(state),
         0x2a => transition_spiral(state),
         0x34 => transition_dotted_columns_tall(state),
@@ -1002,6 +1004,263 @@ fn transition_vertical_fold_part(
         for row in top..top + 30 {
             clear_line(dst_fb, row);
         }
+    }
+}
+
+// ===== Book page-turn fold (segvga transition_page_turn) ===================
+
+// = segvga:2ad1 transition_page_turn (dispatch entries [6]/[7], codes
+// 0x0c/0x0e) — the book page-turn fold, used only by book_page_turn_present
+// (seg000:b02c, transition 0x0e with the SN2 papers-ruffle). A 45° fold line
+// sweeps across the game area; the fold triangle shows the turning page
+// rotated 90° (pre-built into fb2 by page_turn_build_rotated_page, its paper
+// colors shaded), and an 8-pixel band of the new image (fb1) is painted per
+// frame where the fold just passed — the bands accumulate into the full new
+// page behind the moving fold.
+//
+// The sign of `dx` (the DOS caller's dx register) picks the direction.
+// Forward (dx >= 0, next page): the rotated page is built from the visible
+// old image and the anchor sweeps from the bottom-right corner up the right
+// edge, then left along the top row — the old page turns away. Backward
+// (dx < 0, back a page / to the cover): the rotated page is built from the
+// incoming fb1 image and the anchor runs the mirrored sweep — the new page
+// folds open from the top-left.
+fn transition_page_turn(state: &mut GameState, dx: i16) {
+    // = segvga:2ad2 push cs; call palette_flush — the page palette is live
+    // from the first frame.
+    palette_flush(state);
+    // = the calc_fb_offset fb_base_ofs term (the book screen runs at
+    // y_offset = 0).
+    let fb_base = state.y_offset as i32 * 320;
+    if dx >= 0 {
+        // = segvga:2ad9..2ae4 build the rotated page from es — the visible
+        // old page.
+        {
+            let (fb2, screen) = state.fb_pair_mut(FbId::Saved, FbId::Screen);
+            page_turn_build_rotated_page(fb2.pixels_mut(), screen.pixels());
+        }
+        // = segvga:2ae5..2b17 bx walks 0x90 down to -0x138 step -8. The
+        // anchor: row = bx, column = 0x140 while bx >= 0 (up the right edge),
+        // then row = 0, column = 0x140 + bx (left along the top row).
+        let mut bx: i32 = 0x98;
+        loop {
+            // = segvga:2aea sub bx,8; segvga:2af1..2af5 the bx < 0 clamp.
+            bx -= 8;
+            let (row, col) = if bx < 0 { (0, 0x140 + bx) } else { (bx, 0x140) };
+            // = segvga:2aff calc_fb_offset(row, col) (row <= 0x90, so its
+            // 199-row clamp never fires).
+            let anchor = fb_base + row * 320 + col;
+            {
+                let (screen, fb1) = state.fb_pair_mut(FbId::Screen, FbId::Fb1);
+                page_turn_fill_forward_band(screen.pixels_mut(), fb1.pixels(), row, col, anchor);
+            }
+            {
+                let (screen, fb2) = state.fb_pair_mut(FbId::Screen, FbId::Saved);
+                page_turn_draw_fold(screen.pixels_mut(), fb2.pixels(), row, col, anchor);
+            }
+            // = segvga:2afa the PIT-tick wait + segvga:2b0f the vsync wait —
+            // one paced frame per step.
+            state.present_transition_frame();
+            // = segvga:2b13 cmp bx,0fec8h; jg — the -0x138 step is the last.
+            if bx <= -0x138 {
+                break;
+            }
+        }
+    } else {
+        // = segvga:2b1a..2b25 build the rotated page from ds (fb1) — the
+        // incoming new page.
+        {
+            let (fb2, fb1) = state.fb_pair_mut(FbId::Saved, FbId::Fb1);
+            page_turn_build_rotated_page(fb2.pixels_mut(), fb1.pixels());
+        }
+        // = segvga:2b26..2b53 bx walks -0x138 up to 0x90 step 8 — the
+        // mirrored sweep: right along the top row, then down the right edge.
+        let mut bx: i32 = -0x138;
+        while bx < 0x98 {
+            // = segvga:2b30..2b36 the bx < 0 clamp.
+            let (row, col) = if bx < 0 { (0, 0x140 + bx) } else { (bx, 0x140) };
+            // = segvga:2b38 calc_fb_offset(row, col).
+            let anchor = fb_base + row * 320 + col;
+            {
+                let (screen, fb1) = state.fb_pair_mut(FbId::Screen, FbId::Fb1);
+                page_turn_fill_backward_band(screen.pixels_mut(), fb1.pixels(), row, anchor);
+            }
+            {
+                let (screen, fb2) = state.fb_pair_mut(FbId::Screen, FbId::Saved);
+                page_turn_draw_fold(screen.pixels_mut(), fb2.pixels(), row, col, anchor);
+            }
+            // = segvga:2b48 the vsync wait (the PIT-tick wait sits at 2afa on
+            // this path too, before the draw).
+            state.present_transition_frame();
+            // = segvga:2b4c..2b53 add bx,8; cmp bx,98h; jl.
+            bx += 8;
+        }
+    }
+}
+
+// = segvga:2c52 page_turn_build_rotated_page — build the rotated page image in
+// the fb2 segment (es = the saved caller si, data_segvga_02535). The source
+// page (ds, picked by the caller) is rotated 90°:
+// dst[c*200 + r] = src[(199-r)*320 + (319-c)] — 320 columns right-to-left
+// (si starts at 0xf9ff, the bottom-right pixel), each written bottom-to-top
+// (4 rows per inner step, si -= 0x500). The fold triangle then reads screen
+// rows as rotated-page columns with plain sequential copies.
+fn page_turn_build_rotated_page(rotated: &mut [u8], src: &[u8]) {
+    let mut di = 0;
+    for c in 0..320 {
+        let x = 319 - c;
+        for r in 0..200 {
+            let y = 199 - r;
+            let mut p = src[y * 320 + x];
+            // = segvga:2c6b/2c78/2c89/2c98 pixels in [0x60,0x62) get +2 —
+            // the page paper colors remap to their darker shades, so the fold
+            // shows the shaded back of the page.
+            if (0x60..0x62).contains(&p) {
+                p += 2;
+            }
+            rotated[di] = p;
+            di += 1;
+        }
+    }
+    // = segvga:2cac..2cc4 patch the spine out of the rotated image: bytes
+    // 48..56 of column c-54 are copied into column c for c in 126..194 — in
+    // screen terms, rows 144..151 at x 193 down to 126 take the flat paper
+    // 54 pixels to their right.
+    for i in 0..0x44 {
+        let d = 0x62a0 + i * 0xc8;
+        rotated.copy_within(d - 0x2a30..d - 0x2a30 + 8, d);
+    }
+}
+
+// = segvga:2b56 page_turn_draw_fold — draw the fold triangle at the anchor:
+// a right triangle whose vertical left edge sits at the anchor column minus
+// `ax` and whose hypotenuse lies on the fold diagonal (each row one pixel
+// shorter). Each screen row samples one column of the rotated page (si +=
+// 0xc8 per row), so the triangle shows the turning page's content rotated 90°.
+fn page_turn_draw_fold(screen: &mut [u8], rotated: &[u8], row: i32, col: i32, anchor: i32) {
+    // = segvga:2b57..2b71 si = (0x141 - col)*200 - 0x98 (+ 0x98-col when
+    // col < 0x98) — the rotated-page column for screen x = col-2, starting at
+    // the game-area bottom row.
+    let mut si = (0x141 - col) * 200 - 0x98 + if col < 0x98 { 0x98 - col } else { 0 };
+    // = segvga:2b73..2b79 ax = min(0x98 - row, col) — the triangle height and
+    // its top-row width.
+    let mut ax = (0x98 - row).min(col);
+    // = segvga:2b80 sub di,ax — every row starts at the anchor column minus
+    // the top width.
+    let mut di = anchor - ax;
+    // = segvga:2b82 the row loop: two half-steps per pass, alternating the
+    // even (rep movsw) and odd (rep movsw + movsb) width handling.
+    loop {
+        for odd in [0, 1] {
+            let n = (ax & !1) + odd;
+            for k in 0..n {
+                // = the rep movsw/movsb bytes. DOS reads a few bytes past the
+                // 64000-byte rotated image on edge frames (segment-wrap
+                // garbage at the triangle tip); we substitute 0.
+                screen[(di + k) as usize] = rotated.get((si + k) as usize).copied().unwrap_or(0);
+            }
+            // = sub si/di by ax, then si += 0xc8 (next rotated column),
+            // di += 0x140 (next screen row).
+            si += n - ax + 0xc8;
+            di += n - ax + 0x140;
+            ax -= 1;
+        }
+        // = segvga:2ba9 dec ax; jg.
+        if ax <= 0 {
+            break;
+        }
+    }
+}
+
+// = segvga:2bac page_turn_fill_forward_band — forward turn: paint the 8-pixel
+// diagonal band of the new page (fb1) revealed as the fold moved this frame.
+// All copies go fb1 → screen at the same offset (DOS sets si = di).
+fn page_turn_fill_forward_band(screen: &mut [u8], fb1: &[u8], row: i32, col: i32, anchor: i32) {
+    let mut di = anchor;
+    let copy = |screen: &mut [u8], di: i32, n: i32| {
+        for k in 0..n {
+            let ofs = (di + k) as usize;
+            screen[ofs] = fb1[ofs];
+        }
+    };
+    // = segvga:2bb1..2bbc ax = min(0x98 - row, col) band rows; bx < 0 marks
+    // the diagonal running out the left edge before the game-area bottom.
+    let mut ax = 0x98 - row;
+    let bx = col - ax;
+    if bx < 0 {
+        ax += bx;
+    }
+    // = segvga:2bbe..2bdb column > 0x138 (the anchor still on the right
+    // edge): an 8-row lead-in wedge of widths 0..7, stride 0x13f (down 1,
+    // left 1), tapering the band in from the edge.
+    if col > 0x138 {
+        for w in 0..8 {
+            copy(screen, di, w);
+            di += 0x13f;
+        }
+        ax -= 8;
+        if ax <= 0 {
+            return;
+        }
+    }
+    // = segvga:2bdd the main band: ax rows of 8 bytes just right of the fold
+    // diagonal, stride 0x13f.
+    for _ in 0..ax {
+        copy(screen, di, 8);
+        di += 0x13f;
+    }
+    // = segvga:2beb..2bff diagonal out the left edge: a tail wedge of widths
+    // 8..1 straight down (stride 0x140).
+    if bx < 0 {
+        for w in (1..=8).rev() {
+            copy(screen, di, w);
+            di += 0x140;
+        }
+    }
+}
+
+// = segvga:2c02 page_turn_fill_backward_band — backward turn: paint the
+// 8-pixel strip the fold triangle vacated as it moved this frame, from the
+// new page (fb1 → screen at the same offset, DOS si = di).
+fn page_turn_fill_backward_band(screen: &mut [u8], fb1: &[u8], row: i32, anchor: i32) {
+    let mut di = anchor;
+    let copy = |screen: &mut [u8], di: i32, n: i32| {
+        for k in 0..n {
+            let ofs = (di + k) as usize;
+            screen[ofs] = fb1[ofs];
+        }
+    };
+    // = segvga:2c07..2c0f anchor offset < 0xa0 (column < 160 on the top row):
+    // the strip would start left of the screen — nothing to paint yet.
+    if di < 0xa0 {
+        return;
+    }
+    let mut ax;
+    if row > 0 {
+        // = segvga:2c1a..2c39 anchor on the right edge: an 8-row band of
+        // 0xa0-row bytes ending at the anchor column, 8 rows above the
+        // triangle top (di -= 0xa00) — repaints the rows the fold top passed
+        // this frame. rep movsw copies the even part of the width.
+        ax = 0xa0 - row;
+        di -= ax + 0xa00;
+        for _ in 0..8 {
+            let n = ax & !1;
+            copy(screen, di, n);
+            di += n - ax + 0x140;
+        }
+        ax -= 8;
+    } else {
+        // = segvga:2c3e..2c40 anchor on the top row: the strip starts 160
+        // pixels left of the anchor (8 left of the triangle's vertical edge)
+        // and runs the full 0x98-row game-area height.
+        ax = 0x98;
+        di -= ax + 8;
+    }
+    // = segvga:2c43..2c4f the strip: ax rows of 8 bytes straight down
+    // (stride 0x140) along the left of the triangle's vertical trailing edge.
+    for _ in 0..ax {
+        copy(screen, di, 8);
+        di += 0x140;
     }
 }
 

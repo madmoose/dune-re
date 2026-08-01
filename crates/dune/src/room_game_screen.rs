@@ -438,7 +438,7 @@ impl GameState {
         } else if !self.front_buffer_is_fb1() {
             // = seg000:2e3f al = 10h, bp = 0f66h (loc_00f66, a no-op render),
             // transition; then service music.
-            self.transition(0x10, |_| {});
+            self.transition(0x10, 0, |_| {});
             self.service_midi_music();
         }
 
@@ -500,7 +500,7 @@ impl GameState {
         }
         // = seg000:18a6 loc_018a6 — dx = 0; transition renders draw_room_game_
         // screen offscreen (bp) then wipes it onto the screen.
-        self.transition(transition_effect, |s| s.draw_room_game_screen());
+        self.transition(transition_effect, 0, |s| s.draw_room_game_screen());
         // = seg000:18ab set fb1 active; service music; snapshot the clock tick.
         self.set_fb1_as_active_framebuffer();
         self.service_midi_music();
@@ -834,7 +834,7 @@ impl GameState {
         self.ui_hud_head_animate_down();
         // = seg000:0eaf al=4; 0eb1 dx=0; 0eb3 bp=callback_transition_look_at_
         //   mirror; 0eb6 jmp transition.
-        self.transition(4, |s| s.callback_transition_look_at_mirror());
+        self.transition(4, 0, |s| s.callback_transition_look_at_mirror());
     }
 
     // = seg000:0eb9 menu_callback_choice_palace_look_away_from_mirror — the
@@ -2598,7 +2598,7 @@ impl GameState {
     // gfx_call_bp_with_front_buffer_as_screen), then wipe it onto the visible
     // screen with effect `effect` (DOS al, via the segvga vga_transition) and
     // flush the palette.
-    pub(crate) fn transition(&mut self, effect: u8, render: fn(&mut GameState)) {
+    pub(crate) fn transition(&mut self, effect: u8, dx: i16, render: fn(&mut GameState)) {
         // = seg000:c108 in_transition = 0x80.
         self.in_transition = 0x80;
         // = seg000:c10f run the render routine with the front buffer redirected
@@ -2609,11 +2609,12 @@ impl GameState {
         // the visible screen with effect `effect` (DOS al). The implemented
         // effects present their own intermediate frames as the wipe runs;
         // effects vga_transition does not yet handle simply fall through to the
-        // plain copy below. DOS passes the caller's dx as the direction byte;
-        // every caller of `transition` sets dx = 0 (look_at_mirror `xor dx,dx`,
-        // ui_present_room_screen `dx = 0`), so the wipe runs in its default
-        // direction.
-        gfx::vga_transition(self, effect as u16, 0);
+        // plain copy below. `dx` is the DOS caller's dx register, preserved
+        // across the render call (c10e push dx / c112 pop dx): the book page
+        // turn (0x0e) reads its sign for the turn direction; most callers
+        // leave it 0 (look_at_mirror `xor dx,dx`, ui_present_room_screen
+        // `dx = 0`).
+        gfx::vga_transition(self, effect as u16, dx);
         // = seg000:c12a gfx_copy_whole_framebuf_to_screen — leave the final fb1
         // image on the screen (also covers the not-yet-ported effects).
         self.gfx_copy_whole_framebuf_to_screen();

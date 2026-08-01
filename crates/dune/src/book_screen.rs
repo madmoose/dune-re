@@ -57,7 +57,7 @@ impl GameState {
         // = seg000:aef2 call loc_0ad5e — re-pick the music for the book mode.
         self.update_room_music();
         // = seg000:aef5..aefa al = 0x34; bp = callback_transition_0af26.
-        self.transition(0x34, |s| s.callback_transition_book_open());
+        self.transition(0x34, 0, |s| s.callback_transition_book_open());
         // = seg000:aefd jmp service_midi_music.
         self.service_midi_music();
     }
@@ -197,8 +197,8 @@ impl GameState {
                 // = seg000:aff7 the page-turn animation on the HUD book.
                 self.ui_draw_book_turning_page(dx < 0);
                 // = seg000:affa..affd bp = book_draw_current_page; the ruffle
-                // + transition 0x0e.
-                self.book_page_turn_present(|s| s.book_draw_current_page());
+                // + transition 0x0e, folding in the search direction `dx`.
+                self.book_page_turn_present(dx, |s| s.book_draw_current_page());
                 // = seg000:b000 call loc_09901 — drop the bubble pointer (no
                 // restore; the next page draw must not put old pixels back).
                 self.subtitle_bubble = None;
@@ -221,10 +221,10 @@ impl GameState {
                 // paging past the last entry rolls the credits in the book.
                 self.data_000c6 |= 4;
                 self.book_play_credits_scroll();
-                // = seg000:b019..b021 a forward page turn revealing them,
-                // with only the head redraw in the transition.
+                // = seg000:b019..b021 xor dx,dx — a forward page turn
+                // revealing them, with only the head redraw in the transition.
                 self.ui_draw_book_turning_page(false);
-                self.book_page_turn_present(|s| s.ui_hud_head_draw());
+                self.book_page_turn_present(0, |s| s.ui_hud_head_draw());
             }
         }
     }
@@ -295,22 +295,23 @@ impl GameState {
     // backward page-turn animation, then the ruffle + transition into the
     // cover redraw.
     fn book_turn_back_to_cover(&mut self) {
-        // = seg000:b024 mov dh,0xff — a backward turn.
+        // = seg000:b024 mov dh,0xff — makes dx negative: a backward turn.
         self.ui_draw_book_turning_page(true);
         // = seg000:b029 bp = callback_transition_0af43.
-        self.book_page_turn_present(|s| s.callback_transition_book_cover());
+        self.book_page_turn_present(-0x100, |s| s.callback_transition_book_cover());
     }
 
     // = seg000:b02c loc_0b02c — present a page turn: stop any VOC, play the
     // SN2 papers-ruffle, and run transition 0x0e with the caller's draw
-    // callback (DOS bp).
-    fn book_page_turn_present(&mut self, render: fn(&mut GameState)) {
+    // callback (DOS bp). `dx` is the caller's dx register: its sign picks the
+    // page-turn fold direction (>= 0 forward, < 0 backward).
+    fn book_page_turn_present(&mut self, dx: i16, render: fn(&mut GameState)) {
         // = seg000:b02c call pcm_stop_voc.
         self.pcm_player.stop();
         // = seg000:b02f..b031 al = 2; audio_start_voc — SN2, papers ruffle.
         self.audio_start_voc("SN2.HSQ");
         // = seg000:b034..b036 al = 0x0e; jmp transition.
-        self.transition(0x0e, render);
+        self.transition(0x0e, dx, render);
     }
 
     // = seg000:b1af ui_draw_book_turning_page — the two-frame page-turn
@@ -551,7 +552,7 @@ impl GameState {
         // player instead.
         // = seg000:b1fa..b1ff transition 0x34 into a cleared framebuffer +
         // the video's first frame.
-        self.transition(0x34, |s| s.callback_transition_book_video_load());
+        self.transition(0x34, 0, |s| s.callback_transition_book_video_load());
         // = seg000:b202 call set_screen_as_active_framebuffer.
         self.set_screen_as_active_framebuffer();
         // = seg000:b205 pause_enabled = 0; b20a kb_clear_scancode.
@@ -582,7 +583,7 @@ impl GameState {
         self.set_fb1_as_active_framebuffer();
         gfx::vga_swap_palettes(self);
         // = seg000:b228..b22d transition 0x34 back into the redrawn page.
-        self.transition(0x34, |s| s.callback_transition_book_video_done());
+        self.transition(0x34, 0, |s| s.callback_transition_book_video_done());
         // = seg000:b230 snapshot fb1 to fb2; b233 jmp set_voc_pcm_is_not_
         // playing (see the is_voc_pcm_playing note above).
         self.copy_active_framebuffer_to_framebuffer_2();

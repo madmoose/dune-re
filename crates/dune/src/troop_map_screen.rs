@@ -150,7 +150,7 @@ impl GameState {
         //   transition — build the map view offscreen and dissolve it in. (The
         //   dx direction byte is only read by the effect-4 curtain; 0x34
         //   ignores it, so the port's fixed dl=0 matches.)
-        self.transition(0x34, |s| s.callback_transition_dune_map_view());
+        self.transition(0x34, 0, |s| s.callback_transition_dune_map_view());
         // = seg000:5a30 cmp map_view_reentry_count,0; jnz — the rallied-troops
         //   popup only on the first visit.
         if self.map_view_reentry_count == 0 {
