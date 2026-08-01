@@ -16,8 +16,9 @@ use std::{
 use winit::keyboard::KeyCode;
 
 use crate::{
-    GameState,
+    GameState, cmd,
     mouse::{MOUSE_START_X, MOUSE_START_Y},
+    rect::rect,
 };
 
 /// Shared input state: written by the host event loop, polled by the game.
@@ -320,10 +321,10 @@ impl GameState {
     }
 
     // = seg000:de7b pause_if_p_key_pressed — when the P key is held and the
-    // pause window is enabled, suspend the game until the player presses a
-    // (non-ESC) key. The DOS routine also draws the "GAME PAUSED" window
-    // (font + framebuffer swap, seg000:dea1..ded3); that rendering is not ported
-    // yet, so the port pauses headlessly.
+    // pause window is enabled, draw the "GAME PAUSED" window over the HUD
+    // verb strip and suspend the game until the player presses a (non-ESC)
+    // key. ESC removes the window but stays paused; the next non-ESC key
+    // resumes.
     pub fn pause_if_p_key_pressed(&mut self) {
         // = seg000:de7b cmp kb_keys_p,0; jz ret.
         if self.input.lock().unwrap().kb_keys[SCANCODE_P as usize] == 0 {
@@ -335,9 +336,29 @@ impl GameState {
         }
         // = seg000:de8c mov al,1; xchg al,[game_suspend_count] — suspend, saving
         // the previous nesting count to restore on resume.
-        let saved = self.game_suspend_count;
+        let saved_suspend = self.game_suspend_count;
         self.game_suspend_count = 1;
-        // TODO: draw the "GAME PAUSED" window (seg000:dea1..ded3 font_draw…).
+        // = seg000:de93 push pit_timer_callback_counter — restored on exit
+        // (seg000:def9); see the delta-base re-anchor below.
+        // = seg000:de97 call call_restore_cursor — lift the cursor so the
+        // window draws over clean background (pause_remove_window's draw_mouse
+        // balances it).
+        self.call_restore_cursor();
+        // = seg000:de9a push framebuffer_active_seg; call
+        // set_screen_as_active_framebuffer — the window draws to the front
+        // buffer; the entry target is restored on exit (seg000:def5).
+        let saved_active = self.active_fb();
+        self.set_screen_as_active_framebuffer();
+        // = seg000:dea1..dea9 push framebuffer_1_seg; framebuffer_1_seg =
+        // vga_get_framebuffer_info() (= 0xA000): fb1 is aliased to the visible
+        // screen while paused, so a transition-staged verb repaint
+        // (draw_command_menu_item's in_transition route) lands on-screen. The
+        // port has no fb1 pointer to swap; clearing in_transition for the same
+        // scope routes those paints to the same target.
+        let saved_in_transition = std::mem::take(&mut self.in_transition);
+        self.pause_draw_window();
+        // Port-only: DOS drew straight into VGA memory; publish the frame.
+        self.send_frame_to_display();
         // = seg000:ded6 wait for P to be released.
         while self.input.lock().unwrap().kb_keys[SCANCODE_P as usize] != 0 {
             std::thread::sleep(std::time::Duration::from_millis(5));
@@ -354,14 +375,74 @@ impl GameState {
             }
             // = seg000:dee6 kb_drain_and_clear.
             self.kb_drain_and_clear();
+            // = seg000:dee9 call pause_remove_window — repaint what the window
+            // covered (runs for every key, including the resuming one).
+            self.pause_remove_window();
             // = seg000:deed dec al; jz loc_0dee0 — scancode 1 (ESC) loops.
             if sc == SCANCODE_ESC {
                 continue;
             }
             break;
         }
+        // = seg000:def1 pop framebuffer_1_seg — drop the fb1-to-screen alias.
+        self.in_transition = saved_in_transition;
+        // = seg000:def5 pop framebuffer_active_seg.
+        self.active_fb = saved_active;
+        // = seg000:def9 pop pit_timer_callback_counter — DOS rewinds the tick
+        // counter to the pre-pause value so no game time elapses while paused.
+        // The port cannot rewind game_ticks(); re-anchor the frame-task and
+        // game-clock delta bases instead (the save-panel idiom).
+        self.last_task_tick = self.game_ticks();
+        self.game_clock_last_tick = self.last_task_tick;
         // = seg000:defe mov [game_suspend_count],al — restore the suspend count.
-        self.game_suspend_count = saved;
+        self.game_suspend_count = saved_suspend;
+    }
+
+    // = seg000:deac..ded3 the window body of pause_if_p_key_pressed: the panel
+    // and its two text lines, drawn into the active framebuffer.
+    fn pause_draw_window(&mut self) {
+        // = seg000:deac si = pause_window_panel_record (seg001:2945); deaf call
+        // loc_07b1b — fill (92,159)-(227,199) with 0xf1, frame it in 0xfe.
+        self.map_draw_panel_record(rect(92, 159, 228, 200), 0xf1, 0xfe);
+        // = seg000:deb2..dec1 tall font; "GAME  PAUSED" at (130, 169), colour
+        // word 0xf1fe.
+        self.font_select_tall_font();
+        self.font_draw_phrase_or_command_string_with_color_at_pos(
+            cmd::GAME_PAUSED,
+            0xf1fe,
+            130,
+            169,
+        );
+        // = seg000:dec4..ded3 small font; " <ESC> removes this window\nAny
+        // other key resumes game" at (96, 184), colour word 0xf1f7.
+        self.font_select_small_font();
+        self.font_draw_phrase_or_command_string_with_color_at_pos(
+            cmd::ESC_REMOVES_THIS_WINDOW_ANY_OTHER_KEY_R,
+            0xf1f7,
+            96,
+            184,
+        );
+    }
+
+    // = seg000:df07 pause_remove_window — remove the GAME PAUSED window:
+    // repaint the five HUD verb-row elements it covered (ui_hud_elements[7..12]),
+    // reopen the resource bank saved at entry (draw_ui_elements_list leaves
+    // ICONES open), redraw the active command menu, then draw_mouse (balances
+    // the pause entry's call_restore_cursor).
+    fn pause_remove_window(&mut self) {
+        // = seg000:df07 push active_bank_id.
+        let saved_bank = self.open_sprite_bank(-1) as i16;
+        // = seg000:df0b si = ui_hud_elements[7]; df0e cx = 5; df11 call
+        // draw_ui_elements_list_at_ds_si.
+        self.draw_ui_elements_list(7, 5);
+        // = seg000:df14 pop ax; df15 call open_resource_by_index.
+        self.open_sprite_bank(saved_bank);
+        // = seg000:df18 call redraw_active_command_menu.
+        self.redraw_active_command_menu();
+        // = seg000:df1b jmp draw_mouse.
+        self.draw_mouse();
+        // Port-only: publish the repainted frame.
+        self.send_frame_to_display();
     }
 
     // = seg000:f08e clear_keyboard_array — zero the buffered scancode and the

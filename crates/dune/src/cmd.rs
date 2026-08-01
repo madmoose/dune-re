@@ -567,7 +567,7 @@ pub(crate) const SAVE_ERROR: u16 = 0x114;
 /// "GAME  PAUSED"
 pub(crate) const GAME_PAUSED: u16 = 0x115;
 /// " <ESC> removes this window\nAny other key resumes game"
-pub(crate) const ESC_REMOVES_THIS_WINDOW_NANY_OTHER_KEY_R: u16 = 0x116;
+pub(crate) const ESC_REMOVES_THIS_WINDOW_ANY_OTHER_KEY_R: u16 = 0x116;
 /// " 4.30 a.m. 6.00 a.m. 7.30 a.m. 9.00 a.m.10.30 a.m.12.00 p.m. 1.30 p.m. 3.00 p.m. 4.30 p.m. 6.00 p.m. 7.30 p.m. 9.00 p.m.10.30 p.m.12.00 a.m. 1.30 a.m. 3.00 a.m."
 pub(crate) const TIME_OF_DAY_TABLE: u16 = 0x117;
 /// "In these times of the future, man has explored many worlds, travelling  through space by the use of the SPICE."
