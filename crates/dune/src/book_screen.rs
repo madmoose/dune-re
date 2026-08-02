@@ -35,6 +35,23 @@ const BOOK_VIDEO_PAGE_WORDS: [u16; 12] = [
 ];
 
 impl GameState {
+    // = seg000:b270 handle_ctrl_v_once — the Ctrl+V debug cheat: append the
+    // ten pre-canned video-page words at data_0242a (= BOOK_VIDEO_PAGE_WORDS
+    // [2..]) to the dialogue-played log and re-terminate it, completing THE
+    // BOOK's twelve video pages (the first two are the startup narration
+    // pages initialize_resources seeds). DOS then overwrites its own first
+    // instruction with RET (seg000:b285) so the copy runs only once per
+    // session; the port latches with `ctrl_v_cheat_done` instead.
+    pub(crate) fn handle_ctrl_v_once(&mut self) {
+        if self.ctrl_v_cheat_done {
+            return;
+        }
+        self.ctrl_v_cheat_done = true;
+        // = seg000:b273..b284 rep movsw + the head bump and 0-word terminator.
+        self.dialogue_played_log
+            .extend_from_slice(&BOOK_VIDEO_PAGE_WORDS[2..]);
+    }
+
     // = seg000:aed6 callback_main_ui_element_03 — THE BOOK hud button: open
     // the diary screen. Only from the plain room view (game_screen_mode_flags
     // == 0).
@@ -640,9 +657,14 @@ mod tests {
         game.start(true);
 
         // = seg000:b270 handle_ctrl_v_once — the cheat appends the ten words
-        // at data_0242a (= BOOK_VIDEO_PAGE_WORDS[2..]) to the played log.
-        game.dialogue_played_log
-            .extend_from_slice(&BOOK_VIDEO_PAGE_WORDS[2..]);
+        // at data_0242a (= BOOK_VIDEO_PAGE_WORDS[2..]) to the played log,
+        // after the two startup narration pages initialize_resources seeded
+        // (BOOK_VIDEO_PAGE_WORDS[0..2]), completing the twelve video pages.
+        // The one-shot latch makes the second call a no-op.
+        assert_eq!(game.dialogue_played_log, BOOK_VIDEO_PAGE_WORDS[..2]);
+        game.handle_ctrl_v_once();
+        game.handle_ctrl_v_once();
+        assert_eq!(game.dialogue_played_log, BOOK_VIDEO_PAGE_WORDS);
 
         // The book button: the cover comes up over the open-book frieze with
         // menu_book as the active menu.
@@ -654,13 +676,12 @@ mod tests {
             .expect("write book_cover.png");
 
         // Next page from the cover shows the first logged page: bookmark on
-        // the first entry, page word 0x8459 = video 0x19 (record flags carry
-        // no topic bits for it, so the ALL TOPICS filter matches), the
-        // SEE-video hotspot armed.
+        // the first entry, page word 0x8456 ("On Dune, the desert covers the
+        // entire planet.") = video 0x19, the SEE-video hotspot armed.
         game.callback_ui_element_book_next_page();
         assert_eq!(game.data_000c6, 1, "cover bit cleared after the turn");
         assert_eq!(game.book_bookmark_ptr, 0xaa);
-        assert_eq!(game.book_page_video_id, 0x19 + 2);
+        assert_eq!(game.book_page_video_id, 0x19);
         assert_eq!(game.ui_elements[23].flags, 0x80);
         game.screen
             .write_png_scaled(&game.palette, "book_page_1.png")

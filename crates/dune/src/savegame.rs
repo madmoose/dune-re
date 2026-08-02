@@ -1143,7 +1143,12 @@ mod tests {
         assert_eq!(fresh.troops[3].population, 111);
         assert_eq!(fresh.locations[7].spice_amount, 55);
         assert_eq!(fresh.locations[7].status, game.locations[7].status);
-        assert_eq!(fresh.dialogue_played_log, vec![0x1234, 0x0872]);
+        // The first two entries are the startup narration pages initialize_
+        // resources seeds (= seg000:00b9/00bc), ahead of the two test pushes.
+        assert_eq!(
+            fresh.dialogue_played_log,
+            vec![0x8456, 0x8457, 0x1234, 0x0872]
+        );
         assert_eq!(fresh.comm_sightings, vec![0x280a]);
         assert_eq!(fresh.data_000c8, 1);
         assert_eq!(fresh.vision_messages, vec![(0x105, 0)]);

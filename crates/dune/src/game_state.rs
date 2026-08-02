@@ -159,6 +159,11 @@ pub struct GameState {
     // Edge-detects the press so a held key opens the panel only once.
     pub(crate) custom_save_key_down: bool,
 
+    // = the seg000:b285 self-patch (handle_ctrl_v_once overwrites its first
+    // instruction with RET): once the Ctrl+V cheat has fired, later presses
+    // are no-ops for the rest of the session.
+    pub(crate) ctrl_v_cheat_done: bool,
+
     // ---- Host/runtime state and buffers (not seg001 data-segment globals) ----
     pub dat_file: DatFile,
 
@@ -2002,6 +2007,7 @@ impl GameState {
             debug_overlay_key_down: false,
             debug_advance_phase_key_down: false,
             custom_save_key_down: false,
+            ctrl_v_cheat_done: false,
             // ---- Host/runtime state and buffers ----
             dat_file,
 
@@ -2584,6 +2590,18 @@ impl GameState {
         self.init_troop_locations();
 
         self.build_voc_base_table();
+
+        // = seg000:00b9/00bc — after initialize_resources2 returns, run the
+        // game-phase trigger record twice. Each walk presents the first
+        // condition-matching unspoken entry of DIALOGUE slot 135 (records
+        // 0x456..) silently (subtitles suppressed, pseudo-speaker 0x10 skips
+        // the talking head) and appends it to the dialogue-played log, so a
+        // new game's BOOK opens with two pages — the "On Dune, the desert
+        // covers the entire planet." and "Paul Atreides arrived on Dune with
+        // his father, ..." narrations, both carrying a book video (HNM
+        // 0x19/0x1a via book_video_page_words[0..2]).
+        self.run_game_phase_triggers();
+        self.run_game_phase_triggers();
     }
 
     // = seg000:d815 game_loop — the in-game per-frame loop.
@@ -2663,20 +2681,19 @@ impl GameState {
             // modal loop in save_screen.rs). Also reads the raw key state.
             self.poll_custom_save_panel();
 
-            // = seg000:d820..d82e — the Ctrl+V (scancode 0x2f + kb_keys[0x1d]
-            // held; chani labels [0x1d] "_w" but 0x1d is Left Ctrl, not W)
-            // one-shot debug cheat. handle_ctrl_v_once (seg000:b270) copies
-            // 10 pre-canned `(dialogue_record_index, lip_sync_id<<3)` packed
-            // words from seg001:242a into the dialogue-played log at
-            // seg000:0xaa+ (the growing buffer whose head pointer lives in
-            // dialogue_played_log_head, the port's dialogue_played_log Vec —
-            // fire_event_callbacks at seg000:a07f appends one entry per
-            // replayable spoken line), bumps the head, writes a 0-word
-            // terminator, then self-modifies its own first instruction to
-            // 0xc3 (RET) so it can fire only once per session.
-            // TODO: port the cheat; it retroactively marks 10 specific
-            //   dialogues as heard so gating that consumes the log behaves
-            //   as if the player had already encountered them.
+            // = seg000:d820..d82e — the Ctrl+V one-shot cheat: the buffered
+            // key-press scancode is 'V' (0x2f) while Left Ctrl (kb_keys[0x1d];
+            // chani labels it "_w" but 0x1d is Left Ctrl, not W) is held.
+            // DOS only compares the scancode buffer here — it does not consume
+            // it — and relies on handle_ctrl_v_once's self-patch (RET, ported
+            // as ctrl_v_cheat_done) to make the repeated passes no-ops.
+            let ctrl_v = {
+                let input = self.input.lock().unwrap();
+                input.key_hit_scancode == 0x2f && input.kb_keys[0x1d] != 0
+            };
+            if ctrl_v {
+                self.handle_ctrl_v_once();
+            }
 
             // = seg000:d831 pending_room_screen_request == 0 -> run the
             // pre-swap hooks: ui_hud_companion_blink_task (seg000:d7b7, the
