@@ -2077,7 +2077,10 @@ impl GameState {
             area_controlled_by_atreides: 0,
             area_controlled_by_harkonnen: 0,
             todays_spice_production: 0,
-            potential_spice_harvest: 0,
+            // = the seg001:00a8 static init 0x186 (390 -> "3900" in the SEE
+            // RESULTS ×10 display), shown until the first new-day recompute
+            // (accumulate_potential_spice_harvest).
+            potential_spice_harvest: 0x186,
             data_000aa: 0,
             data_000ac: 0x1b58,
             previous_day_spice_production: 0,

@@ -1026,6 +1026,16 @@ mod tests {
             "gauge targets computed: {:?}",
             game.results_gauge_targets
         );
+        // The Harkonnen spice production carries the seg001:00a8 static init
+        // 0x186 (390) at the game start: gauge 2's target, and "3900" in the
+        // string's ×10 form.
+        assert_eq!(game.results_gauge_targets[2], (0x186u16 >> 4) as u8 + 1);
+        let shows_3900 = (0xc4..=0xcc).any(|id| {
+            game.get_phrase_or_command_string(id)
+                .windows(4)
+                .any(|w| w == b"3900")
+        });
+        assert!(shows_3900, "Harkonnen spice production string shows 3900");
         // The gauge task steps every current value onto its target.
         for _ in 0..64 {
             game.tick_results_gauges();
