@@ -84,6 +84,8 @@ pub(crate) enum TaskId {
     // (interval 1): one outline row into fb1 per tick, present + one phase
     // step per finished pass.
     GlobeRotation,
+    // = seg000:be57 results_gauge_task (interval 0xc).
+    ResultsGauges,
     // = seg000:6b34 troop_icon_anim_task — the troop icon animation task on
     // the full map view (interval 15).
     TroopIconAnim,
@@ -838,6 +840,26 @@ pub struct GameState {
     // the port only implements the full-redraw mode 0 (map_func_gfx draws
     // nothing while it is set).
     pub(crate) globe_draw_skips_pixel_stores: u8,
+
+    // = seg001:dd11 results_gauge_targets / seg001:dd17 results_gauge_current
+    // — the SEE RESULTS gauges: results_update_gauge_targets fills the
+    // targets, results_draw_text_and_icones zeroes the currents, and
+    // results_gauge_task steps each current one toward its target per fire.
+    pub(crate) results_gauge_targets: [u8; 6],
+    pub(crate) results_gauge_current: [u8; 6],
+
+    // = seg001:115c results_stats_timestamp — game_time & 0xfff0 at the last
+    // stats refresh; the trend tail treats an equal value as "unchanged"
+    // (glyph 3) only across a period change.
+    pub(crate) results_stats_timestamp: u16,
+
+    // = seg001:115e results_prev_values — each stat's last value, exchanged
+    // by the loc_0bf7d trend tail.
+    pub(crate) results_prev_values: [u16; 6],
+
+    // = seg001:116a results_trend_glyphs — the trend glyph codes (1 rose /
+    // 2 fell / 3 unchanged) results_gauge_task draws when a gauge lands.
+    pub(crate) results_trend_glyphs: [u8; 6],
 
     // = seg001:1ae4 _word_20F94_ui_elements — the in-game HUD element table.
     pub(crate) ui_elements: [UiElement; 24],
@@ -2194,6 +2216,11 @@ impl GameState {
             globe_tilt: 0,
             globe_decoration_offset: 0,
             globe_draw_skips_pixel_stores: 0,
+            results_gauge_targets: [0; 6],
+            results_gauge_current: [0; 6],
+            results_stats_timestamp: 0,
+            results_prev_values: [0; 6],
+            results_trend_glyphs: [0; 6],
             ui_elements: UI_ELEMENTS_INIT,
             // = the static seg001 menu buffers, initialized to their compiled-in
             // contents (priority byte + records; command_menu_buf and
@@ -3104,6 +3131,9 @@ impl GameState {
                 }
                 TaskId::GlobeRotation => {
                     self.tick_globe_rotation();
+                }
+                TaskId::ResultsGauges => {
+                    self.tick_results_gauges();
                 }
                 TaskId::TroopIconAnim => {
                     self.tick_troop_icon_anim();

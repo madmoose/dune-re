@@ -756,10 +756,11 @@ impl GameState {
     // = seg000:b930 remove_globe_frame_tasks — stop the globe/map animation
     // frame tasks: globe_screen_active = 0, remove the globe rotation task
     // (frame_task_callback_0b9ae), then fall through into removing the
-    // results-gauge task (frame_task_callback_0be57 — not ported).
+    // results-gauge task (loc_0b93b -> results_gauge_task).
     pub(crate) fn remove_globe_frame_tasks(&mut self) {
         self.globe_screen_active = 0;
         self.remove_frame_task(crate::TaskId::GlobeRotation);
+        self.remove_frame_task(crate::TaskId::ResultsGauges);
     }
 
     // = seg000:d75a ui_set_and_draw_frieze_sides_closed_book — draw the in-game

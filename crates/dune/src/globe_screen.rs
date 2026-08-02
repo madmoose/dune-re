@@ -17,16 +17,20 @@
 //! zooms out to the map interface through the expanding-box + 2x-shimmer
 //! effect (seg000:bc99).
 //!
-//! Not ported yet: the SEE RESULTS mode (menu_callback_choice_globe_see_
-//! results, seg000:b96b) — the side-decoration slide (seg000:b8f3/b915), the
-//! stats overlay (results_draw_text_and_icones, seg000:be1d) and the
-//! globe_draw_skips_pixel_stores patch draw stay stubs.
+//! The SEE RESULTS mode (menu_callback_choice_globe_see_results,
+//! seg000:b96b) slides the FRESK side decorations apart over a stats overlay
+//! (results_draw_text_and_icones): the day/charisma header, the six live
+//! stat strings (COMMAND 0xc4..0xc9, updated in place), the house labels,
+//! and six animated gauges (results_gauge_task) with trend glyphs. While it
+//! is up, globe_draw_skips_pixel_stores keeps the rotation task from
+//! repainting the globe pixels (the phase still advances); STANDARD VISION
+//! slides the decorations back and returns to the live globe.
 
 use crate::{
-    GameState, Rect,
+    GameState, Rect, cmd,
     game_ui::{MouseHandlers, NAV_PANEL_GLOBE},
     globe_renderer::GLOBE_CLIP_RECT,
-    menu_defs::MenuRef,
+    menu_defs::{self, MenuRef},
     sprite_bank,
 };
 
@@ -138,13 +142,26 @@ impl GameState {
         // passes clip rects per draw call, so nothing is stored here.
     }
 
-    // = seg000:b941 globe_menu_push — push the globe verb menu. DOS patches record
-    // 1 in place: text 0xb1 SEE RESULTS + menu_callback_choice_globe_see_
-    // results while globe_draw_skips_pixel_stores is clear, text 0xb2
-    // STANDARD VISION + the see_standard_vision callback while it is set.
-    // The port keeps the flag at 0 (the results mode is not ported), so the
-    // static MENU_GLOBE row is already the SEE RESULTS variant.
+    // = seg000:b941 globe_menu_push — push the globe verb menu, patching
+    // record 1 in place first: text 0xb1 SEE RESULTS + menu_callback_choice_
+    // globe_see_results while globe_draw_skips_pixel_stores is clear, text
+    // 0xb2 STANDARD VISION + the see_standard_vision callback while it is
+    // set.
     pub(crate) fn globe_menu_push(&mut self) {
+        // = seg000:b944..b958 mov [bp+6],ax; mov [bp+8],bx.
+        self.menu_globe.records[1] = if self.globe_draw_skips_pixel_stores == 0 {
+            menu_defs::item(
+                cmd::SEE_RESULTS,
+                0xb96b,
+                GameState::menu_callback_choice_globe_see_results,
+            )
+        } else {
+            menu_defs::item(
+                cmd::STANDARD_VISION,
+                0xb961,
+                GameState::menu_callback_choice_globe_see_standard_vision,
+            )
+        };
         // = seg000:b95b..b95e bx = fn_0d917_noop; jmp screen_element_stack_
         // push.
         self.menu_stack_push(MenuRef::MenuGlobe, None);
@@ -483,6 +500,405 @@ impl GameState {
         // = seg000:5a53 jmp service_midi_music.
         self.service_midi_music();
     }
+
+    // = seg000:b96b menu_callback_choice_globe_see_results — the SEE RESULTS
+    // verb: slide the decorations open over the stats overlay, enter the
+    // pixel-store-skip draw mode, and re-push the menu (row 1 becomes
+    // STANDARD VISION).
+    pub(crate) fn menu_callback_choice_globe_see_results(&mut self, _text_id: u16, _index: usize) {
+        // = seg000:b96b call globe_slide_decorations_open.
+        self.globe_slide_decorations_open();
+        // = seg000:b96e dec globe_draw_skips_pixel_stores (0 -> 0xff).
+        self.globe_draw_skips_pixel_stores = self.globe_draw_skips_pixel_stores.wrapping_sub(1);
+        // = seg000:b972 loc_0b972.
+        self.globe_results_menu_tail();
+    }
+
+    // = seg000:b961 menu_callback_choice_globe_see_standard_vision — the
+    // STANDARD VISION verb: slide the decorations closed and return to the
+    // live globe (row 1 becomes SEE RESULTS again).
+    pub(crate) fn menu_callback_choice_globe_see_standard_vision(
+        &mut self,
+        _text_id: u16,
+        _index: usize,
+    ) {
+        // = seg000:b961 call globe_slide_decorations_close.
+        self.globe_slide_decorations_close();
+        // = seg000:b964 globe_draw_skips_pixel_stores = 0.
+        self.globe_draw_skips_pixel_stores = 0;
+        // = seg000:b969 jmp loc_0b972.
+        self.globe_results_menu_tail();
+    }
+
+    // = seg000:b972 loc_0b972 — the shared mode-switch tail: redraw/present
+    // the globe view and re-push the (re-patched) globe menu.
+    fn globe_results_menu_tail(&mut self) {
+        self.globe_redraw_and_present();
+        self.globe_menu_push();
+    }
+
+    // = seg000:b8f3 globe_slide_decorations_open — compose the stats screen
+    // behind the decorations (globe + atmosphere + the results overlay),
+    // snapshot it to fb2, then slide the two side panels apart in 0x10-pixel
+    // steps, restoring the game area from fb2 under each step.
+    fn globe_slide_decorations_open(&mut self) {
+        // = seg000:b8f3 call globe_fill_blue_background_to_front_buffer.
+        self.globe_fill_blue_background_to_front_buffer();
+        // = seg000:b8f6..b8f9 bp = results_draw_text_and_icones; call
+        // gfx_call_bp_with_front_buffer_as_screen.
+        self.gfx_call_bp_with_front_buffer_as_screen(|s| s.results_draw_text_and_icones());
+        // = seg000:b8fc call copy_game_rect_fb1_to_fb2.
+        let yoff = self.y_offset as i16;
+        let game_area = crate::rect::rect(0, yoff, 320, 152 + yoff);
+        crate::gfx::vga_copy_rect(&mut self.framebuffer_saved, &self.framebuffer, game_area);
+        // = seg000:b8ff..b912 the slide loop: restore fb1 from fb2, draw the
+        // decorations at the current offset, present, step outward by 0x10
+        // until the offset passes -0x6a.
+        loop {
+            let start = self.game_ticks();
+            self.copy_game_area_fb2_to_fb1();
+            self.draw_globe_side_decorations();
+            self.present_game_area();
+            self.globe_decoration_offset -= 0x10;
+            if self.globe_decoration_offset <= -0x6a {
+                break;
+            }
+            // DOS paces the slide by the full-area present's cost on period
+            // hardware; hold each presented step a couple of PIT ticks.
+            self.sleep_ticks(start, 2);
+        }
+    }
+
+    // = seg000:b915 globe_slide_decorations_close — remove the gauge task
+    // and slide the side panels back in, drawing straight to the screen,
+    // then redraw them into fb1 at the closed position.
+    fn globe_slide_decorations_close(&mut self) {
+        // = seg000:b915 call loc_0b93b — remove results_gauge_task.
+        self.remove_frame_task(crate::TaskId::ResultsGauges);
+        // = seg000:b918 call set_screen_as_active_framebuffer.
+        self.set_screen_as_active_framebuffer();
+        // = seg000:b91b..b928 the slide-in loop (the panels only ever move
+        // inward, so no background restore is needed).
+        loop {
+            let start = self.game_ticks();
+            self.globe_decoration_offset += 0x10;
+            self.draw_globe_side_decorations();
+            self.send_frame_to_display();
+            if self.globe_decoration_offset == 0 {
+                break;
+            }
+            self.sleep_ticks(start, 2);
+        }
+        // = seg000:b92a..b92d redraw them into fb1 at the closed position.
+        self.set_fb1_as_active_framebuffer();
+        self.draw_globe_side_decorations();
+    }
+
+    // = seg000:be1d results_draw_text_and_icones — compose the stats overlay
+    // into the (redirected) front buffer: the house crest icons, the gauge
+    // targets, the day/charisma header, the small-font stat strings, and the
+    // gauge animation task.
+    pub(crate) fn results_draw_text_and_icones(&mut self) {
+        // = seg000:be1d..be26 FRESK; draw_icons_list_at_si(_word_219B6).
+        self.open_sprite_bank(sprite_bank::FRESK);
+        self.with_active_bank_sheet(|s, sheet| {
+            s.draw_icons_list_at_si(&STATS_HOUSES_ICONS, sheet);
+        });
+        // = seg000:be29 call results_update_gauge_targets.
+        self.results_update_gauge_targets();
+        // = seg000:be2c call ui_stats_draw_ingame_day_and_charisma.
+        self.ui_stats_draw_ingame_day_and_charisma();
+        // = seg000:be2f..be39 zero the six gauge currents (dd17..dd1c).
+        self.results_gauge_current = [0; 6];
+        // = seg000:be3c..be42 results_stats_timestamp = game_time & fff0.
+        self.results_stats_timestamp = self.game_time & 0xfff0;
+        // = seg000:be45..be4b small font; font_draw_phrase_list(ui_stats_
+        // text).
+        self.font_select_small_font();
+        for &(id, x, y, color) in &STATS_TEXT {
+            self.font_draw_phrase_or_command_string_with_color_at_pos(id, color, x, y);
+        }
+        // = seg000:be4e..be54 add results_gauge_task (interval 0xc) and fall
+        // through into its first run.
+        self.add_frame_task(0xc, crate::TaskId::ResultsGauges);
+        self.tick_results_gauges();
+    }
+
+    // = seg000:bed7 results_update_gauge_targets — refresh the stats data:
+    // the timestamp, the CONDIT statistics, the six stat strings + trend
+    // glyphs, and the six gauge target bytes.
+    fn results_update_gauge_targets(&mut self) {
+        // = seg000:bed7..bedd results_stats_timestamp = game_time & fff0.
+        self.results_stats_timestamp = self.game_time & 0xfff0;
+        // = seg000:bee0 call recompute_condit_statistics.
+        self.recompute_condit_statistics();
+        // = seg000:bee3 call results_update_percent_strings.
+        self.results_update_percent_strings();
+        // = seg000:bee6..bf24 the six gauge targets.
+        self.results_gauge_targets = [
+            (self.area_controlled_by_harkonnen >> 1).wrapping_add(1) as u8,
+            (self.area_controlled_by_atreides >> 1).wrapping_add(1) as u8,
+            (self.potential_spice_harvest >> 4).wrapping_add(1) as u8,
+            (self.todays_spice_production >> 4).wrapping_add(1) as u8,
+            (self.data_000ac >> 8).wrapping_add(1) as u8,
+            (self.data_000aa >> 8).wrapping_add(1) as u8,
+        ];
+    }
+
+    // = seg000:bf26 results_update_percent_strings — write the six stat
+    // values into the consecutive digit-bearing COMMAND strings from 0xc4 on
+    // (DOS walks es:si across the string buffer; digit-less strings between
+    // them are skipped by the find), and the trend glyph per value.
+    fn results_update_percent_strings(&mut self) {
+        // = seg000:bf2c..bf2f si = the phrase 0xc4 string.
+        let (start, _) = crate::container::entry_byte_range(&self.command_bin, 0xc4 - 1);
+        let mut si = start as usize;
+        // = seg000:bf32..bf53 the six values: the two area percentages
+        // through the 3-digit replace (results_stat_string_replace), the
+        // spice/population stats through the value*10 form
+        // (results_stat_string_replace_x10).
+        let values = [
+            (self.area_controlled_by_harkonnen, false),
+            (self.area_controlled_by_atreides, false),
+            (self.potential_spice_harvest, true),
+            (self.todays_spice_production, true),
+            (self.data_000ac, true),
+            (self.data_000aa, true),
+        ];
+        for (g, &(value, x10)) in values.iter().enumerate() {
+            // = seg000:d03c find_last_numeric_digit_in_str_at_es_si — scan
+            // forward (across terminators) for the next digit run; si = one
+            // past it.
+            while si < self.command_bin.len() && !self.command_bin[si].is_ascii_digit() {
+                si += 1;
+            }
+            while si < self.command_bin.len() && self.command_bin[si].is_ascii_digit() {
+                si += 1;
+            }
+            if si >= self.command_bin.len() {
+                return;
+            }
+            if x10 {
+                // = seg000:bf61 results_stat_string_replace_x10 — force the
+                // last digit to '0' and write the 5-digit value before it
+                // (loc_0e31c), showing value*10.
+                self.command_bin[si - 1] = b'0';
+                write_stat_number_5(&mut self.command_bin[si - 6..si - 1], value);
+            } else {
+                // = seg000:bf73 results_stat_string_replace — the plain
+                // 3-digit field (string_replace_number_ending_at_es_si).
+                write_stat_number_3(&mut self.command_bin[si - 3..si], value);
+            }
+            // = seg000:bf7d..bfa5 the shared trend tail: exchange the value
+            // with the previous one; a change picks rose/fell, an unchanged
+            // value marks "steady" only across a period boundary.
+            let old = std::mem::replace(&mut self.results_prev_values[g], value);
+            if value != old {
+                self.results_trend_glyphs[g] = if value < old { 2 } else { 1 };
+            } else if self.results_stats_timestamp != self.game_time & 0xfff0 {
+                self.results_trend_glyphs[g] = 3;
+            }
+        }
+    }
+
+    // = seg000:bdfa ui_stats_draw_ingame_day_and_charisma — the tall-font
+    // header: "Nth day on DUNE" (with the language's ordinal suffix) and
+    // "CHARISMA = N".
+    fn ui_stats_draw_ingame_day_and_charisma(&mut self) {
+        // = seg000:bdfa..be01 find_string_and_replace_digits(0xc2, day+1).
+        let day = self.get_ingame_day_in_ax() + 1;
+        self.command_string_replace_number(0xc2, day);
+        // = seg000:be04 call string_update_ordinal_suffix.
+        self.string_update_ordinal_suffix(0xc2);
+        // = seg000:be07..be11 find_string_and_replace_digits(0xc3,
+        // charisma/2).
+        let charisma = (self.charisma >> 1) as u16;
+        self.command_string_replace_number(0xc3, charisma);
+        // = seg000:be14..be1a tall font; font_draw_phrase_list(ui_stats_day_
+        // and_charisma).
+        self.font_select_tall_font();
+        for &(id, x, y, color) in &STATS_DAY_AND_CHARISMA {
+            self.font_draw_phrase_or_command_string_with_color_at_pos(id, color, x, y);
+        }
+    }
+
+    // = seg000:bfa7 string_update_ordinal_suffix — overwrite the two
+    // characters after the day number with the language's ordinal suffix
+    // (the seg001:251a table, 4 two-char suffixes per language).
+    fn string_update_ordinal_suffix(&mut self, id: u16) {
+        // = seg000:bfa7..bfb3 bx = 251ah + language*8.
+        let lang = (self.language_setting as usize).min(ORDINAL_SUFFIXES.len() - 1);
+        let table = &ORDINAL_SUFFIXES[lang];
+        let (ofs, end) = crate::container::entry_byte_range(&self.command_bin, id - 1);
+        let s = &mut self.command_bin[ofs as usize..end as usize];
+        // The digit run command_string_replace_number just patched.
+        let Some(first) = s.iter().position(u8::is_ascii_digit) else {
+            return;
+        };
+        let e = s[first..]
+            .iter()
+            .position(|c| !c.is_ascii_digit())
+            .map_or(s.len(), |n| first + n);
+        if e < 2 || e + 2 > s.len() {
+            return;
+        }
+        // = seg000:bfb7..bfd5 ah = the tens character, al = the units value:
+        // 1x -> suffix 0; units >= 4 -> 0; units 1 in French only for a bare
+        // "1" (tens == ' '); otherwise index by the units.
+        let tens = s[e - 2];
+        let unit = (s[e - 1] & 0x0f) as usize;
+        let french_1x = unit == 1 && lang == 1 && tens != b' ';
+        let idx = if tens == b'1' || unit >= 4 || french_1x {
+            0
+        } else {
+            unit
+        };
+        // = seg000:bfdd..bfe2 the two suffix characters at es:[si].
+        s[e..e + 2].copy_from_slice(&table[idx]);
+    }
+
+    // = seg000:be57 results_gauge_task — the gauge animation (interval 0xc):
+    // step each gauge's current value one toward its target and stamp the
+    // ICONES bar + cap at its anchor; a gauge that lands draws its trend
+    // glyph above the cap.
+    pub(crate) fn tick_results_gauges(&mut self) {
+        // = seg000:be57 call set_screen_as_active_framebuffer (follows the
+        // front-buffer redirect during the composing first run).
+        self.set_screen_as_active_framebuffer();
+        // = seg000:be5a..be5d restore_mouse_if_rect_intersects(game area).
+        if self.mouse_pos_y < 152 {
+            self.restore_cursor_over_panel();
+        }
+        // = seg000:be60 call load_icones_sprites.
+        self.open_icones_spritesheet();
+        let mut any = false;
+        for (g, &(x, y)) in RESULTS_GAUGE_ANCHORS.iter().enumerate() {
+            // = seg000:be68..be6d cl = target - current; jz — this gauge has
+            // landed.
+            let target = self.results_gauge_targets[g];
+            let current = self.results_gauge_current[g];
+            if current == target {
+                continue;
+            }
+            any = true;
+            // = seg000:be6f..be78 step one toward the target.
+            let current = if current < target {
+                current + 1
+            } else {
+                current - 1
+            };
+            self.results_gauge_current[g] = current;
+            // = seg000:be7b..be81 the drawn height clamps at 0x1e.
+            let h = current.min(0x1e) as i16;
+            // (x, y) = the seg001:24ee anchor for this gauge (be81..be8f).
+            // = seg000:be95..be9d the bar: sprite 0x37 for the even gauges,
+            // 0x38 for the odd (shr bp,1; adc ax,0).
+            self.draw_active_bank_sprite(0x37 + (g as u16 & 1), x, y - h);
+            // = seg000:bea0..bea6 the cap (sprite 0x39) ten rows above.
+            self.draw_active_bank_sprite(0x39, x, y - h - 0x0a);
+            // = seg000:beab..beca on landing, the trend glyph above the cap:
+            // colour 0x3f for the even gauges, 0x25 for the odd.
+            if current == target {
+                self.font_state.color = if g & 1 == 0 { 0x3f } else { 0x25 };
+                self.font_select_small_font();
+                self.font_set_draw_position((x + 4) as u16, (y - h - 0x0a) as u16);
+                self.font_draw_glyph(self.results_trend_glyphs[g]);
+            }
+        }
+        // = seg000:bed4 jmp set_fb1_as_active_framebuffer.
+        self.set_fb1_as_active_framebuffer();
+        // DOS stamped straight into VGA memory; push the frame unless the
+        // front buffer is redirected (the composing first run inside
+        // results_draw_text_and_icones).
+        if any && !self.front_buffer_is_fb1() {
+            self.send_frame_to_display();
+        }
+    }
+}
+
+/// = seg001:2506 _word_219B6_stats_houses_icons_list — the two FRESK house
+/// crest icons beside the ATREIDES/HARKONNENS percentage labels.
+const STATS_HOUSES_ICONS: [(u16, i16, i16); 2] = [(3, 11, 124), (4, 11, 136)];
+
+/// = seg001:2482 ui_stats_day_and_charisma — the tall-font header phrase
+/// list: {id, x, y, colour (bg 0xf0 | fg)}.
+const STATS_DAY_AND_CHARISMA: [(u16, u16, u16, u16); 2] =
+    [(0xc2, 16, 6, 0xf0fd), (0xc3, 216, 6, 0xf0fd)];
+
+/// = seg001:2494 ui_stats_text — the small-font stat phrase list: the six
+/// live value strings (0xc4..0xc9), three static captions, and the two house
+/// labels (fg 0x3f = Harkonnen rows, 0x25 = Atreides rows).
+#[rustfmt::skip]
+const STATS_TEXT: [(u16, u16, u16, u16); 11] = [
+    (0xc4,  20,  69, 0xf03f),
+    (0xc5,  48,  69, 0xf025),
+    (0xc6,   8,  80, 0xf0fb),
+    (0xc7, 240,  60, 0xf03f),
+    (0xc8, 272,  60, 0xf025),
+    (0xc9, 236,  71, 0xf0fb),
+    (0xca, 240, 131, 0xf03f),
+    (0xcb, 272, 131, 0xf025),
+    (0xcc, 236, 142, 0xf0fb),
+    (0xaf,  35, 125, 0xf025), // "ATREIDES"
+    (0xb0,  35, 139, 0xf03f), // "HARKONNENS"
+];
+
+/// = seg001:24ee the six gauge anchors {x, y} (the bar sprite's top sits at
+/// y - value).
+const RESULTS_GAUGE_ANCHORS: [(i16, i16); 6] = [
+    (26, 62),
+    (54, 62),
+    (252, 54),
+    (280, 54),
+    (252, 125),
+    (280, 125),
+];
+
+/// = seg001:251a ordinal_suffixes — 4 two-char ordinal suffixes per
+/// language: English th/st/nd/rd, French (è-glyph 0x7d) with "er" for a bare
+/// 1, German a plain ". " for everything.
+const ORDINAL_SUFFIXES: [[[u8; 2]; 4]; 3] = [
+    [*b"th", *b"st", *b"nd", *b"rd"],
+    [[0x7d, b' '], *b"er", [0x7d, b' '], [0x7d, b' ']],
+    [*b". ", *b". ", *b". ", *b". "],
+];
+
+// = seg000:e2e3 string_replace_number_ending_at_es_si — the fixed 3-digit
+// field ending at the digit run, clamped to 999, leading zeros as spaces.
+fn write_stat_number_3(field: &mut [u8], value: u16) {
+    let value = value.min(999);
+    let digits = [value / 100, value / 10 % 10, value % 10];
+    let mut leading = true;
+    for (i, d) in digits.iter().enumerate() {
+        leading &= *d == 0;
+        field[i] = if leading && i < 2 {
+            b' '
+        } else {
+            b'0' + *d as u8
+        };
+    }
+}
+
+// = seg000:e31c loc_0e31c — the 5-digit field before the forced trailing
+// '0': ten-thousands down to units, leading zeros as spaces through the tens
+// digit (the units digit always draws).
+fn write_stat_number_5(field: &mut [u8], value: u16) {
+    let digits = [
+        value / 10000,
+        value / 1000 % 10,
+        value / 100 % 10,
+        value / 10 % 10,
+        value % 10,
+    ];
+    let mut leading = true;
+    for (i, d) in digits.iter().enumerate() {
+        leading &= *d == 0;
+        field[i] = if leading && i < 4 {
+            b' '
+        } else {
+            b'0' + *d as u8
+        };
+    }
 }
 
 #[cfg(test)]
@@ -576,6 +992,47 @@ mod tests {
             (before + 0x20 + 1).rem_euclid(398),
             "no step while the button is up"
         );
+
+        // SEE RESULTS: the decorations slide apart over the stats overlay,
+        // the draw mode flips to the pixel-store-skip patch, and menu row 1
+        // becomes STANDARD VISION.
+        game.menu_callback_choice_globe_see_results(0, 0);
+        while rx.try_recv().is_ok() {}
+        assert_ne!(game.globe_draw_skips_pixel_stores, 0, "results draw mode");
+        assert_eq!(
+            game.menu_globe.records[1].text_id,
+            crate::cmd::STANDARD_VISION
+        );
+        assert!(
+            game.globe_decoration_offset <= -0x6a,
+            "decorations slid open"
+        );
+        assert_ne!(
+            game.results_gauge_targets, [0; 6],
+            "gauge targets computed: {:?}",
+            game.results_gauge_targets
+        );
+        // The gauge task steps every current value onto its target.
+        for _ in 0..64 {
+            game.tick_results_gauges();
+        }
+        assert_eq!(
+            game.results_gauge_current, game.results_gauge_targets,
+            "gauges landed"
+        );
+        game.framebuffer
+            .write_png(&game.palette, "globe_screen_results.png")
+            .unwrap();
+        game.screen
+            .write_png(&game.palette, "globe_screen_results_screen.png")
+            .unwrap();
+
+        // STANDARD VISION slides them back and restores the live globe.
+        game.menu_callback_choice_globe_see_standard_vision(0, 0);
+        while rx.try_recv().is_ok() {}
+        assert_eq!(game.globe_draw_skips_pixel_stores, 0);
+        assert_eq!(game.globe_decoration_offset, 0, "decorations closed");
+        assert_eq!(game.menu_globe.records[1].text_id, crate::cmd::SEE_RESULTS);
 
         // Recentre on the player, then the pin projection and the click pick
         // must roundtrip: picking at the pin's screen position returns the

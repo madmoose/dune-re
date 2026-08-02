@@ -551,7 +551,7 @@ impl GameState {
     // = seg000:c02e recompute_condit_statistics — the area percentages, the
     // running max of today's spice production, and the troop population sums
     // (ds:ac Harkonnen, ds:aa loyal).
-    fn recompute_condit_statistics(&mut self) {
+    pub(crate) fn recompute_condit_statistics(&mut self) {
         self.compute_area_controlled_percentages();
         // = seg000:c031..c046 the same production formula as the new-day
         //   diff, kept as a running max within the day.
