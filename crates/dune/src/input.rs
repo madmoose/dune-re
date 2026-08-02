@@ -403,23 +403,34 @@ impl GameState {
     fn pause_draw_window(&mut self) {
         // = seg000:deac si = pause_window_panel_record (seg001:2945); deaf call
         // loc_07b1b — fill (92,159)-(227,199) with 0xf1, frame it in 0xfe.
-        self.map_draw_panel_record(rect(92, 159, 228, 200), 0xf1, 0xfe);
+        let rect = rect(92, 159, 228, 200);
+        self.map_draw_panel_record(rect, 0xf1, 0xfe);
         // = seg000:deb2..dec1 tall font; "GAME  PAUSED" at (130, 169), colour
         // word 0xf1fe.
         self.font_select_tall_font();
+
+        // Port-only: center the text in the rect.
+        let width = self.measure_text(cmd::GAME_PAUSED) as i16;
+        let x = rect.x0 + ((rect.x1 - rect.x0) - width) / 2;
         self.font_draw_phrase_or_command_string_with_color_at_pos(
             cmd::GAME_PAUSED,
             0xf1fe,
-            130,
+            x as u16,
             169,
         );
+
         // = seg000:dec4..ded3 small font; " <ESC> removes this window\nAny
         // other key resumes game" at (96, 184), colour word 0xf1f7.
         self.font_select_small_font();
+
+        // Port-only: center the text in the rect.
+        let width = self.measure_text(cmd::ESC_REMOVES_THIS_WINDOW_ANY_OTHER_KEY_R) as i16;
+        let x = rect.x0 + ((rect.x1 - rect.x0) - width) / 2;
+
         self.font_draw_phrase_or_command_string_with_color_at_pos(
             cmd::ESC_REMOVES_THIS_WINDOW_ANY_OTHER_KEY_R,
             0xf1f7,
-            96,
+            x as u16,
             184,
         );
     }
@@ -452,5 +463,25 @@ impl GameState {
         input.key_hit_scancode = 0;
         input.kb_keys = [0; KB_KEYS_LEN];
         input.typed.clear();
+    }
+
+    // Port-only: measure the width of a multiline text string in pixels.
+    fn measure_text(&self, index: u16) -> u16 {
+        let text = self.get_phrase_or_command_string(index);
+        let mut width = 0;
+        let mut line_width = 0;
+        for &c in text {
+            if c == 0xff {
+                break;
+            }
+            let w = self.font.glyph_width(c, self.font_state.size);
+            if c == 0x0d {
+                line_width = 0;
+                continue;
+            }
+            line_width += w as u16;
+            width = width.max(line_width);
+        }
+        width
     }
 }
