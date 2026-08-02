@@ -434,8 +434,9 @@ pub struct GameState {
     // = seg001:00a8 for_condit_harkonnen_spice_production_ds_a8 — the
     // Harkonnen spice production (the SEE RESULTS Harkonnen SPICE PRODUCTION
     // column, ×10 in kg): sum of spice_density/8 over the locations
-    // location_is_Atreides_05d36 accepts + rand_iterated(sum/16), recomputed
-    // each new day (seg000:1cda). Static init 390 (3900 kg at game start).
+    // location_is_Atreides_05d36 REJECTS (everything the Harkonnens still
+    // exploit) + rand_iterated(sum/16), recomputed each new day
+    // (seg000:1cda). Static init 390 (3900 kg at game start).
     pub(crate) harkonnen_spice_production: u16,
 
     // = seg001:00aa data_000aa — total population of the troops that are

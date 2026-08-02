@@ -501,13 +501,14 @@ impl GameState {
     }
 
     // = seg000:1cda accumulate_harkonnen_spice_production — ds:a8 = sum of
-    // spice_density/8 over the locations location_is_Atreides_05d36 accepts
-    // (appearance >= 0x28, status bit 3) + rand_iterated(sum/16). (The
-    // location count accumulates in dx but has no store.)
+    // spice_density/8 over the locations location_is_Atreides_05d36 REJECTS
+    // (the seg000:1ce4 jb skips the Atreides holdings — everything the
+    // Harkonnens still exploit) + rand_iterated(sum/16). (The location count
+    // accumulates in dx but has no store.)
     fn accumulate_harkonnen_spice_production(&mut self) {
         let mut sum = 0u16;
         for li in 0..self.locations.len() {
-            if self.location_is_atreides(li) {
+            if !self.location_is_atreides(li) {
                 sum = sum.wrapping_add((self.locations[li].spice_density >> 3) as u16);
             }
         }

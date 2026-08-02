@@ -1869,12 +1869,14 @@ impl GameState {
     fn map_draw_troop_contact_head(&mut self, ti: usize, head_box: Rect) {
         let troop = self.troops[ti];
         // = seg000:7a6e..7a80 a captured troop (occupation bit 5) at a
-        //   battle-flagged (location status bit 1) or Atreides location does
-        //   not speak for itself — the Harkonnen head 0x0c does, on its
-        //   animation 0 and the seg001:22b9 entry the 0x0c byte offset picks.
+        //   battle-flagged (location status bit 1) or hostile (non-Atreides)
+        //   location does not speak for itself — the Harkonnen head 0x0c
+        //   does, on its animation 0 and the seg001:22b9 entry the 0x0c byte
+        //   offset picks (the 7a80 jb routes an Atreides holding to the
+        //   self-speaking path).
         let li = location_index_from_ptr(troop.offset_of_location);
         let captor = troop.occupation & 0x20 != 0
-            && (self.locations[li].status & 2 != 0 || self.location_is_atreides(li));
+            && (self.locations[li].status & 2 != 0 || !self.location_is_atreides(li));
         let (anim, anchor) = if captor {
             // = seg000:7a82..7a94 ax = 0x0c both as the resource id and as the
             //   anchor table's byte offset (entry 3); bp = 0 (animation 0).

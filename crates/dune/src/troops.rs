@@ -2701,9 +2701,11 @@ impl GameState {
         // = seg000:836d..8379 gps = the location's coordinates.
         self.troops[ti].gps_coordinates_1 = self.locations[li].map_x as u16;
         self.troops[ti].gps_coordinates_2 = self.locations[li].map_y as u16;
-        // = seg000:837c..8385 a battle-flagged (status bit 1) or Atreides
-        //   location settles the troop.
-        if self.locations[li].status & 2 != 0 || self.location_is_atreides(li) {
+        // = seg000:837c..8385 a battle-flagged (status bit 1) or hostile
+        //   (non-Atreides) location resolves the arrival (loc_08387: the
+        //   espionage reveal / battle won paths); the 8385 jb routes an
+        //   Atreides holding to the loc_083a7 mission-cancel path instead.
+        if self.locations[li].status & 2 != 0 || !self.location_is_atreides(li) {
             self.troop_settle_into_location(ti);
             if occ_low == 5 {
                 // = seg000:839a..83a4 an espionage arrival at a hidden
@@ -2725,7 +2727,7 @@ impl GameState {
             }
             return;
         }
-        // = seg000:83a7 the non-Atreides arrival.
+        // = seg000:83a7 the peaceful arrival at an Atreides holding.
         let mut class = occ_low;
         if (5..=6).contains(&occ_low) {
             // = seg000:83af..83b4 espionage/attack drop the mission's low
