@@ -162,7 +162,7 @@ impl GameState {
 
     // = seg000:5a56 callback_transition_05a56 — the SEE DUNE MAP view builder,
     // run inside the transition (front buffer redirected to fb1).
-    fn callback_transition_dune_map_view(&mut self) {
+    pub(crate) fn callback_transition_dune_map_view(&mut self) {
         // = seg000:5a56 cmp data_046eb,0; js — already in the map view: only
         //   redraw.
         if self.data_046eb & 0x80 != 0 {

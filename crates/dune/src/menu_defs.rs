@@ -217,7 +217,7 @@ pub(crate) const MENU_BOOK: MenuDef = menu(0xff, &[
 /// data_02058 have the two labels swapped.
 #[rustfmt::skip]
 pub(crate) const MENU_GLOBE: MenuDef = menu(0xff, &[
-    item(cmd::EXIT_GLOBE,  0xbc81, |_, _, _| println!("menu: EXIT GLOBE (seg000:bc81) not ported")),
+    item(cmd::EXIT_GLOBE,  0xbc81, |state, _, _| state.callback_ui_element_globe_exit()),
     item(cmd::SEE_RESULTS, 0xb96b, |_, _, _| println!("menu: SEE RESULTS (seg000:b96b) not ported")),
     item(cmd::LOAD_GAME,   0xb29e, GameState::menu_callback_choice_mirror_room_load_game),
     item(cmd::SAVE_GAME,   0xb28c, GameState::menu_callback_choice_mirror_room_save_game),

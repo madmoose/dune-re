@@ -325,6 +325,296 @@ impl GlobeRenderer {
         self.draw_half(fb, Half::Lower, tilt);
     }
 
+    // = the TABLAT equator row length ([data_0494a] = entry 0's len, 199):
+    // doubled it is one revolution in rotation-phase units (398).
+    pub(crate) fn equator_row_len(&self) -> u16 {
+        self.rotation_lookup_table[0].map_row_len
+    }
+
+    // = the globe_tilt_window_table word DOS reads at window index `i`
+    // (0..195, south at the low indices). The port's precomputed full ramp is
+    // indexed by (i + 98 - tilt): the DOS builder starts its south run at
+    // tilt + 98, so window[98 + n] == tilt_lookup_table[n + 196 - tilt]
+    // (draw_half's lookup) and window[i] == tilt_lookup_table[i + 98 - tilt].
+    fn tilt_window_word(&self, i: i16, tilt: i16) -> Option<GlobeSectionLatitude> {
+        let idx = i as i32 + 98 - tilt as i32;
+        self.tilt_lookup_table
+            .get(usize::try_from(idx).ok()?)
+            .copied()
+    }
+
+    // = seg000:baf2 globe_player_screen_pos (the projection half) — the player's map
+    // position projected onto the globe view: screen (x, y) of the map cell
+    // (lon, lat) under the current rotation `phase` and `tilt`, or None when
+    // the cell is on the far side / outside the visible disc. The GameState
+    // wrapper (globe_player_screen_pos) supplies the position and the
+    // _byte_227D suppress gate.
+    pub(crate) fn player_screen_pos(
+        &mut self,
+        phase: u16,
+        tilt: i16,
+        lon: u16,
+        lat: i16,
+    ) -> Option<(i16, i16)> {
+        // The seg000:bb16.. reads go through the live TABLAT fp fields;
+        // rebuild them for the current phase (the callers' preceding draw has
+        // normally done this already).
+        self.precalculate_globe_rotation_lookup_table(phase);
+
+        // = seg000:bb08..bb14 bx = lat*8 (the TABLAT row byte offset), the
+        // sign into [bp+1] (north flag).
+        let north = lat < 0;
+        let row = lat.unsigned_abs() as usize;
+        if row >= MAX_TILT {
+            return None;
+        }
+        let entry = self.rotation_lookup_table[row];
+        let len = entry.map_row_len as i32;
+        if len == 0 {
+            return None;
+        }
+
+        // = seg000:bb16..bb25 dx = hi16(2*len*lon) rounded by the doubled low
+        // word's carry (add ax,ax; adc dx,0): the cell index of `lon` in the
+        // doubled map row.
+        let cell = ((2 * len as u32 * lon as u32 + 0x8000) >> 16) as i32;
+
+        // = seg000:bb25..bb3b (cell - rotation fp cells), folded into
+        // [0, len) with the east/west flag accumulating in ax.
+        let mut west = false;
+        let mut d = cell - (entry.fp >> 16) as i32;
+        if d < 0 {
+            d = -d;
+            west = !west;
+        }
+        if d >= len {
+            d = 2 * len - d;
+            west = !west;
+        }
+        // = seg000:bb3d..bb4b the near/far fold around the half row.
+        let half = len >> 1;
+        let mut far = false;
+        if d >= half {
+            far = true;
+            d = 2 * half - d;
+        }
+
+        // = seg000:bb50..bb78 the per-x-column scan: find the first GLOBDATA
+        // column x whose selector table carries this map row (selector =
+        // 2*row) at a latitude L whose paired cell-offset covers distance d.
+        // DOS's repnz scasb cursor persists across columns (di += 0xc7), so
+        // the latitude scan resumes at the previous match instead of 0.
+        let selector = (row * 2) as u8;
+        let dl = d as u8;
+        let mut l = 0usize;
+        let mut found: Option<(usize, usize)> = None;
+        'columns: for x in 0..64 {
+            // = the repnz scasb from the persistent cursor.
+            let mut cur = l;
+            while cur < 100 {
+                if self.globdata_table_2(x, cur) == selector {
+                    // = seg000:bb65 cmp dl,[di+63h]; jbe — the paired
+                    // cell-offset byte bounds the distance this column
+                    // reaches into the row.
+                    if dl <= self.globdata[3290 + x * 200 + cur + 100] {
+                        found = Some((x, cur));
+                        break 'columns;
+                    }
+                    // = seg000:bb6a..bb76 too near the meridian for this
+                    // column: persist the cursor ([bp+2] = cx) and move to
+                    // the next column.
+                    l = cur;
+                    break;
+                }
+                cur += 1;
+            }
+            if cur >= 100 {
+                // = seg000:bb62 jnz loc_0bb7a — the selector row vanished in
+                // this column: reuse the last matched latitude with it.
+                found = Some((x, l));
+                break 'columns;
+            }
+        }
+        let (x, l) = found?;
+
+        // = seg000:bb7d..bb98 encode the (section, latitude) target word and
+        // scan the tilt window's word 34..161 for it (repnz scasw, 0x80
+        // words from data_08bbb).
+        let section = match (north, far) {
+            (false, false) => GlobeSection::NearSouth,
+            (false, true) => GlobeSection::FarSouth,
+            (true, false) => GlobeSection::NearNorth,
+            (true, true) => GlobeSection::FarNorth,
+        };
+        let target = GlobeSectionLatitude::new(section, l as u8);
+        let mut window_idx = None;
+        for i in 34..162 {
+            if let Some(w) = self.tilt_window_word(i, tilt)
+                && w.section == target.section
+                && w.latitude == target.latitude
+            {
+                window_idx = Some(i);
+                break;
+            }
+        }
+        // = seg000:bb98 jnz loc_0bbe6 — not visible at this tilt.
+        let i = window_idx?;
+        // = seg000:bb9c..bba6 di - data_08C3D: the signed screen-latitude
+        // delta from the window centre (word 98), sign into [bp+5]. The js
+        // path (i < 98, the window's south side) sets the flag seg000:bbf5
+        // negates bx on — south is the lower half of the disc.
+        let below = i < 98;
+        let k = (i - 98).unsigned_abs() as u8;
+
+        // = seg000:bba9..bbe4 walk the outline stream rows 0x36..1 and find
+        // the row whose latitude byte at column x best matches k (unsigned
+        // smallest al - cl difference, exact match breaks out).
+        let mut reader = Cursor::new(&self.globdata);
+        let mut best_diff = 0xffu8;
+        let mut best_row = None;
+        for bx in (1..=0x36u16).rev() {
+            let n = reader.read_i8().unwrap();
+            if n == -1 {
+                break;
+            }
+            let line_len = !n as u8;
+            // = seg000:bbc3 cmp al,dl; jbe — the row no longer reaches
+            // column x.
+            if line_len as usize <= x {
+                break;
+            }
+            let pos = reader.position() as usize;
+            let outline = self.globdata[pos + x];
+            reader.set_position((pos + line_len as usize) as u64);
+            let diff = outline.wrapping_sub(k);
+            if diff < best_diff {
+                best_diff = diff;
+                best_row = Some(bx);
+                if diff == 0 {
+                    break;
+                }
+            }
+        }
+        // = seg000:bbe1 cmp ch,2; jbe — accept only a near match.
+        if best_diff > 2 {
+            return None;
+        }
+        let r = (0x36 - best_row?) as i16;
+
+        // = seg000:bbec..bc08 fold the signs back in around the disc centre
+        // (160, 79).
+        let y = if below { 79 + r } else { 79 - r };
+        let sx = if west { 160 - x as i16 } else { 160 + x as i16 };
+        Some((sx, y))
+    }
+
+    // = seg000:bd25 globe_pick_map_position — the inverse pick: a click at disc-relative
+    // (x, y) (the globe_disc_hit_test leftovers: x = mouse_x - 96 in 0..128, y =
+    // mouse_y - 25 in 0..109) resolved to the map (longitude, latitude) under
+    // the current rotation `phase` and `tilt`. None (DOS carry clear) when
+    // the click misses the globe outline.
+    pub(crate) fn pick_map_position(
+        &mut self,
+        phase: u16,
+        tilt: i16,
+        x: i16,
+        y: i16,
+    ) -> Option<(u16, i16)> {
+        self.precalculate_globe_rotation_lookup_table(phase);
+
+        // = seg000:bd25..bd2e bx -= 0x36: the screen row relative to the
+        // disc centre row.
+        let by = y - 0x36;
+        let rows = by.unsigned_abs() as usize;
+
+        // = seg000:bd30..bd3d walk |by|+1 outline row markers (add si,ax;
+        // lodsb; inc al; neg al; loopnz): stop early on a zero row length
+        // (the 0xff stream terminator), which the si >= di test then misses.
+        let mut si = 0usize;
+        let mut len;
+        let mut count = rows + 1;
+        loop {
+            let n = self.globdata[si] as i8;
+            si += 1;
+            len = !n as u8 as usize;
+            count -= 1;
+            if count == 0 || len == 0 {
+                break;
+            }
+            si += len;
+        }
+        if len == 0 {
+            return None;
+        }
+        let row_start = si;
+        let row_end = si + len;
+
+        // = seg000:bd43..bd50 the column relative to the disc centre; miss
+        // when the row is too short to reach it.
+        let dxx = x - 0x40;
+        let west = dxx < 0;
+        let col = dxx.unsigned_abs() as usize;
+        if row_start + col >= row_end {
+            return None;
+        }
+        // = seg000:bd52..bd5a al = the outline latitude byte, zero-extended,
+        // negated for the lower (southern) half like draw_half's Lower read.
+        let mut lat_byte = self.globdata[row_start + col] as i16;
+        if by >= 0 {
+            lat_byte = -lat_byte;
+        }
+
+        // = seg000:bd5c..bd63 the tilt window word at the window middle +
+        // lat_byte (_unk_280EB is the middle: word 98).
+        let w = self.tilt_window_word(98 + lat_byte, tilt)?;
+        let l = w.latitude as usize;
+
+        // = seg000:bd65..bd7d the per-x-column tables at the clicked column:
+        // bl = the rotation-row selector, al = the cell offset
+        // (zero-extended here, unlike draw_half's sign-extending read).
+        if col >= 64 || l >= 100 {
+            return None;
+        }
+        let selector = self.globdata_table_2(col, l);
+        let cell_off = self.globdata[3290 + col * 200 + l + 100] as i32;
+
+        // = seg000:bd7f..bd8b the TABLAT entry for selector/2.
+        let entry = self.rotation_lookup_table[(selector / 2) as usize];
+        let len2 = entry.map_row_len as i32;
+        if len2 == 0 {
+            return None;
+        }
+
+        // = seg000:bd8c..bd98 the section signs: north negates the latitude
+        // selector, the far side mirrors the cell offset.
+        let mut lat_out = selector as i16;
+        if w.section == GlobeSection::NearNorth || w.section == GlobeSection::FarNorth {
+            lat_out = -lat_out;
+        }
+        let mut cell = cell_off;
+        if w.section == GlobeSection::FarNorth || w.section == GlobeSection::FarSouth {
+            cell = len2 - cell;
+        }
+
+        // = seg000:bd9a..bdb5 fold the rotation fp in, wrap into the doubled
+        // row, and divide out the longitude (dx:0 / 2*len).
+        let modulus = 2 * len2;
+        let mut pos = (entry.fp >> 16) as i32;
+        if west {
+            cell = -cell;
+        }
+        pos += cell;
+        if pos < 0 {
+            pos += modulus;
+        }
+        if pos >= modulus {
+            pos -= modulus;
+        }
+        let lon = (((pos as u32) << 16) / modulus as u32) as u16;
+        // = seg000:bdb7 sar bx,1 — selector/2 = the signed map row.
+        Some((lon, lat_out >> 1))
+    }
+
     // = one vga_globe_setup call from the rotation frame task (seg000:b9b2):
     // DOS draws one outline row into fb1 per tick and returns carry on the
     // call that completes the pass. Partial passes are never presented, so
@@ -346,7 +636,7 @@ const GLOBE_NAV_RECT: Rect = rect(96, 25, 224, 134);
 // = seg001:2440 _word_218F0_rect — the globe-view sprite clip rect
 // (draw_globe_with_atmosphere copies it to _unk_2CCE4_sprite_clip_rect); the
 // rotation frame task presents this rect from fb1 on each finished pass.
-const GLOBE_CLIP_RECT: Rect = rect(96, 15, 234, 134);
+pub(crate) const GLOBE_CLIP_RECT: Rect = rect(96, 15, 234, 134);
 
 impl GameState {
     // = seg000:b8a7 setup_globe_draw — load GLOBDATA and seed the globe
@@ -416,6 +706,11 @@ impl GameState {
     // al = globe_draw_skips_pixel_stores selects the full redraw (0, the only
     // mode the port implements) or the pixel-store-skipping patch.
     pub(crate) fn map_func_gfx(&mut self) {
+        // = the al != 0 pixel-store-skipping patch (the SEE RESULTS mode):
+        // the walk stores nothing, so the port draws nothing.
+        if self.globe_draw_skips_pixel_stores != 0 {
+            return;
+        }
         let phase = self.globe_rotation;
         let tilt = self.globe_tilt;
         if let Some(globe) = self.globe_renderer.as_mut() {
@@ -447,20 +742,10 @@ impl GameState {
         if !globe.tick_outline_row() {
             return;
         }
-        // The pass the task's row ticks drew, rendered in one go.
+        // The pass the task's row ticks drew, rendered in one go, then the
+        // seg000:b98e present/advance tail shared with the button redraws.
         self.map_func_gfx();
-        // = seg000:b98e call loc_0baf2 — the player globe-cursor position.
-        // It returns dx = 0 while _byte_227D_suppress_sky_240_255 is set (the
-        // intro), so the cursor only shows on the in-game map screen; the
-        // seg000:b9a2 draw_globe_cursor_at_dx_bx draw is not ported yet.
-        // = seg000:b993..b999 restore_mouse_if_rect_intersects(sprite_clip_
-        // rect) + update_screen_at_sprite_rect_updating_head; the seg000:b9a5
-        // draw_mouse_cursor_if_needed rearm closes the bracket. The port's
-        // present handles the cursor through its own protocol (cf.
-        // map_view_redraw).
-        self.present_screen_rect(GLOBE_CLIP_RECT);
-        // = seg000:b9a8 mov ax,1; jmp globe_rotation_increment_ax.
-        self.globe_rotation_increment(1);
+        self.globe_present_and_advance();
     }
 
     // = seg000:b9e0 globe_rotation_increment_ax — advance the rotation phase

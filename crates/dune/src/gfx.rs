@@ -49,6 +49,8 @@ pub fn vga_transition(state: &mut GameState, code: u16, dx: i16) {
         idx -= 0x3e;
     }
     match idx {
+        0x00 => transition_vertical_curtain(state, dx as u8),
+        0x02 => transition_expanding_box(state),
         0x04 => transition_vertical_fold(state, dx as u8),
         0x0c | 0x0e => transition_page_turn(state, dx),
         0x10 => transition_dotted_columns(state),
@@ -518,6 +520,162 @@ fn transition_instant_swap(state: &mut GameState) {
     state.gfx_copy_whole_framebuf_to_screen();
     palette_flush(state);
     state.present_transition_frame();
+}
+
+// = segvga:2cca transition_vertical_curtain (transition_dispatch_table entry
+// 0) — code 0x00: the vertical curtain over the 152-row game area (cx =
+// 0x98; the effect addresses from offset 0, no fb_base_ofs). An 8-row
+// colour-7 band rides the seam and each pass is paced ~5 PIT ticks
+// (loc_segvga_0253d). Neither branch draws the final frame — the
+// transition() tail's full copy paints the last rows.
+//
+// dl >= 0 (segvga:2cce): the new fb1 image slides DOWN into view from the
+// top — pass k shows fb1's bottom k*8 rows at the top of the screen, band
+// below them.
+//
+// dl < 0 (loc_segvga_02cfe — the GLOBE open's dx = 0ffffh): snapshot the
+// live screen into fb2 (loc_segvga_02596), slide that old image UP off the
+// screen, and reveal the new fb1 image in place below the rising band
+// (8 fresh rows per pass).
+fn transition_vertical_curtain(state: &mut GameState, dl: u8) {
+    // = segvga:2cce/2d01 dx = 0x140 * cx(0x98) — the game-area byte count.
+    const TOTAL: usize = 320 * 152;
+    // = the 0xa00-byte (8-row) band and per-pass step.
+    const BAND: usize = 320 * 8;
+
+    if (dl as i8) >= 0 {
+        // = segvga:2cd5 si = the full byte count: the first pass copies
+        // nothing and only paints the band at the top.
+        let mut si = TOTAL;
+        loop {
+            let start = state.game_ticks();
+            let n = TOTAL - si;
+            {
+                let (scr, fb1) = (&mut state.screen, &state.framebuffer);
+                let dst = scr.pixels_mut();
+                // = segvga:2cda..2ce7 screen[0..n] = fb1[si..TOTAL].
+                dst[..n].copy_from_slice(&fb1.pixels()[si..TOTAL]);
+                // = segvga:2ce8..2cee the colour-7 band (0x500 stosw of
+                // 0x0707).
+                dst[n..n + BAND].fill(7);
+            }
+            // = segvga:2cf4 call loc_segvga_0253d — present and pace.
+            state.send_frame_to_display();
+            state.sleep_ticks(start, 5);
+            // = segvga:2cf0/2cf7 si -= 0xa00; loop while si > 0xa00.
+            si -= BAND;
+            if si <= BAND {
+                break;
+            }
+        }
+    } else {
+        // = loc_segvga_02596 — snapshot the visible screen into fb2 (DOS
+        // clobbers the fb2 buffer the same way).
+        let screen_snapshot = state.screen.pixels().to_vec();
+        state
+            .framebuffer_saved
+            .pixels_mut()
+            .copy_from_slice(&screen_snapshot);
+        // = segvga:2d08 si = 0xa00, stepping up to the full byte count.
+        let mut si = BAND;
+        while si <= TOTAL {
+            let start = state.game_ticks();
+            let n = TOTAL - si;
+            {
+                let (scr, fb1, fb2) = (
+                    &mut state.screen,
+                    &state.framebuffer,
+                    &state.framebuffer_saved,
+                );
+                let dst = scr.pixels_mut();
+                // = segvga:2d0e..2d20 screen[0..n] = fb2[si..TOTAL] — the
+                // old image shifted up by si bytes.
+                dst[..n].copy_from_slice(&fb2.pixels()[si..TOTAL]);
+                // = segvga:2d22..2d28 the colour-7 band at the seam.
+                dst[n..n + BAND].fill(7);
+                // = segvga:2d2a..2d33 the 8 freshly exposed rows of the new
+                // image, in place below the band.
+                let di = n + BAND;
+                if di < TOTAL {
+                    dst[di..di + BAND].copy_from_slice(&fb1.pixels()[di..di + BAND]);
+                }
+            }
+            // = segvga:2d3a call loc_segvga_0253d — present and pace.
+            state.send_frame_to_display();
+            state.sleep_ticks(start, 5);
+            // = segvga:2d36/2d3d si += 0xa00; loop while si <= the total.
+            si += BAND;
+        }
+    }
+}
+
+// = segvga:2a68 transition_expanding_box (transition_dispatch_table entry 1)
+// — code 0x02: the expanding-box reveal (the globe exit into the map view,
+// ui_transition_to_map_interface). 8×4-pixel blocks of the new fb1 image are
+// copied to the screen in an outward rectangular spiral from (row 74, col
+// 156): run lengths 1 right, 2 down, then per ring {n left, n up, n+1 right,
+// n+1 down} with n stepping 2..0x26. Each run (loc_segvga_02ab0) spin-waits
+// for the next PIT tick after its blocks, so a ring takes ~4 ticks.
+fn transition_expanding_box(state: &mut GameState) {
+    // = each block copy advances di 4 rows (+4*320); the ax post-adjust after
+    // every block selects the walk direction: 0fb08h right (net +8), 0 down
+    // (net +4 rows), 0faf8h left (net -8), 0f600h up (net -4 rows).
+    const BLOCK_ADVANCE: isize = 4 * 320;
+    const RIGHT: isize = 8 - BLOCK_ADVANCE;
+    const DOWN: isize = 0;
+    const LEFT: isize = -8 - BLOCK_ADVANCE;
+    const UP: isize = -2 * BLOCK_ADVANCE;
+
+    // = segvga:2a68..2a6e calc_fb_offset(row 0x4a, col 0x9c) — the centre
+    // block, offset by fb_base_ofs.
+    let w = state.screen.w() as isize;
+    let mut di = (0x4a + state.y_offset as isize) * w + 0x9c;
+
+    // = loc_segvga_02ab0 — one run: `count` blocks in one direction, each an
+    // 8-byte × 4-row fb1→screen copy (di += BLOCK_ADVANCE) followed by the
+    // ax adjust, then one presented PIT-tick wait.
+    fn run(state: &mut GameState, di: &mut isize, count: usize, adj: isize) {
+        let start = state.game_ticks();
+        for _ in 0..count {
+            {
+                let (scr, fb1) = (&mut state.screen, &state.framebuffer);
+                let len = fb1.pixels().len() as isize;
+                let w = scr.w() as isize;
+                for row in 0..4 {
+                    let o = *di + row * w;
+                    if o >= 0 && o + 8 <= len {
+                        let (o, dst) = (o as usize, scr.pixels_mut());
+                        dst[o..o + 8].copy_from_slice(&fb1.pixels()[o..o + 8]);
+                    }
+                }
+            }
+            *di += BLOCK_ADVANCE + adj;
+        }
+        // = segvga:2ac9..2acd pop ax; cmp ax,[bp]; jz — present the run and
+        // hold until the PIT counter moves on.
+        state.send_frame_to_display();
+        state.sleep_ticks(start, 1);
+    }
+
+    // = segvga:2a71..2a7d the centre 8×8: one block right-stepping, then two
+    // stacked blocks below its right neighbour.
+    run(state, &mut di, 1, RIGHT);
+    run(state, &mut di, 2, DOWN);
+    // = segvga:2a80..2aad the rings, n = 2..0x26. The odd-looking di nudges
+    // between runs re-anchor the walk onto the next ring's corner.
+    let mut n = 2;
+    while n < 0x26 {
+        di += LEFT;
+        run(state, &mut di, n, LEFT);
+        di -= BLOCK_ADVANCE - 8;
+        run(state, &mut di, n, UP);
+        di += BLOCK_ADVANCE + 8;
+        n += 1;
+        run(state, &mut di, n, RIGHT);
+        di += BLOCK_ADVANCE - 8;
+        run(state, &mut di, n, DOWN);
+        n += 1;
+    }
 }
 
 // = loc_segvga_02628 (transition_dispatch_table entry 27) — code 0x36:

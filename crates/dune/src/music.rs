@@ -61,7 +61,7 @@ impl GameState {
         if self.pending_room_screen_request != 0 {
             return 0x0d; // = aaa7
         }
-        if self.data_0dd03 != 0 {
+        if self.globe_screen_active != 0 {
             return 1; // = aaaf
         }
         if (self.room_view_toggle as i8) < 0 {

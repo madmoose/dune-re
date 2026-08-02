@@ -22,6 +22,7 @@ mod game_state;
 mod game_ui;
 mod gfx;
 mod globe_renderer;
+mod globe_screen;
 mod herad;
 mod hnm;
 mod hsq;

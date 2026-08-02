@@ -89,7 +89,7 @@ const fn ui2(
 /// comment on each row is the DOS click-handler label for its func_ptr.
 #[rustfmt::skip]
 pub const UI_ELEMENTS_INIT: [UiElement; 24] = [
-    ui1( 22, 161,  68, 196, 0x0000, -1, 0xb8c6), //  0 loc_0b8c6
+    ui2( 22, 161,  68, 196, 0x0000, -1, 0xb8c6, Some(GameState::callback_main_ui_element_00)), //  0 loc_0b8c6 (GLOBE, clickable on the map view via FRIEZE_SIDES_MAP's 0xc0)
     ui2(  0, 152,   0, 152, 0x0000,  0, 0x0f66, None), //  1 loc_00f66 (date/time, mutated)
     ui2(228, 152, 300, 198, 0x0000,  3, 0x0f66, None), //  2 loc_00f66 (date/time, mutated)
     ui2( 24, 155,  69, 176, 0x0080, -1, 0xaed6, Some(GameState::callback_main_ui_element_03)), //  3 loc_0aed6 (THE BOOK)
@@ -134,6 +134,11 @@ const FRIEZE_SIDES_MAP: [(u16, i16); 4] = [(0xc0, 0x0d), (0, 6), (0, 3), (0, -1)
 /// the turn animation flips via ICONES sprites 0x0a/0x0b).
 const FRIEZE_SIDES_OPEN_BOOK: [(u16, i16); 4] = [(0, -1), (0, 9), (0, 3), (0, -1)];
 
+/// = seg001:1c46 hud_sides_globe — the GLOBE view's frieze-side template: the
+/// planet ornament (sprite 0x0d) stays on the left but without the 0x80 click
+/// flag (the globe is already up).
+const FRIEZE_SIDES_GLOBE: [(u16, i16); 4] = [(0x40, 0x0d), (0, 6), (0, 3), (0, -1)];
+
 /// = seg001:1e1a ui_globe_rotation_controls[6..12] — the six records the book
 /// screen installs over the nav panel (HUD records 12..17): a dead slot, the
 /// two page-corner arrows over the open-book frieze (prev/next), the whole
@@ -147,6 +152,20 @@ pub(crate) const NAV_PANEL_BOOK: [UiElement; NAV_PANEL_RECORD_COUNT] = [
     ui2(  0, 154,  92, 200, 0x0080, -1, 0xb18b, Some(GameState::callback_ui_element_book_close)),         // 15 close (frieze)
     ui2(228, 154, 320, 200, 0x0000, -1, 0x0f66, None),                                                    // 16 dead
     ui2(255, 162, 295, 192, 0x0080, 33, 0xb18b, Some(GameState::callback_ui_element_book_close)),         // 17 close button
+];
+
+/// = seg001:1dc6 ui_globe_rotation_controls[0..6] — the six records the GLOBE
+/// view installs over the nav panel (HUD records 12..17): the EXIT GLOBE
+/// compass button, the four held-repeat tilt/rotate arrows in the left
+/// frieze, and the centre-on-player button between them.
+#[rustfmt::skip]
+pub(crate) const NAV_PANEL_GLOBE: [UiElement; NAV_PANEL_RECORD_COUNT] = [
+    ui2(266, 171, 285, 184, 0x0080, 41, 0xbc81, Some(GameState::callback_ui_element_globe_exit)),  // 12 exit globe
+    ui2( 38, 159,  54, 172, 0x4080, 49, 0xb9b9, Some(GameState::callback_globe_tilt_up)),          // 13 tilt up
+    ui2( 54, 168,  72, 185, 0x4080, 50, 0xb9cc, Some(GameState::callback_globe_rotate_east)),      // 14 rotate east
+    ui2( 38, 183,  54, 199, 0x4080, 51, 0xb9c0, Some(GameState::callback_globe_tilt_down)),        // 15 tilt down
+    ui2( 20, 168,  37, 185, 0x4080, 52, 0xb9d3, Some(GameState::callback_globe_rotate_west)),      // 16 rotate west
+    ui2( 36, 172,  57, 182, 0x0080, 53, 0xba9e, Some(GameState::callback_globe_center_on_player)), // 17 centre on player
 ];
 
 /// = seg001:1e7e the date/time moon/sun coordinate table, indexed by the
@@ -706,7 +725,7 @@ impl GameState {
 
     // = seg000:5adf reset_room_scene_state — reset the map/globe-view state
     // before showing the room view.
-    fn reset_room_scene_state(&mut self) {
+    pub(crate) fn reset_room_scene_state(&mut self) {
         // = seg000:5adf call map_dismiss_troop_popups.
         self.map_dismiss_troop_popups();
         // = seg000:5ae4/5ae7 data_046eb = 0; map_view_reentry_count = 0.
@@ -735,11 +754,11 @@ impl GameState {
     }
 
     // = seg000:b930 remove_globe_frame_tasks — stop the globe/map animation
-    // frame tasks: data_0dd03 = 0 (no port field yet), remove the globe
-    // rotation task (frame_task_callback_0b9ae), then fall through into
-    // removing the side-decoration slide task (frame_task_callback_0be57 —
-    // not ported).
+    // frame tasks: globe_screen_active = 0, remove the globe rotation task
+    // (frame_task_callback_0b9ae), then fall through into removing the
+    // results-gauge task (frame_task_callback_0be57 — not ported).
     pub(crate) fn remove_globe_frame_tasks(&mut self) {
+        self.globe_screen_active = 0;
         self.remove_frame_task(crate::TaskId::GlobeRotation);
     }
 
@@ -786,6 +805,13 @@ impl GameState {
     // companion-button tail.
     pub(crate) fn ui_set_and_draw_frieze_sides_open_book(&mut self) {
         self.ui_set_and_draw_frieze_sides(&FRIEZE_SIDES_OPEN_BOOK);
+    }
+
+    // = seg000:d7b2 ui_set_and_draw_frieze_sides_globe — the GLOBE view's
+    // frieze sides (hud_sides_globe). Like the map entry, no date/time +
+    // companion-button tail.
+    pub(crate) fn ui_set_and_draw_frieze_sides_globe(&mut self) {
+        self.ui_set_and_draw_frieze_sides(&FRIEZE_SIDES_GLOBE);
     }
 
     // = seg000:d7b7 ui_hud_companion_blink_task — the game-loop blink step for

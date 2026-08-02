@@ -825,8 +825,19 @@ pub struct GameState {
     // latitude rows, carrying the map-row sign (negative = north, like
     // zoomed_globe_latitude); magnitude clamped to >= 0x20 by
     // set_globe_tilt_and_rotation and to <= 98 by globe_increment_tilt
-    // (seg000:ba15, not ported).
+    // (seg000:ba15).
     pub(crate) globe_tilt: i16,
+
+    // = _word_2D1BF_globe_decoration_offset — the FRESK side decorations'
+    // slide position on the globe screen: 0 = framing the globe, negative =
+    // slid apart for the SEE RESULTS reveal (seg000:b8f3, not ported).
+    pub(crate) globe_decoration_offset: i16,
+
+    // = globe_draw_skips_pixel_stores — nonzero selects the SEE RESULTS
+    // patch of vga_globe_init that walks the globe without storing pixels;
+    // the port only implements the full-redraw mode 0 (map_func_gfx draws
+    // nothing while it is set).
+    pub(crate) globe_draw_skips_pixel_stores: u8,
 
     // = seg001:1ae4 _word_20F94_ui_elements — the in-game HUD element table.
     pub(crate) ui_elements: [UiElement; 24],
@@ -1133,8 +1144,8 @@ pub struct GameState {
     pub(crate) music_desired_song: u8,
 
     // Music-situation classifier inputs (= loc_0aa96).
-    // = seg001:dd03 data_0dd03.
-    pub(crate) data_0dd03: u8,
+    // = seg001:dd03 globe_screen_active.
+    pub(crate) globe_screen_active: u8,
 
     // = seg001:46d6 _byte_23B86_current_sky_palette — persistent state of the
     // loc_00826 sky palette cycler (TaskId::SkyPaletteCycler), kept as a global
@@ -2181,6 +2192,8 @@ impl GameState {
             globe_renderer: None,
             globe_rotation: 0,
             globe_tilt: 0,
+            globe_decoration_offset: 0,
+            globe_draw_skips_pixel_stores: 0,
             ui_elements: UI_ELEMENTS_INIT,
             // = the static seg001 menu buffers, initialized to their compiled-in
             // contents (priority byte + records; command_menu_buf and
@@ -2258,7 +2271,7 @@ impl GameState {
             rand_iterated_seed: 0,
             settings_flags: 0x1 | 0x4 | 0x8 | 0x100 | 0x400 | 0x800,
             music_desired_song: 0,
-            data_0dd03: 0,
+            globe_screen_active: 0,
             current_sky_palette: 0,
             sky_fade_countdown: 0,
             pending_room_screen_request: 0,
@@ -3977,8 +3990,59 @@ impl GameState {
                     }
                 }
             }
-            // = the remaining 11 vga_effect_dispatch effects are unported; this
-            //   dispatcher only serves the PALACE PLAN's two reveal effects.
+            // = blit_mode_dispatch_table[0] (segvga:31e6 → segvga:3581)
+            //   blit_zoom_shimmer: blit the rect's interior from the clean
+            //   fb1 source (ds, per the c0d6/c0da buffer setup) into the
+            //   screen (es) at 2x scale around the rect top-left, cycling
+            //   the 2x2 sub-pixel source offsets (zoom_tile_offsets,
+            //   segvga:2fb7), until the caller's tick budget runs out (cx —
+            //   the globe zoom box, globe_zoom_box_shimmer_step, passes 10).
+            //   Every pass rewrites the whole interior from fb1, so anything
+            //   drawn over the screen inside the rect (the previous zoom-box
+            //   outline) is erased each pass.
+            0x00 => {
+                // = segvga:358b..359e half width/height; nothing on a flat
+                //   rect.
+                let half_w = ((rect.x1 - rect.x0) / 2) as usize;
+                let half_h = ((rect.y1 - rect.y0) / 2) as usize;
+                if half_w == 0 || half_h == 0 {
+                    return;
+                }
+                let yoff = self.y_offset as usize;
+                let w = self.screen.w() as usize;
+                let origin = (rect.y0 as usize + yoff) * w + rect.x0 as usize;
+                // = segvga:35a0 the entry tick, segvga:35bb..35c4 the loop
+                //   until cx (10) ticks elapse.
+                let start = self.game_ticks();
+                let mut jitter = [0usize, 321, 1, 320].iter().copied().cycle();
+                loop {
+                    // = segvga:35c8 fb_blit_2x_scaled — lodsb from ds (fb1)
+                    //   every other byte/row, stosw doubled into es (screen).
+                    let off = jitter.next().unwrap();
+                    let src = self.framebuffer.pixels();
+                    let dst = self.screen.pixels_mut();
+                    for j in 0..half_h {
+                        let di = origin + 2 * j * w;
+                        let si = di + off;
+                        for i in 0..half_w {
+                            let c = src[si + 2 * i];
+                            dst[di + 2 * i] = c;
+                            dst[di + 2 * i + 1] = c;
+                            dst[di + w + 2 * i] = c;
+                            dst[di + w + 2 * i + 1] = c;
+                        }
+                    }
+                    self.send_frame_to_display();
+                    // DOS repeats at CPU speed; pace one PIT tick per pass so
+                    // the shimmer is perceptible without pegging a core.
+                    self.sleep_ticks(self.game_ticks(), 1);
+                    if self.game_ticks() - start >= 10 {
+                        break;
+                    }
+                }
+            }
+            // = the remaining vga_effect_dispatch effects are unported; this
+            //   dispatcher only serves the PALACE PLAN and GLOBE effects.
             other => {
                 eprintln!("blit_fb1_to_screen_effect: unhandled effect 0x{other:02x}");
             }
