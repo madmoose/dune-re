@@ -587,10 +587,9 @@ impl GameState {
     // player) and the idle expression `facing` (data_047d0). Four cases, matching
     // the DOS branch structure:
     //   - id < 0x0d (named characters): head index = id, facing 0 (random idle).
-    //   - id == 0x0d (SMUG): facing = (command_menu_x >> 1) + 1 — NOT PORTED
-    //     (todo!() below).
+    //   - id == 0x0d (SMUG): facing = (the current location's first_name >> 1) + 1.
     //   - id 0x0e..0x10 (char_to_sprite_walk_facing): folds in walk/facing
-    //     animation state — NOT PORTED (todo!() below).
+    //     animation state.
     //   - id >= 0x11, incl. the player 0x2d (char_to_sprite_player): HEAD_PAUL,
     //     facing derived from game_time.
     fn character_id_to_sprite(&self, id: u8) -> (usize, u8) {
@@ -610,21 +609,17 @@ impl GameState {
             anim += 1;
             (HEAD_PAUL, anim)
         } else if id as usize == HEAD_SMUG {
-            // = char_to_sprite_smug (seg000:912f): for the SMUG smuggler head the
-            // idle expression is data_047d0 = (command_menu_x >> 1) + 1, read from
-            // the active verb-list header byte [current_location_ptr][0] (the menu's x
-            // pixel origin; see set_command_menu_origin seg000:2e98).
-            //
-            // INCOMPLETE: not ported. The command-list data model doesn't exist in
-            // the port yet, so command_menu_x is unavailable (see the
-            // set_command_menu_origin TODO in room_game_screen.rs), and the reason
-            // the smuggler's idle facing keys off the menu x-origin is not yet
-            // understood. Marked todo!() so this reverse-engineering gap surfaces
-            // loudly instead of silently defaulting to facing 0.
-            todo!(
-                "character_id_to_sprite id 0x0d (SMUG): data_047d0 = (command_menu_x >> 1) + 1 \
-                 — needs the command-list data model (command_menu_x); intent not understood"
-            )
+            // = char_to_sprite_smug (seg000:912f): the smuggler idle expression
+            // follows the current location: ah = [current_location_ptr][0] =
+            // Location.first_name (the COMMAND name id 1..12); data_047d0 =
+            // (first_name >> 1) + 1 — a different idle face per smuggler den.
+            // With no current location DOS reads whatever ds:0 holds; the port
+            // falls back to facing 0.
+            let facing = match self.locations.get(self.current_location_index as usize) {
+                Some(loc) => (loc.first_name >> 1) + 1,
+                None => 0,
+            };
+            (HEAD_SMUG, facing)
         } else if id >= 0x0e {
             // = char_to_sprite_walk_facing (seg000:913b): id 0x0e..0x10 (the
             // FRM1..FRM3 generic Fremen heads). The sprite index and facing

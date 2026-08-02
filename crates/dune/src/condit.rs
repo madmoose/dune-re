@@ -60,8 +60,23 @@ fn condit_var_name(addr: u16) -> Option<(&'static str, bool)> {
         0xc2 => ("final_attack_stage", false),
         0xc3 => ("spice_shipment_sequence_number", false),
         0xc4 => ("number_of_sietches_attacked_by_harkonnen", false),
+        0xca => ("nearest_location.distance", true),
+        0xcc => ("nearest_location.loc_ptr", true),
+        0xce => ("nearest_location.octant", false),
         0xcf => ("days_left_until_spice_shipment", false),
+        0xd0 => ("nearest_village.distance", true),
+        0xd2 => ("nearest_village.loc_ptr", true),
+        0xd4 => ("nearest_village.octant", false),
         0xd5 => ("contact_distance_related_ds_d5", false),
+        0xd6 => ("nearest_sietch.distance", true),
+        0xd8 => ("nearest_sietch.loc_ptr", true),
+        0xda => ("nearest_sietch.octant", false),
+        0xdc => ("nearest_atreides_area.distance", true),
+        0xde => ("nearest_atreides_area.loc_ptr", true),
+        0xe0 => ("nearest_atreides_area.octant", false),
+        0xe2 => ("nearest_harkonnen_area.distance", true),
+        0xe4 => ("nearest_harkonnen_area.loc_ptr", true),
+        0xe6 => ("nearest_harkonnen_area.octant", false),
         0xf5 => ("for_condit_desert_walk_ds_f5", false),
         0xf8 => ("number_of_locations_with_illness", false),
         0xf9 => ("chani_troop_illness_cure_progress", false),
@@ -183,6 +198,13 @@ impl GameState {
             // = seg001:00c8 data_000c8 — DOS's comm_sighting_count byte,
             // kept in step with comm_sightings.
             0xc8 => self.data_000c8,
+            // = seg001:00ce..00e6 the nearest-location compass octants
+            // (condit_scan_nearest_locations, troops.rs).
+            0xce => self.nearest_location.octant,
+            0xd4 => self.nearest_village.octant,
+            0xda => self.nearest_sietch.octant,
+            0xe0 => self.nearest_atreides_area.octant,
+            0xe6 => self.nearest_harkonnen_area.octant,
             // = seg001:00e1 data_000e1 — the fly-over side flag.
             0xe1 => self.data_000e1,
             // = seg001:00e8 ui_hud_head_index.
@@ -264,6 +286,19 @@ impl GameState {
             0xb2 => self.spice_production_lower_than_previous_day,
             // = seg001:00bc spice_shipment_quantity.
             0xbc => self.spice_shipment_quantity,
+            // = seg001:00ca..00e4 the nearest-location distances and ptrs
+            // (condit_scan_nearest_locations, troops.rs); ds:d6 gates the
+            // "There is a sietch very near" messages.
+            0xca => self.nearest_location.distance,
+            0xcc => self.nearest_location.loc_ptr,
+            0xd0 => self.nearest_village.distance,
+            0xd2 => self.nearest_village.loc_ptr,
+            0xd6 => self.nearest_sietch.distance,
+            0xd8 => self.nearest_sietch.loc_ptr,
+            0xdc => self.nearest_atreides_area.distance,
+            0xde => self.nearest_atreides_area.loc_ptr,
+            0xe2 => self.nearest_harkonnen_area.distance,
+            0xe4 => self.nearest_harkonnen_area.loc_ptr,
             // = seg001:00ee data_000ee — the overpower-captain condit word.
             0xee => self.data_000ee,
             _ => return None,

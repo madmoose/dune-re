@@ -2,7 +2,7 @@ use crate::{
     CursorMode, CursorShapeId, DatFile, Equipment, Font, FontState, FrameBuffer, InputState,
     Location, Palette, Rect, SpriteSheet, TalkingHead,
     attack::AttackState,
-    blit,
+    blit, cmd,
     frame_slot::FrameSink,
     game_ui::{MouseHandlers, ROOM_MOUSE_HANDLERS, UI_ELEMENTS_INIT, UiElement},
     gfx::{self, palette_flush},
@@ -101,6 +101,28 @@ pub(crate) struct FrameTask {
     interval: u16,
     accumulator: u16,
     task_id: TaskId,
+}
+
+/// = one of the seg001:00ca..00e6 nearest-location triples
+/// condit_scan_nearest_locations (seg000:5274) maintains: the distance
+/// (max(|dlon| >> 8, |dlat|), 0xffff = none found), the location's seg001
+/// pointer and the compass octant toward it (0 = N .. 7 = NW).
+#[derive(Clone, Copy)]
+pub(crate) struct NearestLocation {
+    pub(crate) distance: u16,
+    pub(crate) loc_ptr: u16,
+    pub(crate) octant: u8,
+}
+
+impl Default for NearestLocation {
+    fn default() -> Self {
+        // = the seg001 statics: distance 0xffff, ptr/octant 0.
+        NearestLocation {
+            distance: 0xffff,
+            loc_ptr: 0,
+            octant: 0,
+        }
+    }
 }
 
 /// Build a header-less Creative Voice File holding a single Type-1 data block.
@@ -457,15 +479,6 @@ pub struct GameState {
     // = seg001:00c4 number_of_sietches_attacked_by_Harkonnen_ds_c4.
     pub(crate) number_of_sietches_attacked_by_harkonnen: u8,
 
-    // = seg001:00cf days_left_until_spice_shipment — the CONDIT day counter
-    // actions_time_in_day_3 maintains while a demand date is ahead.
-    pub(crate) days_left_until_spice_shipment: u8,
-
-    // = seg001:00d5 contact_distance_related_ds_d5 — incremented once per
-    // day, but only stored back from 2 up (seg000:1c62), so it stays at its
-    // initial value until something else moves it to 1.
-    pub(crate) contact_distance_related_ds_d5: u8,
-
     // = seg001:00c5 person_marker_base — random base offset for arranging the
     // people standing in a room. Set to rand() at room setup (the arrival
     // handler in tick_in_game_travel, seg000:4fc6), reset to 0 on scene change
@@ -481,20 +494,6 @@ pub struct GameState {
     // rolling past the last page.
     pub(crate) data_000c6: u8,
 
-    // = seg001:11bf book_bookmark_ptr (data_011bf) — the book's bookmark: the
-    // cs offset of the current page word in the dialogue-played log (0xaa =
-    // the first entry); persists while the book is closed.
-    pub(crate) book_bookmark_ptr: u16,
-
-    // = seg001:2406 book_topic_filter (data_02406) — the active book topic
-    // filter (low byte = record mask 0x1c, high byte = topic bits); 0 = all
-    // topics.
-    pub(crate) book_topic_filter: u16,
-
-    // = seg001:243e book_page_video_id (data_0243e) — the HNM resource id
-    // (0x19..0x24) of the bookmarked page's video, 0 when the page has none.
-    pub(crate) book_page_video_id: u16,
-
     // = seg001:00c8 data_000c8 — DOS's comm_sighting_count byte, kept in
     // step with comm_sightings (comm_add_person_sighting); the COMM-room
     // verbs read it (build_room_command_records, dl==8). Inits to 0.
@@ -505,6 +504,15 @@ pub struct GameState {
     // id), max 10, appended by comm_add_person_sighting. The COMM screen
     // that displays them is unported.
     pub(crate) comm_sightings: Vec<u16>,
+
+    // = seg001:00cf days_left_until_spice_shipment — the CONDIT day counter
+    // actions_time_in_day_3 maintains while a demand date is ahead.
+    pub(crate) days_left_until_spice_shipment: u8,
+
+    // = seg001:00d5 contact_distance_related_ds_d5 — incremented once per
+    // day, but only stored back from 2 up (seg000:1c62), so it stays at its
+    // initial value until something else moves it to 1.
+    pub(crate) contact_distance_related_ds_d5: u8,
 
     // = seg001:00e1 data_000e1 — the fly-over side flag set by
     // travel_scan_nearby_location (seg000:4156): 0 when the passed location is
@@ -545,11 +553,6 @@ pub struct GameState {
     pub(crate) chani_troop_illness_cure_progress: u8,
     pub(crate) latest_location_with_illness: u16,
 
-    // = seg001:00fe game_phase_copy_ds_fe — the new-day hook's copy of
-    // game_phase; a mismatch resets days_since_last_game_phase_change
-    // (seg000:1c46).
-    pub(crate) game_phase_copy_ds_fe: u8,
-
     // = seg001:00fb data_000fb — toggle between the room/dialogue view and the
     // globe/map view (static init 0xff). ui_toggle_room_view negs it each call:
     // a non-negative result shows the room view, a negative one the map.
@@ -559,6 +562,11 @@ pub struct GameState {
     // init 1, no DOS writers); CONDIT condition 1 (`byte ds:[fc]`) gates the
     // first greeting on it.
     pub(crate) data_000fc: u8,
+
+    // = seg001:00fe game_phase_copy_ds_fe — the new-day hook's copy of
+    // game_phase; a mismatch resets days_since_last_game_phase_change
+    // (seg000:1c46).
+    pub(crate) game_phase_copy_ds_fe: u8,
 
     // = seg001:00ff number_of_days_since_last_game_phase_change_ds_ff — zeroed
     // on every phase change (the event-0x0b callback and
@@ -571,6 +579,20 @@ pub struct GameState {
 
     // = seg001:08aa troops.
     pub(crate) troops: [Troop; 68],
+
+    // = seg001:11bf book_bookmark_ptr (data_011bf) — the book's bookmark: the
+    // cs offset of the current page word in the dialogue-played log (0xaa =
+    // the first entry); persists while the book is closed.
+    pub(crate) book_bookmark_ptr: u16,
+
+    // = seg001:2406 book_topic_filter (data_02406) — the active book topic
+    // filter (low byte = record mask 0x1c, high byte = topic bits); 0 = all
+    // topics.
+    pub(crate) book_topic_filter: u16,
+
+    // = seg001:243e book_page_video_id (data_0243e) — the HNM resource id
+    // (0x19..0x24) of the bookmarked page's video, 0 when the page has none.
+    pub(crate) book_page_video_id: u16,
 
     // = seg001:4756 fremen1_troop_ptr — the troop behind the room's Fremen-1
     // person (room_persons[14], the rallied-troop chief), as a troops index.
@@ -1302,13 +1324,26 @@ pub struct GameState {
     // by map_close_troop_contact_popup.
     pub(crate) contacting_troops_ds_4c: u8,
 
-    // = seg001:00e2 distance_to_closest_Harkonnen_area_ds_e2 — how far the
-    // staged location is from the nearest Harkonnen holding. Initialised to
-    // 0xffff and narrowed by the location scan (seg000:5274) inside
-    // prepare_location_data_for_condit, which is not ported — so it stays at
-    // "nothing near", and the ESPIONAGE occupation (which needs < 0x1e) stays
-    // greyed. TODO with that scan.
-    pub(crate) distance_to_closest_harkonnen_area: u16,
+    // The five nearest-location triples condit_scan_nearest_locations
+    // (seg000:5274) refreshes from the staged location whenever
+    // prepare_location_data_for_condit runs.
+    // = seg001:00ca nearest_location_distance_ds_ca — the nearest other
+    // location of any kind.
+    pub(crate) nearest_location: NearestLocation,
+    // = seg001:00d0 nearest_village_distance_ds_d0 — the nearest village
+    // (appearance < 0x28, status bit 7 clear).
+    pub(crate) nearest_village: NearestLocation,
+    // = seg001:00d6 nearest_sietch_distance_ds_d6 — the nearest
+    // phase-discoverable sietch (appearance < 0x28, bit 7 set); gates the
+    // "There is a sietch very near" messages.
+    pub(crate) nearest_sietch: NearestLocation,
+    // = seg001:00dc nearest_Atreides_area_distance_ds_dc — the nearest
+    // Atreides area (appearance >= 0x28, bit 7 clear).
+    pub(crate) nearest_atreides_area: NearestLocation,
+    // = seg001:00e2 nearest_Harkonnen_area_distance_ds_e2 — the nearest
+    // Harkonnen area (appearance >= 0x28, bit 7 set); the ESPIONAGE
+    // occupation and the Harkonnen-captain dialogue need its distance < 0x1e.
+    pub(crate) nearest_harkonnen_area: NearestLocation,
 
     // = seg001:46d2/46d4 data_046d2/046d4 — the head-rect-relative anchor point
     // the troop-contact popup re-anchors the talking head on (staged from
@@ -2020,6 +2055,8 @@ impl GameState {
             final_attack_stage: 0,
             spice_shipment_sequence_number: 0,
             number_of_sietches_attacked_by_harkonnen: 0,
+            person_marker_base: 0,
+            data_000c6: 0,
             days_left_until_spice_shipment: 0,
             contact_distance_related_ds_d5: 0,
             number_of_sietches_visited: 0,
@@ -2058,8 +2095,6 @@ impl GameState {
             game_phase: 0,
             days_since_last_game_phase_change: 0,
             night_attack_stage: 0,
-            person_marker_base: 0,
-            data_000c6: 0,
             // = seg001:11bd/11bf both init dw 0aah (the log head lives in
             // dialogue_played_log's length).
             book_bookmark_ptr: 0xaa,
@@ -2124,7 +2159,11 @@ impl GameState {
             map_contact_head_rect: Rect::default(),
             map_contact_subtitle_pos: (0, 0),
             contacting_troops_ds_4c: 0,
-            distance_to_closest_harkonnen_area: 0xffff,
+            nearest_location: NearestLocation::default(),
+            nearest_village: NearestLocation::default(),
+            nearest_sietch: NearestLocation::default(),
+            nearest_atreides_area: NearestLocation::default(),
+            nearest_harkonnen_area: NearestLocation::default(),
             head_popup_anchor: (0, 0),
             head_popup_box: Rect::default(),
             map_info_panel_rect: Rect::default(),
@@ -2276,9 +2315,25 @@ impl GameState {
             current_phrase_bin_id: 0,
             // = the seg001:11eb statics: identity COMMAND ids, except 0x8b
             // (0x108 "Paul Atreides"; the met-Stilgar callback rewrites it to
-            // 0x109 "Paul Muad'Dib").
+            // 0x109 "Muad'Dib"). Entries 1-2 are the staged location's
+            // first/last-name ids once stage_location_name_placeholders runs.
             string_subst_id_table: [
-                1, 1, 2, 3, 4, 5, 6, 7, 8, 9, 0x0a, 0x108, 0x0c, 0x0d, 0x0e, 0x0f,
+                1,
+                1,
+                2,
+                3,
+                4,
+                5,
+                6,
+                7,
+                8,
+                9,
+                0x0a,
+                cmd::PAUL_ATREIDES_108,
+                0x0c,
+                0x0d,
+                0x0e,
+                0x0f,
             ],
             subtitle_pad_left: 0,
             subtitle_pad_right: 0,

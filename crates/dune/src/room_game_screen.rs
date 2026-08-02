@@ -15,7 +15,7 @@ use crate::{
     attack::AttackState,
     cmd,
     game_ui::{NAV_PANEL_BLANK, NAV_PANEL_FLIGHT, NAV_PANEL_RECORD_OFFSET},
-    gfx,
+    gfx, locations,
     menu_defs::{self, CMD_GREY, MenuCleanupFn, MenuItem, MenuItemCallback, MenuRef, item},
     sprite_bank,
 };
@@ -1020,13 +1020,61 @@ impl GameState {
     }
 
     // = seg000:932e ui_dialogue_related_to_HarkonnenCaptains — stage the
-    // captain's troop CONDIT block, then the shared dialogue entry with
-    // al = 0x0c. The middle (9335..9367: the map-position recompute, troop
-    // harvest_rate seed, subst_id_09) is not yet ported.
+    // captain's troop CONDIT block; when the troop keeps a target location in
+    // its occupation slot C (ds:44), or a Harkonnen area is within 0x1e,
+    // stage that location's CONDIT block and point subst_id_09 (the 0x89
+    // compass-direction placeholder) from the player cell toward it; then
+    // the shared dialogue entry with al = 0x0c.
     pub(crate) fn ui_dialogue_related_to_harkonnen_captains(&mut self) {
         if let Some(ti) = self.harkonnen_captain_troop {
             self.troop_prepare_troop_data_for_condit(ti);
         }
+        // = seg000:9335 call get_map_position — the player map cell.
+        let (x, lat) = self.get_map_position();
+        // = seg000:9338/933b bp = 44h — the staged occupation slot C.
+        let mut target = self.troop_condit.harvest_rate;
+        let mut target_is_harkonnen_area = false;
+        if target == 0 {
+            // = seg000:9341..9347 with no Harkonnen area within 0x1e,
+            //   straight into the dialogue.
+            if self.nearest_harkonnen_area.distance >= 0x1e {
+                self.common_dialogue(0x0c);
+                return;
+            }
+            // = seg000:9349..9353 bp = 0e4h; seed the captain troop's
+            //   occupation slot C with the area's location ptr.
+            target = self.nearest_harkonnen_area.loc_ptr;
+            target_is_harkonnen_area = true;
+            if let Some(ti) = self.harkonnen_captain_troop {
+                self.troops[ti].harvest_rate = target;
+            }
+        }
+        // = seg000:9356/9359 the octant from the player cell toward the
+        //   target, stored at [bp+2]: ds:46 (the staged slot E's low byte)
+        //   for a ds:44 target, ds:e6 for the Harkonnen-area triple.
+        let octant = self.condit_octant_toward(target, x, lat);
+        if target_is_harkonnen_area {
+            self.nearest_harkonnen_area.octant = octant;
+        } else {
+            self.troop_condit.harvest_total =
+                (self.troop_condit.harvest_total & 0xff00) | octant as u16;
+        }
+        // = seg000:935c/9361 pop di; stage the target location's CONDIT
+        //   block (the nearest-location rescan runs from it). A slot-C value
+        //   that is not a location ptr would make DOS stage garbage; the
+        //   port skips the stage instead.
+        let li = (target.wrapping_sub(locations::LOCATION_PTR_BASE)
+            / locations::LOCATION_RECORD_SIZE) as usize;
+        if target >= locations::LOCATION_PTR_BASE && li < self.locations.len() {
+            self.prepare_location_data_for_condit(li);
+            // = seg000:9364 call stage_location_name_placeholders — the
+            //   0x81/0x82 placeholders name the target location.
+            self.stage_location_name_placeholders(li);
+        }
+        // = seg000:9367 pop subst_id_09 = 0xda + octant — the pop lands after
+        //   the rescan, overriding its sietch direction.
+        self.string_subst_id_table[9] = 0xda + octant as u16;
+        // = seg000:936b al = 0x0c.
         self.common_dialogue(0x0c);
     }
 
@@ -1163,9 +1211,13 @@ impl GameState {
         }
 
         // = seg000:2ec9 loc_02ec9 — the verb-menu branch.
-        // = seg000:2ec9 di = [data_0114e] = current_location_ptr.
-        // = seg000:2ecd call set_command_menu_origin (menu x/y from the header).
-        self.set_command_menu_origin();
+        // = seg000:2ec9/2ecd di = current_location_ptr; call stage_location_
+        //   name_placeholders — the 0x81/0x82 placeholders name the current
+        //   location. With no current location (walked out / travelling) DOS
+        //   stages garbage from ds:0; the port skips.
+        if (self.current_location_index as usize) < self.locations.len() {
+            self.stage_location_name_placeholders(self.current_location_index as usize);
+        }
         // = seg000:2ed0 call build_room_command_records (assemble the verb list).
         self.build_room_command_records();
         // = seg000:2ed3 in plain room mode (game_screen_mode_flags == 0) also
@@ -1198,14 +1250,21 @@ impl GameState {
 
     // ---- Command-panel callees (linked stubs; see the .chani annotations).
 
-    // = seg000:2e98 set_command_menu_origin — save the verb-menu list identity
-    // (command_menu_list = di) and compute its draw origin from the two-byte
-    // header at di (command_menu_x = [di]; command_menu_y = [di+1] + 0xc).
-    // Popup menus pass a real template; this room-menu call site passes
-    // current_location_ptr, whose first_name/last_name bytes serve as the
-    // nominal header. TODO: port; needs command_menu_list and its identity
-    // compare (seg000:a2aa) to matter first. No-op stub.
-    pub(crate) fn set_command_menu_origin(&mut self) {}
+    // = seg000:2e98 stage_location_name_placeholders — stage the location's
+    // display name into the substitution table: subst[1] = first_name (COMMAND
+    // 1..12 "Arrakeen".."Celimyn"), subst[2] = last_name + 0xc (COMMAND 0x0d
+    // "(Atreides)" .. 0x17 "Pyort") — the 0x81/0x82 placeholders in dialogue
+    // text. Every DOS call site passes a Location record in di. The DOS
+    // identity store (staged_name_location_ptr = di, read by the
+    // dialogue-line-0x0d globe-zoom callback at seg000:a28e) is not modelled —
+    // that callback is not ported.
+    pub(crate) fn stage_location_name_placeholders(&mut self, loc_index: usize) {
+        let loc = &self.locations[loc_index];
+        // = seg000:2e9e/2ea3 subst_id_01 = [di] = first_name.
+        self.string_subst_id_table[1] = loc.first_name as u16;
+        // = seg000:2ea6..2eae subst_id_02 = [di+1] + 0xc = last_name + 0xc.
+        self.string_subst_id_table[2] = loc.last_name as u16 + 0xc;
+    }
 
     // = seg000:2efb build_room_command_records — assemble the verb-menu record
     // list for the current room into command_menu_buf (the seg001:1f0e

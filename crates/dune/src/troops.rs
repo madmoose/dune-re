@@ -1538,7 +1538,7 @@ pub(crate) const TROOPS: [Troop; 68] = [
     },
 ];
 
-use crate::{GameState, locations};
+use crate::{GameState, game_state::NearestLocation, locations};
 
 /// = the for_condit_troop_* staging block at seg001:002c..004b, filled by
 /// troop_prepare_troop_data_for_condit for the troop behind the active
@@ -1779,7 +1779,7 @@ impl GameState {
 
     // = seg000:331e prepare_location_data_for_condit — stage the location's
     // CONDIT block (ds:4d..5b) from its record. The derived pieces
-    // (location_033be, sub_034a5, sub_03385, sub_05274 and the
+    // (location_033be, sub_034a5, sub_03385 and the
     // compute_location_available_equipment mask at ds:53) are not yet ported.
     pub(crate) fn prepare_location_data_for_condit(&mut self, loc_index: usize) {
         // = seg000:331e mov [data_011ce], di — the staged location.
@@ -1806,9 +1806,122 @@ impl GameState {
             loc.equipment.bulbs,
         ];
         // = seg000:335a..3379 location_033be, sub_034a5, compute_location_
-        //   available_equipment -> the ds:53 unused-equipment mask; 337d/3380
-        //   sub_03385 / sub_05274. TODO: not yet ported.
+        //   available_equipment -> the ds:53 unused-equipment mask; 337d
+        //   sub_03385. TODO: not yet ported.
         self.location_condit.unused_equipment = 0;
+        // = seg000:3380 call condit_scan_nearest_locations.
+        self.condit_scan_nearest_locations(loc_index);
+    }
+
+    // = seg000:5274 condit_scan_nearest_locations — scan the locations table
+    // from the staged location and refresh the five nearest-location triples
+    // (see the GameState fields): any other location, village (appearance <
+    // 0x28, status bit 7 clear), sietch (appearance < 0x28, bit 7 set; a
+    // sietch with game_phase < discoverable_at_phase is skipped entirely,
+    // even for the any-location triple), Atreides area (appearance >= 0x28,
+    // bit 7 clear) and Harkonnen area (appearance >= 0x28, bit 7 set). The
+    // tail computes the five compass octants and subst_id_09.
+    pub(crate) fn condit_scan_nearest_locations(&mut self, loc_index: usize) {
+        // = seg000:5274/5277 dx/bx = the staged location's map cell.
+        let (x, lat) = {
+            let loc = &self.locations[loc_index];
+            (loc.map_x as u16, loc.map_y)
+        };
+        // = seg000:527b..528a the five distances re-arm at 0xffff.
+        self.nearest_location.distance = 0xffff;
+        self.nearest_village.distance = 0xffff;
+        self.nearest_sietch.distance = 0xffff;
+        self.nearest_atreides_area.distance = 0xffff;
+        self.nearest_harkonnen_area.distance = 0xffff;
+        // = seg000:52dd..52e5 / 52e8..52f2 keep the running minimum in a
+        //   triple ([bp] = distance, [bp+2] = the location ptr).
+        fn keep_min(t: &mut NearestLocation, dist: u16, loc_ptr: u16) {
+            if dist < t.distance {
+                t.distance = dist;
+                t.loc_ptr = loc_ptr;
+            }
+        }
+        // = seg000:528d..52f9 the location walk (the 0xffff name word ends
+        //   it; the staged location itself is skipped).
+        for li in 0..self.locations.len() {
+            let loc = self.locations[li];
+            if loc.first_name == 0xff {
+                break;
+            }
+            if li == loc_index {
+                continue;
+            }
+            // = seg000:5299..52b3 distance = max(|dlon| >> 8, |dlat|): cx/ax
+            //   = the absolute cell deltas, cl = |dlon|'s high byte, and the
+            //   larger-of compare is 8-bit (cl vs al) while the take is the
+            //   full 16-bit |dlat|.
+            let dlon_abs = ((loc.map_x as u16).wrapping_sub(x) as i16).unsigned_abs();
+            let dlat_abs = loc.map_y.wrapping_sub(lat).unsigned_abs();
+            let mut dist = dlon_abs >> 8;
+            if (dist as u8) < (dlat_abs as u8) {
+                dist = dlat_abs;
+            }
+            // = seg000:52b5..52dd the class triple: appearance >= 0x28 splits
+            //   Harkonnen/Atreides area on status bit 7; below it, bit 7 set
+            //   is a sietch (dropped while game_phase < discoverable_at_
+            //   phase), clear a village.
+            let triple = if loc.appearance >= 0x28 {
+                if loc.status & 0x80 != 0 {
+                    &mut self.nearest_harkonnen_area
+                } else {
+                    &mut self.nearest_atreides_area
+                }
+            } else if loc.status & 0x80 != 0 {
+                // = seg000:52d2..52d8 the phase gate.
+                if self.game_phase < loc.discoverable_at_phase as u8 {
+                    continue;
+                }
+                &mut self.nearest_sietch
+            } else {
+                &mut self.nearest_village
+            };
+            let loc_ptr = locations::location_ptr_from_index(li);
+            keep_min(triple, dist, loc_ptr);
+            keep_min(&mut self.nearest_location, dist, loc_ptr);
+        }
+        // = seg000:52fb..5321 the octant pass: Atreides area (ds:e0),
+        //   Harkonnen area (ds:e6), sietch (ds:da) — whose octant also
+        //   becomes subst_id_09 = 0xda + octant, the 0x89 compass-direction
+        //   placeholder (COMMAND 0xda "North" .. 0xe1 "North-West") — then
+        //   any-location (ds:ce) and village (ds:d4).
+        self.nearest_atreides_area.octant =
+            self.condit_octant_toward(self.nearest_atreides_area.loc_ptr, x, lat);
+        self.nearest_harkonnen_area.octant =
+            self.condit_octant_toward(self.nearest_harkonnen_area.loc_ptr, x, lat);
+        let sietch_octant = self.condit_octant_toward(self.nearest_sietch.loc_ptr, x, lat);
+        self.nearest_sietch.octant = sietch_octant;
+        // = seg000:530e/5311.
+        self.string_subst_id_table[9] = 0xda + sietch_octant as u16;
+        self.nearest_location.octant =
+            self.condit_octant_toward(self.nearest_location.loc_ptr, x, lat);
+        self.nearest_village.octant =
+            self.condit_octant_toward(self.nearest_village.loc_ptr, x, lat);
+    }
+
+    // = seg000:5323 condit_store_octant_toward_location — the compass octant
+    // (0 = N .. 7 = NW) from the reference map cell (x, lat) toward the
+    // location `loc_ptr` points at: (compass angle + 0x10) >> 5. A triple
+    // whose scan found nothing keeps its stale pointer and DOS quantizes
+    // whatever cell the stale bytes spell; the port answers 0 for a pointer
+    // outside the locations table.
+    pub(crate) fn condit_octant_toward(&self, loc_ptr: u16, x: u16, lat: i16) -> u8 {
+        if loc_ptr < locations::LOCATION_PTR_BASE {
+            return 0;
+        }
+        let li = locations::location_index_from_ptr(loc_ptr);
+        if li >= self.locations.len() {
+            return 0;
+        }
+        let loc = &self.locations[li];
+        // = seg000:5325..532f the target cell -> compass_angle_to_map_
+        //   position; 5333..533b (angle + 0x10) rol 3, and 7.
+        let angle = self.compass_angle_to_map_position(loc.map_x as u16, loc.map_y, x, lat);
+        angle.wrapping_add(0x10) >> 5
     }
 
     // = seg000:3310 get_command_string_index_from_troop_skill — the skill
@@ -3097,6 +3210,79 @@ mod tests {
             game.locations[li].equipment.ornithopters,
             orni_before + 1,
             "the ornithopter folded into the location"
+        );
+    }
+
+    // Staging a location's CONDIT block rescans the five nearest-location
+    // triples (condit_scan_nearest_locations, seg000:5274): class = the
+    // appearance/status-bit-7 split, distance = max(|dlon| >> 8, |dlat|), a
+    // not-yet-discoverable sietch is skipped outright, and subst_id_09
+    // becomes the compass-direction COMMAND id toward the nearest sietch.
+    // Asset-gated:
+    //   cargo test -p dune --bin dune -- --ignored nearest_location
+    #[test]
+    #[ignore = "needs assets/DUNE.DAT"]
+    fn nearest_location_scan_classifies_and_directs() {
+        let dat_path = concat!(env!("CARGO_MANIFEST_DIR"), "/../../assets/DUNE.DAT");
+        let Ok(dat_file) = DatFile::open(dat_path) else {
+            eprintln!("skipping: {dat_path} not found");
+            return;
+        };
+        let (tx, rx) = mpsc::sync_channel(64);
+        let mut game = GameState::new(dat_file, tx);
+        game.set_headless();
+        game.start(true);
+        while rx.try_recv().is_ok() {}
+
+        // Park every location 120 rows south of the staged cell, then plant
+        // three neighbors at known offsets around it.
+        let (x0, y0) = (0x4000i16, 100i16);
+        for l in game.locations.iter_mut() {
+            if l.first_name == 0xff {
+                break;
+            }
+            l.map_x = x0;
+            l.map_y = y0 + 120;
+        }
+        let staged = 0;
+        game.locations[staged].map_y = y0;
+        // A Harkonnen area 10 rows due north.
+        game.locations[1].appearance = 0x28;
+        game.locations[1].status = 0x80;
+        game.locations[1].map_y = y0 - 10;
+        // A discoverable sietch 5 * 256 longitude units due east.
+        game.locations[2].appearance = 0x10;
+        game.locations[2].status = 0x80;
+        game.locations[2].discoverable_at_phase = 0;
+        game.locations[2].map_x = x0 + 5 * 256;
+        game.locations[2].map_y = y0;
+        // A closer sietch the game phase has not reached yet.
+        game.locations[3].appearance = 0x10;
+        game.locations[3].status = 0x80;
+        game.locations[3].discoverable_at_phase = 0x7f;
+        game.locations[3].map_y = y0 - 1;
+
+        game.prepare_location_data_for_condit(staged);
+
+        let h = game.nearest_harkonnen_area;
+        assert_eq!(
+            (h.distance, h.loc_ptr, h.octant),
+            (10, crate::locations::location_ptr_from_index(1), 0),
+            "the Harkonnen area: 10 rows north (within the 0x1e espionage gate)"
+        );
+        let s = game.nearest_sietch;
+        assert_eq!(
+            (s.distance, s.loc_ptr, s.octant),
+            (5, crate::locations::location_ptr_from_index(2), 2),
+            "the sietch: 5 longitude units east"
+        );
+        // The 0x89 placeholder: COMMAND 0xda "North" + the sietch octant.
+        assert_eq!(game.string_subst_id_table[9], 0xdc);
+        let n = game.nearest_location;
+        assert_eq!(
+            (n.distance, n.loc_ptr),
+            (5, crate::locations::location_ptr_from_index(2)),
+            "the gated sietch one row north must not count for any triple"
         );
     }
 

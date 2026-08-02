@@ -12,7 +12,7 @@
 //! the palace-plan locked-door icon-list truncation, and the string
 //! substitution table.
 
-use crate::GameState;
+use crate::{GameState, cmd};
 
 impl GameState {
     // = seg000:121f set_game_phase_and_trigger_callbacks — raise game_phase to
@@ -188,8 +188,8 @@ impl GameState {
         rp.location_and_room = (rp.location_and_room & 0xff00) | 0x0a;
         rp.location_appearance = 0x180;
         // = seg000:10e1 subst_id_0b = 0x109 — the 0x8b name placeholder
-        //   becomes COMMAND string 0x109 ("Paul Muad'Dib"). TODO: the string-
-        //   substitution table is not modelled (text engine).
+        //   becomes COMMAND string 0x109 ("Muad'Dib").
+        self.string_subst_id_table[0x0b] = cmd::MUAD_DIB;
         // = seg000:10e7 al = 0x14; call increase_charisma...
         self.increase_charisma(0x14);
         // = seg000:10ec or [bitfield_Paul_events], 10h.

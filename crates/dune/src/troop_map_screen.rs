@@ -919,7 +919,9 @@ impl GameState {
         } else {
             self.troops[ti].offset_of_location = dest_ptr;
             self.troop_prepare_troop_data_for_condit(ti);
-            self.set_command_menu_origin();
+            // = seg000:82f2 call stage_location_name_placeholders — the
+            //   0x81/0x82 placeholders name the destination.
+            self.stage_location_name_placeholders(dest_li);
             self.troops[ti].offset_of_location = old_ptr;
             0x0b
         };
@@ -1460,9 +1462,11 @@ impl GameState {
         // = seg000:7c05 call troop_prepare_troop_data_for_condit — stage the
         //   troop's block so the record's conditions can read it.
         self.troop_prepare_troop_data_for_condit(ti);
-        // = seg000:7c08/7c0b di = [si+4]; call set_command_menu_origin — the
-        //   menu origin from the troop's location (a stub in the port).
-        self.set_command_menu_origin();
+        // = seg000:7c08/7c0b di = [si+4]; call stage_location_name_
+        //   placeholders — the 0x81/0x82 placeholders name the troop's
+        //   location.
+        let li = crate::locations::location_index_from_ptr(self.troops[ti].offset_of_location);
+        self.stage_location_name_placeholders(li);
         // = seg000:7c0e..7c2a out of visibility range the troop answers from
         //   afar: ds:4c = 0xff picks the record's out-of-contact lines, and the
         //   highlight ring's icon script swaps to seg001:1916 (the "no
@@ -1555,7 +1559,7 @@ impl GameState {
                 1 => {
                     // = seg000:69d5..69e2 ESPIONAGE is offered only with a
                     //   Harkonnen holding within 0x1e of the troop's location.
-                    let espionage_greyed = self.distance_to_closest_harkonnen_area >= 0x1e;
+                    let espionage_greyed = self.nearest_harkonnen_area.distance >= 0x1e;
                     self.menu_occupation_for_army_troop.records[1].set_grayed_if(espionage_greyed);
 
                     // = seg000:69e8..69f1 an army troop already on espionage

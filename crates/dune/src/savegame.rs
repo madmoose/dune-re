@@ -338,6 +338,19 @@ impl GameState {
         // = seg001:00c8 — one byte in DOS: the comm sighting count (and the
         // comms-room "message queued" flag the port carries as data_000c8).
         w8(b, 0x00c8, self.comm_sightings.len() as u8);
+        // = seg001:00ca..00e6 the five nearest-location triples
+        // (condit_scan_nearest_locations).
+        for (base, t) in [
+            (0x00ca, &self.nearest_location),
+            (0x00d0, &self.nearest_village),
+            (0x00d6, &self.nearest_sietch),
+            (0x00dc, &self.nearest_atreides_area),
+            (0x00e2, &self.nearest_harkonnen_area),
+        ] {
+            w16(b, base, t.distance);
+            w16(b, base + 2, t.loc_ptr);
+            w8(b, base + 4, t.octant);
+        }
         w8(b, 0x00cf, self.days_left_until_spice_shipment);
         w8(b, 0x00d5, self.contact_distance_related_ds_d5);
         w8(b, 0x00e1, self.data_000e1);
@@ -486,8 +499,8 @@ impl GameState {
         }
         w16(b, 0x11db, self.latest_location_with_illness);
 
-        // = seg001:11eb string_subst_id_table (entries 1-2 double as
-        // command_menu_x/y).
+        // = seg001:11eb string_subst_id_table (entries 1-2 hold the staged
+        // location's first/last-name ids, stage_location_name_placeholders).
         for (k, id) in self.string_subst_id_table.iter().enumerate() {
             w16(b, 0x11eb + 2 * k, *id);
         }
@@ -574,6 +587,17 @@ impl GameState {
         self.data_000c6 = r8(b, 0x00c6);
         let comm_count = r8(b, 0x00c8);
         self.data_000c8 = comm_count;
+        for (base, t) in [
+            (0x00ca, &mut self.nearest_location),
+            (0x00d0, &mut self.nearest_village),
+            (0x00d6, &mut self.nearest_sietch),
+            (0x00dc, &mut self.nearest_atreides_area),
+            (0x00e2, &mut self.nearest_harkonnen_area),
+        ] {
+            t.distance = r16(b, base);
+            t.loc_ptr = r16(b, base + 2);
+            t.octant = r8(b, base + 4);
+        }
         self.days_left_until_spice_shipment = r8(b, 0x00cf);
         self.contact_distance_related_ds_d5 = r8(b, 0x00d5);
         self.data_000e1 = r8(b, 0x00e1);

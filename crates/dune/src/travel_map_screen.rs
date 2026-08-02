@@ -1339,7 +1339,7 @@ impl GameState {
     // are halved once when the latitude delta is outside [-0x80, 0x80), then
     // the latitude delta is scaled by 256 onto the longitude scale (65536
     // units per circle vs ~197 rows) and the shared compass math runs.
-    fn compass_angle_to_map_position(
+    pub(crate) fn compass_angle_to_map_position(
         &self,
         target_x: u16,
         target_lat: i16,
