@@ -217,8 +217,8 @@ impl GameState {
             self.spice_production_lower_than_previous_day = 0;
             self.spice_production_better_than_previous_day = production - previous_production;
         }
-        // = seg000:1c9d call iterate_over_locations_and_accumulate_...
-        self.accumulate_potential_spice_harvest();
+        // = seg000:1c9d call accumulate_harkonnen_spice_production.
+        self.accumulate_harkonnen_spice_production();
         // = seg000:1ca0 call recompute_condit_statistics (loc_0c02e).
         self.recompute_condit_statistics();
         // = seg000:1ca3 call loc_0bf26 — re-format the stats percentage
@@ -500,11 +500,11 @@ impl GameState {
         }
     }
 
-    // = seg000:1cda iterate_over_locations_and_accumulate_number_of_Atreides_
-    // locations_and_value_related_to_spice_density — ds:a8 = sum of
-    // spice_density/8 over Atreides locations + rand_iterated(sum/16). (The
-    // Atreides count accumulates in dx but has no store.)
-    fn accumulate_potential_spice_harvest(&mut self) {
+    // = seg000:1cda accumulate_harkonnen_spice_production — ds:a8 = sum of
+    // spice_density/8 over the locations location_is_Atreides_05d36 accepts
+    // (appearance >= 0x28, status bit 3) + rand_iterated(sum/16). (The
+    // location count accumulates in dx but has no store.)
+    fn accumulate_harkonnen_spice_production(&mut self) {
         let mut sum = 0u16;
         for li in 0..self.locations.len() {
             if self.location_is_atreides(li) {
@@ -513,7 +513,7 @@ impl GameState {
         }
         // = seg000:1cfc..1d09 the random topping.
         let extra = self.rand_iterated(sum >> 4);
-        self.potential_spice_harvest = sum.wrapping_add(extra);
+        self.harkonnen_spice_production = sum.wrapping_add(extra);
     }
 
     // = seg000:bfe3 compute_area_controlled_percentages — the territory

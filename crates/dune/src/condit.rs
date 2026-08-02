@@ -49,7 +49,7 @@ fn condit_var_name(addr: u16) -> Option<(&'static str, bool)> {
         0xa2 => ("area_controlled_by_atreides", true),
         0xa4 => ("area_controlled_by_harkonnen", true),
         0xa6 => ("todays_spice_production", true),
-        0xa8 => ("potential_spice_harvest", true),
+        0xa8 => ("harkonnen_spice_production", true),
         0xaa => ("data_000aa", true),
         0xae => ("previous_day_spice_production", true),
         0xb0 => ("spice_production_better_than_previous_day", true),
@@ -274,7 +274,7 @@ impl GameState {
             0xa2 => self.area_controlled_by_atreides,
             0xa4 => self.area_controlled_by_harkonnen,
             0xa6 => self.todays_spice_production,
-            0xa8 => self.potential_spice_harvest,
+            0xa8 => self.harkonnen_spice_production,
             // = seg001:00aa data_000aa — total population of the loyal
             // troops.
             0xaa => self.data_000aa,

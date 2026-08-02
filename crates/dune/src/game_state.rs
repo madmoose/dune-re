@@ -431,10 +431,12 @@ pub struct GameState {
     // within the day.
     pub(crate) todays_spice_production: u16,
 
-    // = seg001:00a8 for_condit_potential_spice_harvest_ds_a8 — sum of
-    // spice_density/8 over Atreides locations + rand_iterated(sum/16)
-    // (seg000:1cda).
-    pub(crate) potential_spice_harvest: u16,
+    // = seg001:00a8 for_condit_harkonnen_spice_production_ds_a8 — the
+    // Harkonnen spice production (the SEE RESULTS Harkonnen SPICE PRODUCTION
+    // column, ×10 in kg): sum of spice_density/8 over the locations
+    // location_is_Atreides_05d36 accepts + rand_iterated(sum/16), recomputed
+    // each new day (seg000:1cda). Static init 390 (3900 kg at game start).
+    pub(crate) harkonnen_spice_production: u16,
 
     // = seg001:00aa data_000aa — total population of the troops that are
     // neither Harkonnen nor captured/unrallied (the recompute_condit_
@@ -2077,10 +2079,7 @@ impl GameState {
             area_controlled_by_atreides: 0,
             area_controlled_by_harkonnen: 0,
             todays_spice_production: 0,
-            // = the seg001:00a8 static init 0x186 (390 -> "3900" in the SEE
-            // RESULTS ×10 display), shown until the first new-day recompute
-            // (accumulate_potential_spice_harvest).
-            potential_spice_harvest: 0x186,
+            harkonnen_spice_production: 390,
             data_000aa: 0,
             data_000ac: 0x1b58,
             previous_day_spice_production: 0,

@@ -321,7 +321,7 @@ impl GameState {
         w16(b, 0x00a2, self.area_controlled_by_atreides);
         w16(b, 0x00a4, self.area_controlled_by_harkonnen);
         w16(b, 0x00a6, self.todays_spice_production);
-        w16(b, 0x00a8, self.potential_spice_harvest);
+        w16(b, 0x00a8, self.harkonnen_spice_production);
         w16(b, 0x00aa, self.data_000aa);
         w16(b, 0x00ac, self.data_000ac);
         w16(b, 0x00ae, self.previous_day_spice_production);
@@ -571,7 +571,7 @@ impl GameState {
         self.area_controlled_by_atreides = r16(b, 0x00a2);
         self.area_controlled_by_harkonnen = r16(b, 0x00a4);
         self.todays_spice_production = r16(b, 0x00a6);
-        self.potential_spice_harvest = r16(b, 0x00a8);
+        self.harkonnen_spice_production = r16(b, 0x00a8);
         self.data_000aa = r16(b, 0x00aa);
         self.data_000ac = r16(b, 0x00ac);
         self.previous_day_spice_production = r16(b, 0x00ae);

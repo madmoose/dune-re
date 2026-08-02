@@ -639,7 +639,7 @@ impl GameState {
         self.results_gauge_targets = [
             (self.area_controlled_by_harkonnen >> 1).wrapping_add(1) as u8,
             (self.area_controlled_by_atreides >> 1).wrapping_add(1) as u8,
-            (self.potential_spice_harvest >> 4).wrapping_add(1) as u8,
+            (self.harkonnen_spice_production >> 4).wrapping_add(1) as u8,
             (self.todays_spice_production >> 4).wrapping_add(1) as u8,
             (self.data_000ac >> 8).wrapping_add(1) as u8,
             (self.data_000aa >> 8).wrapping_add(1) as u8,
@@ -661,7 +661,7 @@ impl GameState {
         let values = [
             (self.area_controlled_by_harkonnen, false),
             (self.area_controlled_by_atreides, false),
-            (self.potential_spice_harvest, true),
+            (self.harkonnen_spice_production, true),
             (self.todays_spice_production, true),
             (self.data_000ac, true),
             (self.data_000aa, true),
