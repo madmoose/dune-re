@@ -22,9 +22,10 @@
 //! (results_draw_text_and_icones): the day/charisma header, the six live
 //! stat strings (COMMAND 0xc4..0xc9, updated in place), the house labels,
 //! and six animated gauges (results_gauge_task) with trend glyphs. While it
-//! is up, globe_draw_skips_pixel_stores keeps the rotation task from
-//! repainting the globe pixels (the phase still advances); STANDARD VISION
-//! slides the decorations back and returns to the live globe.
+//! is up, globe_draw_area_control_colors switches the still-spinning globe
+//! into the red/blue area-control palette (0x20 Atreides-held / 0x30
+//! Harkonnen-held blocks per map cell); STANDARD VISION slides the
+//! decorations back and returns to the terrain colours.
 
 use crate::{
     GameState, Rect, cmd,
@@ -80,9 +81,9 @@ impl GameState {
     // globe screen into fb1 (run inside the transition, front buffer
     // redirected).
     pub(crate) fn draw_globe_and_ui_to_front_buffer(&mut self) {
-        // = seg000:b827 globe_draw_skips_pixel_stores = 0 — the full redraw
+        // = seg000:b827 globe_draw_area_control_colors = 0 — the full redraw
         // patch (the SEE RESULTS mode sets it back nonzero).
-        self.globe_draw_skips_pixel_stores = 0;
+        self.globe_draw_area_control_colors = 0;
         // = seg000:b82c call globe_fill_blue_background_to_front_buffer.
         self.globe_fill_blue_background_to_front_buffer();
         // = seg000:b82f _word_2D1BF_globe_decoration_offset = 0.
@@ -144,12 +145,12 @@ impl GameState {
 
     // = seg000:b941 globe_menu_push — push the globe verb menu, patching
     // record 1 in place first: text 0xb1 SEE RESULTS + menu_callback_choice_
-    // globe_see_results while globe_draw_skips_pixel_stores is clear, text
+    // globe_see_results while globe_draw_area_control_colors is clear, text
     // 0xb2 STANDARD VISION + the see_standard_vision callback while it is
     // set.
     pub(crate) fn globe_menu_push(&mut self) {
         // = seg000:b944..b958 mov [bp+6],ax; mov [bp+8],bx.
-        self.menu_globe.records[1] = if self.globe_draw_skips_pixel_stores == 0 {
+        self.menu_globe.records[1] = if self.globe_draw_area_control_colors == 0 {
             menu_defs::item(
                 cmd::SEE_RESULTS,
                 0xb96b,
@@ -502,14 +503,14 @@ impl GameState {
     }
 
     // = seg000:b96b menu_callback_choice_globe_see_results — the SEE RESULTS
-    // verb: slide the decorations open over the stats overlay, enter the
-    // pixel-store-skip draw mode, and re-push the menu (row 1 becomes
-    // STANDARD VISION).
+    // verb: slide the decorations open over the stats overlay, switch the
+    // globe draw to the red/blue area-control colours, and re-push the menu
+    // (row 1 becomes STANDARD VISION).
     pub(crate) fn menu_callback_choice_globe_see_results(&mut self, _text_id: u16, _index: usize) {
         // = seg000:b96b call globe_slide_decorations_open.
         self.globe_slide_decorations_open();
-        // = seg000:b96e dec globe_draw_skips_pixel_stores (0 -> 0xff).
-        self.globe_draw_skips_pixel_stores = self.globe_draw_skips_pixel_stores.wrapping_sub(1);
+        // = seg000:b96e dec globe_draw_area_control_colors (0 -> 0xff).
+        self.globe_draw_area_control_colors = self.globe_draw_area_control_colors.wrapping_sub(1);
         // = seg000:b972 loc_0b972.
         self.globe_results_menu_tail();
     }
@@ -524,8 +525,8 @@ impl GameState {
     ) {
         // = seg000:b961 call globe_slide_decorations_close.
         self.globe_slide_decorations_close();
-        // = seg000:b964 globe_draw_skips_pixel_stores = 0.
-        self.globe_draw_skips_pixel_stores = 0;
+        // = seg000:b964 globe_draw_area_control_colors = 0.
+        self.globe_draw_area_control_colors = 0;
         // = seg000:b969 jmp loc_0b972.
         self.globe_results_menu_tail();
     }
@@ -994,11 +995,24 @@ mod tests {
         );
 
         // SEE RESULTS: the decorations slide apart over the stats overlay,
-        // the draw mode flips to the pixel-store-skip patch, and menu row 1
-        // becomes STANDARD VISION.
+        // the globe switches to the red/blue area-control colours, and menu
+        // row 1 becomes STANDARD VISION.
         game.menu_callback_choice_globe_see_results(0, 0);
         while rx.try_recv().is_ok() {}
-        assert_ne!(game.globe_draw_skips_pixel_stores, 0, "results draw mode");
+        assert_ne!(game.globe_draw_area_control_colors, 0, "results draw mode");
+        // The area-control redraw fills the disc from the 0x10..0x3f
+        // political blocks, with held territory (>= 0x20) actually present.
+        let held_pixels = (39..119)
+            .map(|y| {
+                (120..200)
+                    .filter(|&x| (0x20..0x40).contains(&game.framebuffer.pixels()[y * 320 + x]))
+                    .count()
+            })
+            .sum::<usize>();
+        assert!(
+            held_pixels > 200,
+            "area-control colours missing from the disc ({held_pixels} held-territory pixels)"
+        );
         assert_eq!(
             game.menu_globe.records[1].text_id,
             crate::cmd::STANDARD_VISION
@@ -1030,7 +1044,7 @@ mod tests {
         // STANDARD VISION slides them back and restores the live globe.
         game.menu_callback_choice_globe_see_standard_vision(0, 0);
         while rx.try_recv().is_ok() {}
-        assert_eq!(game.globe_draw_skips_pixel_stores, 0);
+        assert_eq!(game.globe_draw_area_control_colors, 0);
         assert_eq!(game.globe_decoration_offset, 0, "decorations closed");
         assert_eq!(game.menu_globe.records[1].text_id, crate::cmd::SEE_RESULTS);
 

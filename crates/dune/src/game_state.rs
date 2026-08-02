@@ -832,14 +832,15 @@ pub struct GameState {
 
     // = _word_2D1BF_globe_decoration_offset — the FRESK side decorations'
     // slide position on the globe screen: 0 = framing the globe, negative =
-    // slid apart for the SEE RESULTS reveal (seg000:b8f3, not ported).
+    // slid apart for the SEE RESULTS reveal (seg000:b8f3).
     pub(crate) globe_decoration_offset: i16,
 
-    // = globe_draw_skips_pixel_stores — nonzero selects the SEE RESULTS
-    // patch of vga_globe_init that walks the globe without storing pixels;
-    // the port only implements the full-redraw mode 0 (map_func_gfx draws
-    // nothing while it is set).
-    pub(crate) globe_draw_skips_pixel_stores: u8,
+    // = seg001:dd02 globe_draw_area_control_colors — nonzero (the SEE
+    // RESULTS mode) selects the vga_globe_init patch that recolours every
+    // globe pixel into the area-control palette blocks (0x10 plain, 0x20
+    // Atreides-held, 0x30 Harkonnen-held — globe_pixel_area_control_colors,
+    // segvga:1ec9); the globe keeps spinning in those colours.
+    pub(crate) globe_draw_area_control_colors: u8,
 
     // = seg001:dd11 results_gauge_targets / seg001:dd17 results_gauge_current
     // — the SEE RESULTS gauges: results_update_gauge_targets fills the
@@ -2215,7 +2216,7 @@ impl GameState {
             globe_rotation: 0,
             globe_tilt: 0,
             globe_decoration_offset: 0,
-            globe_draw_skips_pixel_stores: 0,
+            globe_draw_area_control_colors: 0,
             results_gauge_targets: [0; 6],
             results_gauge_current: [0; 6],
             results_stats_timestamp: 0,

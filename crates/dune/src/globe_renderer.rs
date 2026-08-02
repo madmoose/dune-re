@@ -186,14 +186,34 @@ impl GlobeRenderer {
         }
     }
 
-    // = segvga:1e47..1e5c: the map byte at [MAP centre 0x62fc + offset] maps
-    // to a colour — al = (v & 0x0f), +12 when the flag nibble (v & 0x30) is
-    // exactly 0x10 and the colour is < 8, then +0x10 into the globe palette
-    // block.
-    fn map_color(&self, offset: i16) -> u8 {
+    // = the map byte at [MAP centre 0x62fc + offset] mapped to a colour.
+    //
+    // Normal mode (segvga:1e4c..1e5c): al = (v & 0x0f), +12 when the flag
+    // nibble (v & 0x30) is exactly 0x10 and the colour is < 8, then +0x10
+    // into the globe palette block.
+    //
+    // Area-control mode (globe_pixel_area_control_colors, segvga:1ec9 — the
+    // SEE RESULTS vision, jumped to through the data_segvga_01e4a patch):
+    // al = 0x10 | (v & 0x0f); a nonzero vegetation-stage nibble adds 0x10
+    // and stage 0x30 (Harkonnen-held) another 0x10, so the disc renders in
+    // the 0x10 plain / 0x20 Atreides / 0x30 Harkonnen palette blocks.
+    fn map_color(&self, offset: i16, area_control: bool) -> u8 {
         let map_value = self.map[(0x62fc_i32 + offset as i32) as usize];
         let flags = map_value & 0x30;
         let mut color = map_value & 0x0f;
+
+        if area_control {
+            // = segvga:1ecb..1edc or al,10h; sub ah,10h; jb; shr ah,1; and
+            // ah,10h; add al,10h; add al,ah.
+            color |= 0x10;
+            if flags >= 0x10 {
+                color += 0x10;
+                if flags == 0x30 {
+                    color += 0x10;
+                }
+            }
+            return color;
+        }
 
         if flags == 0x10 && color < 8 {
             color += 12;
@@ -210,7 +230,7 @@ impl GlobeRenderer {
     // are seeded with absolute framebuffer offsets (segvga:1d35 ax = 0x64a0 =
     // row 80, column 160) — the globe does not add fb_base_ofs, so no
     // y_offset applies here (intro2 runs with row base 0, = seg000:0332).
-    fn draw_half(&self, fb: &mut FrameBuffer, half: Half, tilt: i16) {
+    fn draw_half(&self, fb: &mut FrameBuffer, half: Half, tilt: i16, area_control: bool) {
         let center_x = 160 - 1;
         let center_y = 80 - 1;
 
@@ -284,7 +304,7 @@ impl GlobeRenderer {
 
                 // = segvga:1e47..1e66 the west pixel (std stosb through the
                 // leftward cursor).
-                let color = self.map_color(bp);
+                let color = self.map_color(bp, area_control);
                 let py = match half {
                     Half::Upper => center_y - y,
                     Half::Lower => center_y + y,
@@ -304,7 +324,7 @@ impl GlobeRenderer {
 
                 // = segvga:1e75..1e90 the east pixel (cld stosb through the
                 // rightward cursor).
-                let color = self.map_color(bp);
+                let color = self.map_color(bp, area_control);
                 {
                     let x = (center_x + x + 1) as u16;
                     fb.set(x, py as u16, color);
@@ -315,14 +335,15 @@ impl GlobeRenderer {
         }
     }
 
-    // = segvga:1cb6 vga_globe_init in its full-redraw mode (the
-    // globe_draw_skips_pixel_stores = 0 patch): rebuild the rotation fp table
-    // for `phase` (1/398ths of a revolution), then draw both hemispheres.
-    pub fn draw(&mut self, fb: &mut FrameBuffer, phase: u16, tilt: i16) {
+    // = segvga:1cb6 vga_globe_init: rebuild the rotation fp table for `phase`
+    // (1/398ths of a revolution), then draw both hemispheres.
+    // `area_control` is the al patch — false renders the terrain colours,
+    // true the SEE RESULTS red/blue area-control palette.
+    pub fn draw(&mut self, fb: &mut FrameBuffer, phase: u16, tilt: i16, area_control: bool) {
         let tilt = tilt.clamp(-96, 96);
         self.precalculate_globe_rotation_lookup_table(phase);
-        self.draw_half(fb, Half::Upper, tilt);
-        self.draw_half(fb, Half::Lower, tilt);
+        self.draw_half(fb, Half::Upper, tilt, area_control);
+        self.draw_half(fb, Half::Lower, tilt, area_control);
     }
 
     // = the TABLAT equator row length ([data_0494a] = entry 0's len, 199):
@@ -703,18 +724,14 @@ impl GameState {
     // (es = _word_2D086_framebuffer_1_seg) from the MAP centre
     // (ds:si = res_map_ofs) and the rotation table (bp = RESOURCE_TABLAT),
     // via segvga vga_globe_init (the gfx vtable slot at seg001:3911).
-    // al = globe_draw_skips_pixel_stores selects the full redraw (0, the only
-    // mode the port implements) or the pixel-store-skipping patch.
     pub(crate) fn map_func_gfx(&mut self) {
-        // = the al != 0 pixel-store-skipping patch (the SEE RESULTS mode):
-        // the walk stores nothing, so the port draws nothing.
-        if self.globe_draw_skips_pixel_stores != 0 {
-            return;
-        }
+        // = seg000:b97e al = globe_draw_area_control_colors — nonzero (the
+        // SEE RESULTS mode) renders the red/blue area-control palette.
+        let area_control = self.globe_draw_area_control_colors != 0;
         let phase = self.globe_rotation;
         let tilt = self.globe_tilt;
         if let Some(globe) = self.globe_renderer.as_mut() {
-            globe.draw(&mut self.framebuffer, phase, tilt);
+            globe.draw(&mut self.framebuffer, phase, tilt, area_control);
         }
     }
 
