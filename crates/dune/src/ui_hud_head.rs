@@ -1,6 +1,8 @@
 use crate::{GameState, Rect, gfx, sprite_bank::ICONES};
 
-const UI_HUD_HEAD_RECT: Rect = Rect {
+// = seg001:1e6e ui_hud_head_rect. Also the SEE SPICE DENSITY verb's seed for
+// the spice-overlay open flourish (data_04720 = 0x1e6e, seg000:5400).
+pub(crate) const UI_HUD_HEAD_RECT: Rect = Rect {
     x0: 150,
     y0: 137,
     x1: 170,

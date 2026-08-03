@@ -94,10 +94,13 @@ pub(crate) const MAP_POPUP_TROOP_CONTACT: u16 = 0x18e9;
 /// screen the troop's icon is not in).
 pub(crate) const TROOP_CONTACT_POPUP_RECT: Rect = rect(5, 5, 232, 72);
 
-/// = seg001:2244 — the contact subtitle's layout descriptor: 153x63, its
-/// origin written per open. subtitle_setup_layout picks it for every line
-/// presented while the full-map view owns the screen (seg000:8cd8).
-pub(crate) const TROOP_CONTACT_SUBTITLE_SIZE: (i16, i16) = (153, 63);
+/// = seg001:2248 — the contact subtitle descriptor's width (the descriptor is
+/// x@+0, y@+2, w@+4, h@+6; 153x63). The origin and height live in GameState
+/// (map_contact_subtitle_pos / map_contact_subtitle_h) — the origin is written
+/// per open, and the move-order caption narrows the height around its draw.
+/// subtitle_setup_layout picks this descriptor for every line presented while
+/// the full-map view owns the screen (seg000:8cd8).
+pub(crate) const TROOP_CONTACT_SUBTITLE_W: i16 = 153;
 
 /// The GO THERE menu variant map_click_location_marker folds in.
 #[derive(Clone, Copy)]
@@ -255,8 +258,8 @@ impl GameState {
 
     // = seg000:53f1 menu_callback_choice_map_main_see_spice_density — the map
     // main menu's SEE SPICE DENSITY verb: a toggle. With the overlay up it
-    // leaves it; otherwise it raises it with the map main menu as the panel's
-    // menu (data_04720 = 0x1e6e).
+    // leaves it; otherwise it raises it, seeding the open flourish from the
+    // HUD head ornament (data_04720 = 0x1e6e = ui_hud_head_rect).
     pub(crate) fn menu_callback_choice_map_main_see_spice_density(
         &mut self,
         _text_id: u16,
@@ -270,8 +273,10 @@ impl GameState {
             self.map_leave_spice_density_overlay();
             return;
         }
-        // = seg000:5400 data_04720 = menu_map_main; fall into
+        // = seg000:5400 data_04720 = 0x1e6e (ui_hud_head_rect); fall into
         //   map_enter_spice_density_overlay.
+        let head = crate::ui_hud_head::UI_HUD_HEAD_RECT;
+        self.map_overlay_anim_src = Some((head.x0, head.y0));
         self.map_enter_spice_density_overlay();
     }
 
@@ -387,8 +392,14 @@ impl GameState {
         } else {
             self.map_popup_ptr = MAP_POPUP_SPICE_OVERLAY;
         }
-        // = seg000:553c..554a the pending menu (data_04720) folds in with
-        //   effect 6. The port's callers push their own menus.
+        // = seg000:553c..554a consume the staged flourish source (data_04720):
+        //   when a caller staged one, effect 6 (gfx::xor_rect_outline_anim)
+        //   grows an XOR outline from it to the panel rect on the visible
+        //   screen before the panel presents.
+        if let Some(src) = self.map_overlay_anim_src.take() {
+            let panel = self.map_overlay_panel_rect;
+            gfx::xor_rect_outline_anim(self, src, panel, false);
+        }
         // = seg000:554e..5558 the primary-slot case draws the overlay's own
         //   decorations (loc_062f2 + loc_0813e: the spice-field legend and
         //   the equipment row — unported); the secondary-slot case draws the
@@ -693,16 +704,19 @@ impl GameState {
     pub(crate) fn move_troop_show_instruction_caption(&mut self, id: u16) {
         // = seg000:80e0 call set_screen_as_active_framebuffer.
         self.set_screen_as_active_framebuffer();
-        // = seg000:80e3 call subtitle_draw_troop_popup_background — the text
-        //   box wipe; the port's popup subtitle path repaints the box inside
-        //   the bubble draw.
-        // = seg000:80e7..80fd the pen shifts right 0x26 (when x >= 0x32) and
-        //   the box narrows to 0x19 rows; the box height is a port const, so
-        //   only the pen shift is modelled.
-        let saved_pos = self.map_contact_subtitle_pos;
-        if saved_pos.0 >= 0x32 {
-            self.map_contact_subtitle_pos.0 += 0x26;
+        // = seg000:80e3 call subtitle_draw_troop_popup_background — wipe the
+        //   previous line's box (HUD element 18 still holds its rect) before
+        //   the descriptor edit below moves this one.
+        self.subtitle_draw_troop_popup_background();
+        // = seg000:80e7..80fd the descriptor edit (seg001:2244 = x@+0, y@+2,
+        //   w@+4, h@+6): the box drops 0x26 lower when it sits in the lower
+        //   screen half (y >= 0x32) and narrows to 0x19 rows.
+        let saved_y = self.map_contact_subtitle_pos.1;
+        let saved_h = self.map_contact_subtitle_h;
+        if saved_y >= 0x32 {
+            self.map_contact_subtitle_pos.1 += 0x26;
         }
+        self.map_contact_subtitle_h = 0x19;
         // = seg000:8102 call loc_09f82 — the subtitle font.
         self.font_state.color = 0x00f0;
         self.font_select_tall_font();
@@ -719,12 +733,16 @@ impl GameState {
                 .wrapping_add(self.voc_base(0x0e));
             self.play_dialogue_voc();
         }
-        // = seg000:811e..8126 restore the pen, back to fb1.
-        self.map_contact_subtitle_pos = saved_pos;
+        // = seg000:811e..8126 restore the descriptor, back to fb1.
+        self.map_contact_subtitle_pos.1 = saved_y;
+        self.map_contact_subtitle_h = saved_h;
         self.set_fb1_as_active_framebuffer();
-        // = seg000:8129..812f data_04720 = data_018f3 (the pending panel
-        //   menu; the port's callers push their own) and data_04722 = 0 (the
+        // = seg000:8129..812f data_04720 = data_018f3 (the contact head box
+        //   seeds the overlay-open effect-6 flourish: the XOR outline grows
+        //   from the portrait to the panel) and data_04722 = 0 (the
         //   spice-density mode).
+        self.map_overlay_anim_src =
+            Some((self.map_contact_head_rect.x0, self.map_contact_head_rect.y0));
         self.map_overlay_mode = 0;
         // = seg000:8134 call map_enter_spice_density_overlay_in_place — the
         //   overlay comes up at the panel origin the contact popup staged,
@@ -2514,86 +2532,16 @@ impl GameState {
         r
     }
 
-    // = segvga:38d8 xor_rect_outline_advance / segvga:39bb _reverse (effects
-    // al=6 / al=8) — the panel's XOR outline scale animation: a rectangle
-    // outline that grows from the source point (map_popup_anim_src, less 2) to
-    // the panel rect on open, or shrinks back to it on close. 15 frames, each
-    // drawing the outline, pacing one frame, then XOR-erasing it. The close
-    // repaints the map under the panel first (the caller), so the shrinking
-    // outline plays over the clean map.
+    // The popup's outline scale animation (effects al=6 / al=8,
+    // gfx::xor_rect_outline_anim): the popup callers stage the source point
+    // (the icon / marker position — the DOS record holds it less 10, hence
+    // the -10 here against the driver's +8) and the panel rect; the close
+    // paths replay it reversed. The close repaints the map under the panel
+    // first (the caller), so the shrinking outline plays over the clean map.
     fn animate_popup_outline(&mut self, reverse: bool) {
-        // The animation is a foreground timing effect; headless runs skip it.
-        if self.is_headless() {
-            return;
-        }
-        // = segvga:38d8/38e0 the start corner: the source point + 8 - 10 = -2.
         let (sx, sy) = self.map_popup_anim_src;
-        let start_x = sx - 2;
-        let start_y = sy - 2;
         let r = self.map_popup_anim_rect;
-        let pw = r.x1 - r.x0;
-        let ph = r.y1 - r.y0;
-        // = segvga:3920/3925 the size steps (panel extent / 16).
-        let wstep = pw >> 4;
-        let hstep = ph >> 4;
-        // = segvga:392a..395d the top-left steps: |panel - start| / 16, signed.
-        let dxstep = ((r.x0 - start_x).abs() >> 4) * (r.x0 - start_x).signum();
-        let dystep = ((r.y0 - start_y).abs() >> 4) * (r.y0 - start_y).signum();
-        // = segvga:3962/396c the advance starts at the source, size 0; the
-        //   reverse (segvga:39bb) starts at the panel rect, size = its extent,
-        //   with every step negated.
-        let (mut cx, mut cy, mut cw, mut ch, dx, dy, dw, dh) = if reverse {
-            (r.x0, r.y0, pw, ph, -dxstep, -dystep, -wstep, -hstep)
-        } else {
-            (start_x, start_y, 0, 0, dxstep, dystep, wstep, hstep)
-        };
-        // = segvga:397a..39b7 the 15-frame draw / pace / erase loop. DOS XORs
-        //   straight onto the visible screen, so the erase is seen at once; the
-        //   port presents after the draw, so publish once more after the final
-        //   erase to clear the last outline (otherwise it lingers — the open
-        //   path's panel fill re-presents over it, but the close leaves it).
-        for _ in 0..15 {
-            cx += dx;
-            cy += dy;
-            cw += dw;
-            ch += dh;
-            self.xor_rect_outline(cx, cy, cw, ch);
-            self.present_transition_frame();
-            self.xor_rect_outline(cx, cy, cw, ch);
-        }
-        if reverse {
-            self.send_frame_to_display();
-        }
-    }
-
-    // = segvga:3733 vga_xor_rect_outline_inner — XOR the four edges of the
-    // rect at (x, y) size (w, h) into the visible screen with colour 0x0f,
-    // clamped to the map area [4, 0x13c] x [4, 0x94]. XOR-drawing the same
-    // rect twice erases it.
-    fn xor_rect_outline(&mut self, x: i16, y: i16, w: i16, h: i16) {
-        let x0 = x.clamp(4, 0x13c);
-        let x1 = (x + w).clamp(4, 0x13c);
-        let y0 = y.clamp(4, 0x94);
-        let y1 = (y + h).clamp(4, 0x94);
-        if x1 < x0 || y1 < y0 {
-            return;
-        }
-        let yoff = self.y_offset;
-        let scr = &mut self.screen;
-        let mut toggle = |px: i16, py: i16| {
-            let px = px as u16;
-            let py = (py + yoff as i16) as u16;
-            scr.set(px, py, scr.get(px, py) ^ 0x0f);
-        };
-        // = segvga:3784/378f/379d/37a8 the top, right, bottom, left edges.
-        for px in x0..=x1 {
-            toggle(px, y0);
-            toggle(px, y1);
-        }
-        for py in y0 + 1..y1 {
-            toggle(x0, py);
-            toggle(x1, py);
-        }
+        gfx::xor_rect_outline_anim(self, (sx - 10, sy - 10), r, reverse);
     }
 
     // = segvga:36b0 xor_bracket_anim_setup — stage the bracket-zoom animation
@@ -2639,7 +2587,7 @@ impl GameState {
         for _ in 0..2 {
             let (mut x, mut y) = target;
             for _ in 0..8 {
-                self.xor_rect_outline(x, y, 0x14, 0x14);
+                gfx::vga_xor_rect_outline_inner(self, x, y, 0x14, 0x14);
                 self.present_transition_frame();
                 x += dx;
                 y += dy;
@@ -2697,7 +2645,7 @@ impl GameState {
             for _ in 0..8 {
                 x -= dx;
                 y -= dy;
-                self.xor_rect_outline(x, y, 0x14, 0x14);
+                gfx::vga_xor_rect_outline_inner(self, x, y, 0x14, 0x14);
                 self.present_transition_frame();
             }
         }
@@ -3318,6 +3266,7 @@ mod tests {
     use crate::{
         GameState, cmd,
         dat_file::DatFile,
+        gfx,
         menu_defs::{CMD_GREY, MenuRef},
     };
 
@@ -3610,13 +3559,13 @@ mod tests {
         // (the outline draws in y_offset space, like the panel fill).
         let probe = (60u16, 30 + game.y_offset);
         let before = game.screen.get(probe.0, probe.1);
-        game.xor_rect_outline(50, 30, 40, 30);
+        gfx::vga_xor_rect_outline_inner(&mut game, 50, 30, 40, 30);
         assert_ne!(
             game.screen.get(probe.0, probe.1),
             before,
             "the outline toggled the border pixel"
         );
-        game.xor_rect_outline(50, 30, 40, 30);
+        gfx::vga_xor_rect_outline_inner(&mut game, 50, 30, 40, 30);
         assert_eq!(
             game.screen.get(probe.0, probe.1),
             before,
@@ -3661,7 +3610,7 @@ mod tests {
             let cy = (sy - 2) + (panel.y0 - (sy - 2)) * t / 15;
             let cw = (panel.x1 - panel.x0) * t / 15;
             let ch = (panel.y1 - panel.y0) * t / 15;
-            game.xor_rect_outline(cx, cy, cw, ch);
+            gfx::vga_xor_rect_outline_inner(&mut game, cx, cy, cw, ch);
         }
         game.screen
             .write_png(&game.palette, "troop_map_screen_outline.png")

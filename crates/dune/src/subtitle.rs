@@ -67,8 +67,8 @@ impl GameState {
             // written per open by map_draw_troop_contact_popup.
             0x2244 => {
                 let (x, y) = self.map_contact_subtitle_pos;
-                let (w, h) = crate::troop_map_screen::TROOP_CONTACT_SUBTITLE_SIZE;
-                (x, y, w, h)
+                let w = crate::troop_map_screen::TROOP_CONTACT_SUBTITLE_W;
+                (x, y, w, self.map_contact_subtitle_h)
             }
             // = seg001:224c the free-form narration layout.
             0x224c => (0x10, 0, 0x120, 0x42),
@@ -678,7 +678,8 @@ impl GameState {
                 }
             }
             let (x, y) = self.map_contact_subtitle_pos;
-            let (w, h) = crate::troop_map_screen::TROOP_CONTACT_SUBTITLE_SIZE;
+            let w = crate::troop_map_screen::TROOP_CONTACT_SUBTITLE_W;
+            let h = self.map_contact_subtitle_h;
             let rect = Rect {
                 x0: x,
                 y0: y + yoff,
@@ -926,13 +927,17 @@ impl GameState {
             x1: rect.x1.min(320),
             ..rect
         };
-        // = seg000:8f7f cmp data_046eb,0; jnz loc_08fd1 — the troop-contact
-        //   popup's text box: no save-under and no balloon tile, just a fill
-        //   in the popup panel's own colour (seg001:18f2 = 0xfb) two pixels
-        //   above the box, so each line wipes the one before it. HUD element
-        //   18 also takes the ASK FOR MORE INFORMATION handler here, making
-        //   the text box itself clickable — the port has no clickable HUD
-        //   element model for the map view yet. TODO.
+        // = seg000:8f2c..8f7e store the bubble rect in HUD element 18 (the
+        //   DOS click/hit rect; subtitle_draw_troop_popup_background reads it
+        //   back as "the previous line's box" on its next call).
+        self.ui_elements[18].x0 = rect.x0 as u16;
+        self.ui_elements[18].y0 = rect.y0 as u16;
+        self.ui_elements[18].x1 = rect.x1 as u16;
+        self.ui_elements[18].y1 = rect.y1 as u16;
+        // = seg000:8f7f cmp data_046eb,0; jnz subtitle_draw_troop_popup_
+        //   background — the troop-contact popup's text box: no save-under
+        //   and no balloon tile, just the 0xfb fill over the box, so each
+        //   line wipes the one before it.
         if self.data_046eb != 0 {
             self.subtitle_bubble = Some(SubtitleBubble {
                 strip: false,
@@ -940,15 +945,7 @@ impl GameState {
                 rect,
                 saved_fb2: Vec::new(),
             });
-            gfx::vga_fill_rect(
-                self,
-                self.active_fb(),
-                rect.x0 as u16,
-                (rect.y0 - 2) as u16,
-                rect.x1 as u16,
-                rect.y1 as u16,
-                0xfb,
-            );
+            self.subtitle_draw_troop_popup_background();
             return false;
         }
         // = seg000:8f86 the book page: BOOK.HSQ sprite 3 (the ruled-page
@@ -1042,6 +1039,30 @@ impl GameState {
         self.blit_repeated_x(0x1c, rect);
         self.open_sprite_bank(saved_bank as i16);
         false
+    }
+
+    // = seg000:8fd1 subtitle_draw_troop_popup_background — the troop-contact
+    // popup text box background: no save-under and no balloon tile — arm HUD
+    // element 18 (flags 0x80; its click handler, ASK FOR MORE INFORMATION,
+    // has no map-view dispatch in the port yet — TODO) and fill its rect,
+    // two pixels higher, with the popup panel fill colour (seg001:18f2 =
+    // 0xfb). The element holds the rect draw_speech_bubble last stored, so
+    // the move-order caption's direct call (seg000:80e3) wipes the previous
+    // line's box wherever it sat — its own box moves before it draws.
+    pub(crate) fn subtitle_draw_troop_popup_background(&mut self) {
+        // = seg000:8fd5/8fda the flags + handler.
+        self.ui_elements[18].flags = 0x80;
+        // = seg000:8fdf..8fee the fill, from y0 - 2 (restored after).
+        let e = self.ui_elements[18];
+        gfx::vga_fill_rect(
+            self,
+            self.active_fb(),
+            e.x0,
+            e.y0.saturating_sub(2),
+            e.x1,
+            e.y1,
+            0xfb,
+        );
     }
 
     // = seg000:908c loc_0908c — after a head render dirties fb1 inside the

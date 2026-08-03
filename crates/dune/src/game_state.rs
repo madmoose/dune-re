@@ -1251,6 +1251,13 @@ pub struct GameState {
     pub(crate) map_overlay_panel_pos: (i16, i16),
     pub(crate) map_overlay_panel_rect: Rect,
 
+    // = seg001:4720 data_04720 — the overlay-open flourish source: callers
+    // stage a rect origin (DOS stores a record address — seg001:18f3 the
+    // contact head box, seg001:1e6e ui_hud_head_rect) and
+    // map_draw_spice_density_overlay consumes it (seg000:553c) as the start
+    // point of the effect-6 XOR-outline scale-in to the panel rect.
+    pub(crate) map_overlay_anim_src: Option<(i16, i16)>,
+
     // = seg001:4722 data_04722 — which layer the overlay renders: 0 = the
     // spice-density colours, nonzero = the alternate (ecology) table at
     // seg000:583f, which no ported caller selects.
@@ -1360,6 +1367,9 @@ pub struct GameState {
     // descriptor (seg001:2244, size 153x63), written per open by
     // map_draw_troop_contact_popup.
     pub(crate) map_contact_subtitle_pos: (i16, i16),
+    // = seg001:224a — the descriptor's live height word (63; the move-order
+    // caption narrows it to 0x19 around its draw, seg000:80fd).
+    pub(crate) map_contact_subtitle_h: i16,
     // = seg001:004c related_to_contacting_troops_ds_4c — 0xff while the
     // contacted troop answers from outside the visibility range, so the
     // dialogue record's conditions pick its "out of contact" lines; cleared
@@ -2126,6 +2136,7 @@ impl GameState {
             map2: Box::new([]),
             map_overlay_panel_pos: (0, 0),
             map_overlay_panel_rect: Rect::default(),
+            map_overlay_anim_src: None,
             map_overlay_mode: 0,
             globe_param_3: 0,
             globe_param_4: 0,
@@ -2201,6 +2212,7 @@ impl GameState {
             map_contact_popup_rect: crate::troop_map_screen::TROOP_CONTACT_POPUP_RECT,
             map_contact_head_rect: Rect::default(),
             map_contact_subtitle_pos: (0, 0),
+            map_contact_subtitle_h: 0x3f,
             contacting_troops_ds_4c: 0,
             nearest_location: NearestLocation::default(),
             nearest_village: NearestLocation::default(),

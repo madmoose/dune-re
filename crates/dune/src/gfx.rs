@@ -1576,6 +1576,118 @@ pub fn panel_anim_play_step(state: &mut GameState, frame: u16) {
     }
 }
 
+// = segvga:3733 vga_xor_rect_outline_inner — XOR (with 0x0f) a one-pixel
+// rect outline onto the visible screen. The corners come from (x, y) and
+// (x + w, y + h), each clamped into 4..=0x13c horizontally and 4..=0x94
+// vertically, then the cursor walks top row, right side, bottom row, left
+// side. The bottom row lands one row above the clamped bottom corner (the
+// DOS `sub cx,2` walk); a box under three rows tall draws top and bottom
+// on the same row, cancelling its own XOR — both kept as DOS has them.
+// Also the body of vga_xor_box_20 (segvga:372d), the fixed 20x20 wrapper
+// the bracket-zoom trail steps with.
+pub(crate) fn vga_xor_rect_outline_inner(state: &mut GameState, x: i16, y: i16, w: i16, h: i16) {
+    let yoff = state.y_offset as i16;
+    // = segvga:3733/3735 the far corner; segvga:3737..3771 the clamps.
+    let x0 = x.clamp(4, 0x13c);
+    let x1 = (x + w).clamp(4, 0x13c);
+    let y0 = y.clamp(4, 0x94);
+    let y1 = (y + h).clamp(4, 0x94);
+    // = segvga:3773..3778 the walk counts: width + 1 across, height - 2 down.
+    let w = x1 - x0 + 1;
+    let h = y1 - y0 - 2;
+    let screen = &mut state.screen;
+    let mut px = |x: i16, y: i16| {
+        let y = y + yoff;
+        let c = screen.get(x as u16, y as u16);
+        screen.set(x as u16, y as u16, c ^ 0x0f);
+    };
+    // = segvga:3784 the top row, left to right.
+    for i in 0..w {
+        px(x0 + i, y0);
+    }
+    // = segvga:378f the right side, then the step onto the bottom row.
+    let mut by = y0;
+    if h > 0 {
+        for j in 1..=h {
+            px(x1, y0 + j);
+        }
+        by = y0 + h + 1;
+    }
+    // = segvga:379d the bottom row, right to left.
+    for i in 0..w {
+        px(x1 - i, by);
+    }
+    // = segvga:37a8 the left side, bottom to top.
+    if h > 0 {
+        for j in 1..=h {
+            px(x0, by - j);
+        }
+    }
+}
+
+// = segvga:38d8 xor_rect_outline_advance / segvga:39bb xor_rect_outline_reverse
+// (vga_effect_dispatch al=6 / al=8, run via run_vga_effect seg000:c0e8) — the
+// panel outline scale animation: an XOR rect outline grows from the source
+// record's origin `src` + (8, 8) to the panel rect `dst`, or shrinks back on
+// the reverse (start at the panel corners, every step negated). 15 frames;
+// each advances the top-left by (dst corner - start) / 16 and the extent by
+// the dst extent / 16 (the sign restored around the shift, so the steps
+// truncate toward zero), XOR-draws the outline, paces one frame interval
+// (loc_segvga_02572), then XOR-draws again to erase it.
+pub fn xor_rect_outline_anim(state: &mut GameState, src: (i16, i16), dst: Rect, reverse: bool) {
+    // The animation is a foreground timing effect; headless runs skip it.
+    if state.is_headless() {
+        return;
+    }
+    // = segvga:38d8..38e4 the start point: the source origin + (8, 8).
+    let (sx, sy) = (src.0 + 8, src.1 + 8);
+    // = segvga:390c..3925 the per-frame extent steps.
+    let pw = dst.x1 - dst.x0;
+    let ph = dst.y1 - dst.y0;
+    // = segvga:392a..395d the per-frame top-left steps.
+    let toward = |from: i16, to: i16| {
+        let d = to - from;
+        if d < 0 { -((-d) >> 4) } else { d >> 4 }
+    };
+    let step_x = toward(sx, dst.x0);
+    let step_y = toward(sy, dst.y0);
+    // = segvga:3962..396e the advance starts at the bare source point, size
+    //   0; the reverse (segvga:39bb) at the stored panel corners, size = its
+    //   extent, with every step negated.
+    let (mut x, mut y, mut w, mut h, dx, dy, dw, dh) = if reverse {
+        (
+            dst.x0,
+            dst.y0,
+            pw,
+            ph,
+            -step_x,
+            -step_y,
+            -(pw >> 4),
+            -(ph >> 4),
+        )
+    } else {
+        (sx, sy, 0, 0, step_x, step_y, pw >> 4, ph >> 4)
+    };
+    // = segvga:3970 xor_rect_outline_animate — the 15-frame loop. DOS XORs
+    //   straight onto the visible screen, so the erase is seen at once; the
+    //   port presents after the draw and publishes once more after the final
+    //   erase on the reverse — the advance callers re-present the panel area
+    //   themselves right after (copy_rect_fb1_to_screen sends the frame).
+    for _ in 0..15 {
+        x += dx;
+        y += dy;
+        w += dw;
+        h += dh;
+        vga_xor_rect_outline_inner(state, x, y, w, h);
+        state.present_transition_frame();
+        // = segvga:39ae the second XOR pass erases the outline.
+        vga_xor_rect_outline_inner(state, x, y, w, h);
+    }
+    if reverse {
+        state.send_frame_to_display();
+    }
+}
+
 // = seg000:c4cd gfx_copy_whole_framebuf_to_screen. Plain memcpy from fb1
 // to the front buffer (`screen_buffer`) — does NOT apply `fb_base_ofs`
 // (matching the DOS `vga_copy_screen_2` behaviour). The y-offset is applied
