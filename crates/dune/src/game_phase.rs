@@ -121,9 +121,10 @@ impl GameState {
         // = seg000:1039 word [data_0121d] = 0xffff — truncate the
         //   _stru_206BB_icon_list at its sprite-5 record (the locked-door
         //   overlay icons). TODO: that icon list is not modelled.
-        // = seg000:103f ax = 0x1321; jmp start_scripted_dialogue. TODO: the
-        //   scripted-dialogue player (seg000:1771) is not ported.
-        println!("phase_callback_0c: start_scripted_dialogue(0x1321) unported");
+        // = seg000:103f ax = cutscene_game_phase_0c_dialogue; jmp
+        //   start_scripted_dialogue — the communication-room gather scene
+        //   (Leto and Jessica take turns; sequence.rs).
+        self.start_scripted_dialogue(&crate::sequence::SCRIPT_PHASE_0C);
     }
 
     // = seg000:1045 callback_game_phase_change_10 — Leto moves to palace room

@@ -30,7 +30,7 @@
 
 use crate::{
     DrawOptions, GameState, Rect, RoomRenderer, RoomSheet, SpriteSheet, blit, sal_position_markers,
-    sprite_bank,
+    sal_position_markers_from_list, sprite_bank,
 };
 
 // = SAL room sheets, resources 0xa1..0xa4 (calc_SAL_index result + 0xa1).
@@ -1087,14 +1087,27 @@ impl GameState {
         }
 
         // = sal_read_position_markers (seg000:3d83): resolve which person, if
-        // any, stands in each of the room's standing slots from the current
-        // persons_in_room set.
-        let markers = sal_position_markers(
-            room.position_marker_count(),
-            self.persons_in_room,
-            self.persons_travelling_with,
-            self.person_marker_base,
-        );
+        // any, stands in each of the room's standing slots. While a scripted
+        // scene is active and its last action-00 step recorded a cast
+        // placement list (seg000:3d95..3dae, data_04774/data_04778), the
+        // slots come verbatim from the script — that is how the phase-0xc
+        // gather scene stands Leto and Jessica in the communication room;
+        // otherwise they derive from the current persons_in_room set.
+        let override_list = if self.is_dialogue_active {
+            self.sequence_return_cursor
+                .and_then(|cur| self.sequence_script.and_then(|s| s.get(cur..)))
+        } else {
+            None
+        };
+        let markers = match override_list {
+            Some(list) => sal_position_markers_from_list(room.position_marker_count(), list),
+            None => sal_position_markers(
+                room.position_marker_count(),
+                self.persons_in_room,
+                self.persons_travelling_with,
+                self.person_marker_base,
+            ),
+        };
 
         // = sal_draw_character (seg000:3d2f) opens PERS.HSQ (RES_PERS_HSQ) only
         // when a person is actually present. open_spritesheet applies the

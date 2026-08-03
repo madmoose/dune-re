@@ -645,15 +645,22 @@ impl GameState {
         }
     }
 
-    // = seg000:91a0 setup_lip_sync_data_from_sprite_sheet (+ loc_009c7 rect
-    // setup). Open the portrait sheet for character `lip_sync_resource_id`,
-    // parse its lip-sync resource, save the backdrop into fb2, and render the
-    // first (idle) frame. `dx` shifts the head right (loc_009c7; intro heads
+    // = the head-raise call chain seg000:93b6..93cc that common_code_for_ui_
+    // dialogue_related_functions runs inline (and the other head-raise sites —
+    // the intro, the fly-over cabin — repeat): 93b6 setup_lip_sync_data_from_
+    // sprite_sheet (91a0, ported as open_talking_head_resource below), 93bc
+    // setup_lip_sync_data_from_current, 93bf loc_09908 (seed the idle
+    // animation and install the idle-animator frame task, loc_09945), 93cc
+    // loc_09bac (the first head render, whose seg000:9d18 prev-frame copy
+    // seeds the incremental redraw). The port bundles the chain into one call:
+    // open the portrait sheet for character `lip_sync_resource_id`, parse its
+    // lip-sync resource, save the backdrop into fb2, and render the first
+    // (idle) frame. `dx` shifts the head right (loc_009c7; intro heads
     // pass 0).
     pub fn setup_talking_head(&mut self, lip_sync_resource_id: u8, dx: i16) {
-        // = seg000:91a0 setup_lip_sync_data_from_sprite_sheet — open + parse
-        //   the portrait sheet. An unchanged head is left exactly as it is,
-        //   and so is everything below it.
+        // = seg000:93b6 call setup_lip_sync_data_from_sprite_sheet (91a0) —
+        //   open + parse the portrait sheet. An unchanged head is left exactly
+        //   as it is, and so is everything below it.
         if !self.open_talking_head_resource(lip_sync_resource_id, dx) {
             return;
         }
@@ -733,8 +740,19 @@ impl GameState {
         {
             return false;
         }
-        // TODO: = seg000:91c1/91c2 a CHANGED head should first run
-        // tear_down_prior_talking_head_overlay; the port rebuilds in place.
+        // = seg000:91c1/91c2 a CHANGED head first tears the prior overlay down:
+        // restore the game area under the old head from fb2, present it and
+        // stop the idle task, so the old speaker leaves the screen before the
+        // new head's backdrop save snapshots fb1 (switching companions mid-
+        // dialogue would otherwise bake the old head into fb2). DOS gates the
+        // teardown on a live overlay (data_047c8, armed by the room/flight
+        // head render alongside the idle task); the port's equivalent is the
+        // idle task itself — the map troop-contact popup loads its heads
+        // through here too and must not restore the room game area over the
+        // map view.
+        if self.has_frame_task(crate::TaskId::TalkingHeadIdle) {
+            self.tear_down_prior_talking_head_overlay();
+        }
         // = seg000:91ce..91da — patch the x0 of the three balloon descriptors
         // (seg001:2224/222c/2234) with this head's balloon x. DOS does it only
         // on a head change; the value is head-determined, so setting it every

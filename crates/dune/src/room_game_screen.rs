@@ -143,8 +143,8 @@ pub(crate) struct RoomPerson {
     pub(crate) handler: u16,
     /// = entry word +8 (RoomPerson.time_joined) — game_time when the person
     /// last joined the player (COME WITH ME, npc_refresh_travel_timestamp with
-    /// bx=0). loc_094f3 seeds for_condit_ds_16 from it while flags bit 0x40 is
-    /// set; that reader is not yet ported.
+    /// bx=0). loc_094f3 (seed_speaker_condit_fields) seeds for_condit_ds_16
+    /// from it while flags bit 0x40 is set.
     pub(crate) time_joined: u16,
     /// = entry word +0xa (RoomPerson.time_dismissed) — game_time when the
     /// person last stopped travelling (STAY HERE / npc_clear_travelling,
@@ -258,7 +258,7 @@ impl GameState {
             MenuRef::MenuNpcActions => &self.menu_npc_actions,
             MenuRef::MenuGoTowardsThisPlace => &self.menu_go_towards_this_place,
             MenuRef::MenuDestinationWarning => &self.menu_destination_warning,
-            MenuRef::MenuProspectorContinue => &self.menu_prospector_continue,
+            MenuRef::MenuContinueOrWhat => &self.menu_continue_or_what,
             MenuRef::MenuContinue => &self.menu_continue,
             MenuRef::MenuDynamic => &self.menu_dynamic,
             MenuRef::MenuCommsRoomMessagesViewed => &self.menu_comms_room_messages_viewed,
@@ -296,7 +296,7 @@ impl GameState {
             MenuRef::MenuNpcActions => &mut self.menu_npc_actions,
             MenuRef::MenuGoTowardsThisPlace => &mut self.menu_go_towards_this_place,
             MenuRef::MenuDestinationWarning => &mut self.menu_destination_warning,
-            MenuRef::MenuProspectorContinue => &mut self.menu_prospector_continue,
+            MenuRef::MenuContinueOrWhat => &mut self.menu_continue_or_what,
             MenuRef::MenuContinue => &mut self.menu_continue,
             MenuRef::MenuDynamic => &mut self.menu_dynamic,
             MenuRef::MenuCommsRoomMessagesViewed => &mut self.menu_comms_room_messages_viewed,
@@ -1644,10 +1644,18 @@ impl GameState {
             return false;
         }
 
+        // = seg000:d515/d51c a scripted scene is active: the hover logic
+        // yields to the blink task — cl = the blink byte, alternating 0 (the
+        // " Continue…" slot highlighted) and 0xff (no slot), so the verb
+        // blinks while the scene waits for a click. The game loop's idle
+        // branch re-runs this every frame; each toggle repaints the slot.
+        let new_slot = if self.is_dialogue_active {
+            if self.sequence_blink { 0xff } else { 0x00 }
+        }
         // = seg000:d523 get_active_screen_element; cmp bp,1f0eh; cmp
         // game_screen_mode_flags,0 — the person-hover branch runs only over the
         // room command menu in the normal room view.
-        let new_slot = if self.get_active_menu_ref() == MenuRef::CommandMenuBuf
+        else if self.get_active_menu_ref() == MenuRef::CommandMenuBuf
             && self.game_screen_mode_flags == 0
         {
             // = seg000:d545 call person_hit_test_at_cursor. On a hit, map the
@@ -2686,10 +2694,45 @@ impl GameState {
         self.in_transition = 0;
     }
 
-    // = seg000:35ad loc_035ad — post-render room-screen bookkeeping (clears
-    // data_0001a/047a7 and consumes data_047a6 when game_screen_mode_flags == 0).
-    // TODO: port; no-op stub.
-    pub(crate) fn finish_room_screen_setup(&mut self) {}
+    // = seg000:35ad loc_035ad — the post-present dispatch loc_02e52 opens with.
+    // In a travel mode it is the fly-over companion dispatch (loc_035e9); in the
+    // plain room mode (loc_035b4) it is the room-entry auto-dialogue scan: one
+    // standing person whose topic-4 condition matches speaks as the player
+    // enters. The conditions read pending_room_action, still 5 from the move
+    // commit (seg000:3fca), which is how the room-entry lines fire — Gurney's
+    // "Look! The stillsuits have been stored here!" and Jessica's "Wait! I can
+    // feel something..." in the palace equipment room among them.
+    pub(crate) fn finish_room_screen_setup(&mut self) {
+        // = seg000:35ad cmp game_screen_mode_flags,0; jnz loc_035e9 — the
+        //   travel branch: re-detect a passed location / the hostile-zone
+        //   warning and raise the fly-over cabin.
+        if self.game_screen_mode_flags != 0 {
+            self.travel_settle_companion_dispatch();
+            return;
+        }
+        // = seg000:35b4..35b9 clear the per-pass latches.
+        self.related_to_arguing_ds_1a = 0;
+        self.data_047a7 = 0;
+        // = seg000:35bc..35c2 consume the staged-redraw gate: the full
+        //   draw_room_game_screen entry (seg000:2dba) and the mirror return
+        //   (seg000:0ec1) arm data_047a6 so their presents skip the scan; the
+        //   scene-reload presents (a committed room move, a travel arrival)
+        //   leave it 0 and the scan runs.
+        let staged = self.data_047a6;
+        self.data_047a6 = 0;
+        if staged != 0 {
+            return;
+        }
+        // = seg000:35c4 inc — mark the scan pass live for the arguing logic.
+        self.related_to_arguing_ds_1a = 1;
+        // = seg000:35c8..35e0 dining hall (room 8) special: with spice-shipment
+        //   state pending (ds:c0 masked by data_01158) and Duncan present
+        //   (persons_in_room bit 3), loc_02566 runs the shipment-report scene
+        //   first. Not ported.
+        // = seg000:35e3/35e6 bp = room_person_present_auto_dialogue; jmp
+        //   scan_matching_room_person_entries — the room-entry scan.
+        self.scan_matching_room_person_entries(Self::npc_auto_dialogue);
+    }
 
     // = seg000:3723 loc_03723 — handle the pending dialogue / auto-action queued
     // in data_04735.
@@ -2702,7 +2745,7 @@ impl GameState {
     // modelled — during a travel that pauses travel_pump so the flight HNM does
     // not overdraw the head. The lip-sync data setup + head render (9799..97cb)
     // are the port's setup_talking_head at the call sites.
-    fn start_room_lip_sync(&mut self) {
+    pub(crate) fn start_room_lip_sync(&mut self) {
         // = seg000:978e call loc_04aca — data_011ca = 1.
         self.data_011ca = 1;
     }
@@ -3104,6 +3147,63 @@ mod tests {
         assert_ne!(
             game.location_and_room, 0x200a,
             "RIGHT should have moved out of the throne room"
+        );
+    }
+
+    // Entering a room runs the room-entry auto-dialogue scan (loc_035ad's
+    // mode == 0 branch, finish_room_screen_setup): a standing person whose
+    // topic-4 condition matches speaks as the player walks in. The conditions
+    // read pending_room_action == 5, the confirmed-leave code the move commit
+    // leaves armed (seg000:3fca). Verified here with the two palace
+    // equipment-room lines:
+    //   - Gurney (person 4), cond 0x11a: pending_room_action == 5 &&
+    //     data_00008 == 0x20 && current_room == 2 && game_phase > 3 ->
+    //     phrase 0x96b "Look! The stillsuits have been stored here!"
+    //   - Jessica (person 1), cond 0x54: game_phase == 6 && current_room == 2
+    //     && pending_room_action == 5 -> phrase 0x86a "Wait! I can feel
+    //     something..."
+    #[test]
+    #[ignore = "needs assets/DUNE.DAT"]
+    fn entering_equipment_room_pops_the_entry_lines() {
+        let dat_path = concat!(env!("CARGO_MANIFEST_DIR"), "/../../assets/DUNE.DAT");
+        let Ok(dat_file) = DatFile::open(dat_path) else {
+            eprintln!("skipping: {dat_path} not found");
+            return;
+        };
+        let (tx, _rx) = mpsc::sync_channel(256);
+        let mut game = GameState::new(dat_file, tx);
+        game.set_headless();
+        game.start(true); // palace throne room 0x200a, data_00008 == 0x20.
+
+        // After the stillsuits are acquired (game_phase > 3), with Gurney
+        // standing in the equipment room (0x2002):
+        game.game_phase = 4;
+        game.room_persons[4].location_and_room = 0x2002;
+        game.room_persons[4].location_appearance = game.location_appearance;
+
+        // Move in the way ui_click_move_room commits it: the confirmed-leave
+        // code 5, then the room-move commit whose scene-reload present runs
+        // the entry scan.
+        game.pending_room_action = 5;
+        game.commit_room_move(0x2002, game.location_appearance);
+
+        assert_eq!(
+            game.current_subtitle_id, 0x96b,
+            "Gurney: Look! The stillsuits have been stored here!"
+        );
+        assert!(game.talking_head.is_some(), "Gurney's popup head is up");
+
+        // With Jessica also present at game_phase 6, she scans first (table
+        // slot 1) and the first-speaker latch keeps Gurney quiet.
+        game.game_phase = 6;
+        game.room_persons[1].location_and_room = 0x2002;
+        game.room_persons[1].location_appearance = game.location_appearance;
+        game.pending_room_action = 5;
+        game.commit_room_move(0x2002, game.location_appearance);
+
+        assert_eq!(
+            game.current_subtitle_id, 0x86a,
+            "Jessica: Wait! I can feel something..."
         );
     }
 

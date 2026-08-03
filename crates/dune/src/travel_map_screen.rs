@@ -1927,7 +1927,7 @@ impl GameState {
     // companion is aboard, it raises the fly-over cabin — ORNYCAB drawn over
     // the game area plus the companion as a talking head. The mode == 0
     // room-auto-dialogue branch (loc_035b4) is unrelated to travel.
-    fn travel_settle_companion_dispatch(&mut self) {
+    pub(crate) fn travel_settle_companion_dispatch(&mut self) {
         // = seg000:35e9..35f1 reset the per-frame staging flags.
         self.data_047a7 = 0;
         self.pending_room_action = 0;

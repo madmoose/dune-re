@@ -18,6 +18,13 @@
 
 use crate::{GameState, TaskId, menu_defs::MenuRef};
 
+// The script opcodes, as the byte offsets the DOS dispatcher consumes
+// (action index = byte / 2), named after their action callbacks.
+const SCRIPT_SET_ROOM: u8 = 0x00; // action 0: [room, count, markers...]
+const SCRIPT_SPEAKER_LINE: u8 = 0x02; // action 1: [speaker]
+const SCRIPT_REDRAW: u8 = 0x04; // action 2
+const SCRIPT_SET_SPEAKER: u8 = 0x06; // action 3: [speaker], head only
+const SCRIPT_WAIT: u8 = 0x08; // action 4: wait for the Continue click
 const SCRIPT_SHOW_SPICE_MAP: u8 = 0x0e; // action 7
 const SCRIPT_HIDE_SPICE_MAP: u8 = 0x10; // action 8
 const SCRIPT_END: u8 = 0xff; // end of script
@@ -28,6 +35,36 @@ static SCRIPT_PROSPECTOR_INTRO: [u8; 3] = [
     SCRIPT_SHOW_SPICE_MAP,
     SCRIPT_HIDE_SPICE_MAP,
     SCRIPT_END
+];
+
+// = seg000:1321 cutscene_game_phase_0c_dialogue — the communication-room
+// gather scene phase_callback_0c starts (Jessica's "It looks like a
+// communication room..." event 0x0c advanced the phase). Opcode bytes are
+// action-table byte-offsets (action = byte/2); the odd bytes are the inline
+// arguments. Action 00's argument is [room, count, markers...] — the
+// count+marker bytes are the shot's cast placement list, copied verbatim into
+// the room's standing slots by sal_read_position_markers while the scene is
+// active (0xff = empty slot, else the person id standing there); the count
+// byte doubles as the cursor skip past the list.
+#[rustfmt::skip]
+pub(crate) static SCRIPT_PHASE_0C: [u8; 46] = [
+    SCRIPT_SET_ROOM, 8, 9,                   // show room 8, cast:
+    0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0x00, 0x01, //   slots 7/8 = Leto, Jessica
+    SCRIPT_WAIT,                             // wait for the Continue click
+    SCRIPT_SPEAKER_LINE, 0,                  // Leto: "A communication room! [...]"
+    SCRIPT_SPEAKER_LINE, 1,                  // Jessica: "Thank you, Leto, but let me tell you [...]"
+    SCRIPT_SET_ROOM, 8, 5,                   // re-show room 8, cast:
+    0x00, 0x01, 0x03, 0xff, 0x04,            //   Leto, Jessica, Duncan, -, Gurney
+    SCRIPT_WAIT,                             // wait
+    SCRIPT_SPEAKER_LINE, 0,                  // Leto: "As we are almost all gathered here, [...]"
+    SCRIPT_SPEAKER_LINE, 0,                  // Leto: "He has visited 6 sitchs [...]"
+    SCRIPT_SPEAKER_LINE, 1,                  // Jessica: "I'm pleased to notice that [...]"
+    SCRIPT_SET_ROOM, 8, 5,                   // re-show room 8, cast:
+    0xff, 0x01, 0x03, 0xff, 0x04,            //   -, Jessica, Duncan, -, Gurney
+    SCRIPT_SET_SPEAKER, 0,                   // speaker = Leto, no line
+    SCRIPT_WAIT,                             // wait
+    SCRIPT_SPEAKER_LINE, 0,                  // Leto
+    SCRIPT_END,
 ];
 
 // = seg000:134f cutscene_game_phase_14_dialogue.
@@ -100,9 +137,10 @@ impl GameState {
     }
 
     // = seg000:176b frame_task_callback_blink — the scripted scene's blink
-    // toggle (data_23c25), flipped every 0x64 PIT ticks. Its only reader is
-    // the unported dialogue-panel renderer, so the toggle is kept and nothing
-    // else happens.
+    // toggle (_byte_23C25_blink), flipped every 0x64 PIT ticks. Its reader is
+    // highlight_hovered_text_action_item (seg000:d515/d51c): while the scene
+    // is active, the game loop's idle-frame highlight pass uses the toggle as
+    // the slot selector, blinking the " Continue…" verb highlighted/plain.
     pub(crate) fn tick_sequence_blink(&mut self) {
         self.sequence_blink = !self.sequence_blink;
     }
@@ -127,7 +165,7 @@ impl GameState {
     // troop_in_spice — menu_ptr_02220 =
     // menu_prospector_troop_after_specializing_in_spice (seg001:1fae).
     fn change_menu_to_prospector_menu(&mut self) {
-        self.sequence_menu = MenuRef::MenuProspectorContinue;
+        self.sequence_menu = MenuRef::MenuContinueOrWhat;
     }
 
     // = seg000:1707 menu_callback_choice_continue_for_sequence — the
@@ -140,7 +178,7 @@ impl GameState {
         _index: usize,
     ) {
         // = seg000:1707/170d cmp [menu_ptr_02220],1faeh; jnz continue.
-        if self.sequence_menu == MenuRef::MenuProspectorContinue {
+        if self.sequence_menu == MenuRef::MenuContinueOrWhat {
             // = seg000:170f..1715 di = ui_hud_elements[8]; rect_contains.
             let e = self.ui_elements[8];
             let (x, y) = (self.mouse_pos_x, self.mouse_pos_y);
@@ -179,21 +217,159 @@ impl GameState {
         self.sequence_cursor += 1;
         // = seg000:172d..1731 xor ah,ah; mov bx,ax; jmp [table + bx].
         match byte {
+            // = seg000:13c8 callback_action_in_continue_sequence_00.
+            SCRIPT_SET_ROOM => self.sequence_action_00_set_room(),
+            // = seg000:13e4 callback_action_in_continue_sequence_01.
+            SCRIPT_SPEAKER_LINE => self.sequence_action_01_speaker_line(),
+            // = seg000:13db callback_action_in_continue_sequence_02.
+            SCRIPT_REDRAW => self.sequence_action_02_redraw_and_step(),
+            // = seg000:140b callback_action_in_continue_sequence_03.
+            SCRIPT_SET_SPEAKER => self.sequence_action_03_set_speaker(),
+            // = seg000:1474 callback_action_in_continue_sequence_04: ret —
+            //   pause the scene until the next " Continue…" click.
+            SCRIPT_WAIT => {}
             // = seg000:13a0 callback_action_in_continue_sequence_07.
             SCRIPT_SHOW_SPICE_MAP => self.sequence_action_07_show_spice_map(),
             // = seg000:13aa callback_action_in_continue_sequence_08.
             SCRIPT_HIDE_SPICE_MAP => self.sequence_action_08_hide_spice_map(),
             other => {
-                // The cutscene-script actions (the phase 0x14/0x18/0x30
-                // scripts): scene swaps, room re-renders, the time skip and
-                // the Chani kiss (seg000:13c8/13db/13e4/140b/1422/1442/148d/
-                // 14c9/167c). Their scripts are only reached from the
-                // unported phase callbacks. TODO.
+                // The remaining cutscene-script actions: the time skip
+                // (seg000:1422, byte 0x0a), the Chani kiss (1442, 0x0c) and
+                // the Baron-scene steps (148d/14c9/167c, 0x12/0x14/0x16).
+                // Their scripts are only reached from the unported phase
+                // callbacks. TODO.
                 println!("continue-sequence: unported action {other} (byte {byte:#04x})");
                 self.change_menu_to_continue_menu();
                 self.sequence_push_continue_menu();
             }
         }
+    }
+
+    // = seg000:13c8 callback_action_in_continue_sequence_00 — [room, count,
+    // markers...] args: show `room` (location_and_room's low byte; the
+    // scene-end restore puts the snapshotted room back) and point
+    // sequence_return_cursor (DOS data_04778) at the count byte of the shot's
+    // cast placement list — sal_read_position_markers copies it verbatim into
+    // the room's standing slots while the scene is active, which is how the
+    // gather shot stands Leto and Jessica in the communication room. The
+    // count byte doubles as the cursor skip past the list; falls into
+    // action 02 (redraw + step).
+    fn sequence_action_00_set_room(&mut self) {
+        let Some(script) = self.sequence_script else {
+            return;
+        };
+        // = seg000:13c8/13ca cs:lodsb; location_and_room low byte = al.
+        let Some(&room) = script.get(self.sequence_cursor) else {
+            return;
+        };
+        self.sequence_cursor += 1;
+        self.location_and_room = (self.location_and_room & 0xff00) | room as u16;
+        // = seg000:13cd data_04778 = si.
+        self.sequence_return_cursor = Some(self.sequence_cursor);
+        // = seg000:13d1..13d7 lodsb; si += al — the forward jump.
+        let Some(&skip) = script.get(self.sequence_cursor) else {
+            return;
+        };
+        self.sequence_cursor += 1 + skip as usize;
+        // = seg000:13d7 falls through into action 02.
+        self.sequence_action_02_redraw_and_step();
+    }
+
+    // = seg000:13db callback_action_in_continue_sequence_02 — repaint the room
+    // screen (the scene's current room) and immediately step the next script
+    // byte.
+    fn sequence_action_02_redraw_and_step(&mut self) {
+        // = seg000:13db call change_menu_to_continue_menu.
+        self.change_menu_to_continue_menu();
+        // = seg000:13de call draw_room_game_screen. PORT DEVIATION: when the
+        // next script byte is action 03 (the silent head), the shot's redraw
+        // renders offscreen and only action 03's present shows it, head
+        // included. DOS presents both — the 2e4c fb1->VRAM copy and 97cb's
+        // head present land back to back within the same click, under one
+        // VGA refresh, so the head-less room is never visible there; the
+        // port's per-present display frames would flash it (Leto blinking
+        // off and on across the gather scene's third shot).
+        let next_is_silent_head = self
+            .sequence_script
+            .and_then(|s| s.get(self.sequence_cursor))
+            == Some(&SCRIPT_SET_SPEAKER);
+        if next_is_silent_head {
+            self.gfx_call_bp_with_front_buffer_as_screen(|s| s.draw_room_game_screen());
+        } else {
+            self.draw_room_game_screen();
+        }
+        // = seg000:13e1 jmp menu_callback_choice_continue_for_sequence.
+        self.menu_callback_choice_continue_for_sequence(0, 0);
+    }
+
+    // = seg000:13e4 callback_action_in_continue_sequence_01 — present the arg
+    // speaker's next unspoken topic-7 line. The presentation's fire tail plays
+    // the voice and — with the scene active — re-pushes the " Continue…" panel
+    // (seg000:a0bd -> loc_02ebf), so the next click steps the script.
+    fn sequence_action_01_speaker_line(&mut self) {
+        // = seg000:13e4 the prospector-style panel: a click on the head
+        //   replays the line instead of stepping.
+        self.change_menu_to_prospector_menu();
+        // = seg000:13e8 call subtitle_restore_prior — the prior line's text
+        //   comes down.
+        self.subtitle_restore_prior();
+        // = seg000:13ec/13ee the speaker arg.
+        let Some(script) = self.sequence_script else {
+            return;
+        };
+        let Some(&speaker) = script.get(self.sequence_cursor) else {
+            return;
+        };
+        self.sequence_cursor += 1;
+        // = seg000:13f4..1404 a speaker change with the dialogue-zoom flag up
+        //   (room_render_flags bit 7) re-renders the room offscreen so the new
+        //   head composites over a fresh scene.
+        if speaker as u16 != self.current_lip_sync_resource_id && self.room_render_flags & 0x80 != 0
+        {
+            self.gfx_call_bp_with_front_buffer_as_screen(|s| s.draw_room_game_screen());
+        }
+        // = seg000:1408 jmp loc_09761.
+        self.sequence_present_topic7_line(speaker as u16);
+    }
+
+    // = seg000:140b callback_action_in_continue_sequence_03 — show the arg
+    // speaker silently: raise their talking head over the current shot with
+    // no line and no voice (the gather scene puts Leto on screen this way
+    // before his next line), then step the next script byte immediately.
+    fn sequence_action_03_set_speaker(&mut self) {
+        // = seg000:140b call change_menu_to_continue_menu.
+        self.change_menu_to_continue_menu();
+        // = seg000:140e/1410 the speaker arg.
+        let Some(script) = self.sequence_script else {
+            return;
+        };
+        let Some(&speaker) = script.get(self.sequence_cursor) else {
+            return;
+        };
+        self.sequence_cursor += 1;
+        // = seg000:1416 current_lip_sync_resource_id = the new speaker.
+        self.current_lip_sync_resource_id = speaker as u16;
+        // = seg000:1419 call start_room_lip_sync — the full seg000:978e body,
+        //   not just its data_011ca step: open the speaker's portrait (the
+        //   changed-head teardown swaps a prior head out first), render the
+        //   head over the current shot and present it. This is the shot that
+        //   SHOWS the speaker: the following stop only retires the lip-sync
+        //   and idle animator, leaving the head image on screen, so the
+        //   speaker sits there silently until their next line.
+        self.start_room_lip_sync();
+        // = seg000:9799/979c setup_lip_sync_data_from_sprite_sheet +
+        //   loc_09908 — the port's setup_talking_head bundle.
+        self.setup_talking_head(speaker, 0);
+        // = seg000:979f..97a9 the balloon fb2 stamp — no bubble is up here
+        //   (the prior action-00 redraw took it down), so nothing to stamp.
+        // = seg000:97c8/97cb update_screen_palette; jmp present_game_area.
+        self.update_screen_palette();
+        self.present_game_area();
+        // = seg000:141c the lip-sync and idle animator go down; the head
+        //   image stays presented.
+        self.stop_lip_sync_and_remove_idle_head_task();
+        // = seg000:141f jmp menu_callback_choice_continue_for_sequence.
+        self.menu_callback_choice_continue_for_sequence(0, 0);
     }
 
     // = seg000:13a0 callback_action_in_continue_sequence_07 — set the

@@ -3821,7 +3821,7 @@ mod tests {
         assert!(game.is_dialogue_active, "the scene owns the screen");
         assert_eq!(
             game.get_active_menu_ref(),
-            MenuRef::MenuProspectorContinue,
+            MenuRef::MenuContinueOrWhat,
             "the prospector Continue panel is up"
         );
         assert_eq!(game.data_046eb & 0x40, 0, "no overlay yet");

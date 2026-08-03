@@ -17,7 +17,7 @@ pub(crate) enum MenuRef {
     MenuNpcActions,
     MenuGoTowardsThisPlace,
     MenuDestinationWarning,
-    MenuProspectorContinue,
+    MenuContinueOrWhat,
     MenuContinue,
     MenuDynamic,
     MenuCommsRoomMessagesViewed,
@@ -145,9 +145,9 @@ pub(crate) const MENU_DESTINATION_WARNING: MenuDef = menu(0xf8, &[
     item(cmd::WHAT,               0x9ed5, GameState::menu_callback_choice_what),
 ]);
 
-/// = seg001:1fae menu_prospector_troop_after_specializing_in_spice
+/// = seg001:1fae menu_continue_or_what
 #[rustfmt::skip]
-pub(crate) const MENU_PROSPECTOR_CONTINUE: MenuDef = menu(0xfc, &[
+pub(crate) const MENU_CONTINUE_OR_WHAT: MenuDef = menu(0xfc, &[
     item(cmd::CONTINUE, 0x1707, GameState::menu_callback_choice_continue_for_sequence),
     item(cmd::WHAT,     0x9ed5, GameState::menu_callback_choice_what),
 ]);

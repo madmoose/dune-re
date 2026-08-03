@@ -394,6 +394,24 @@ impl Default for RoomRenderer {
     }
 }
 
+// = the seg000:3d9c override branch of sal_read_position_markers: while a
+// scripted scene is active (data_04774 != 0) and an action-00 step recorded a
+// cast placement list (data_04778 != 0), the marker array is copied verbatim
+// from the script — `list` starts at the count byte, followed by that many
+// slot bytes (0xff = empty, else the person id standing at that SAL marker
+// slot). Slots past the room's own marker count don't exist in the SAL data,
+// so the copy is clipped to `count`.
+pub fn sal_position_markers_from_list(count: u8, list: &[u8]) -> Vec<i8> {
+    let mut markers = vec![-1i8; count as usize];
+    // = seg000:3da6/3da8 cs:lodsb; cl = the list's count byte.
+    let n = list.first().copied().unwrap_or(0) as usize;
+    // = seg000:3daa rep cs:movsb — the placement bytes.
+    for (slot, &id) in list.iter().skip(1).take(n.min(count as usize)).enumerate() {
+        markers[slot] = id as i8;
+    }
+    markers
+}
+
 // = seg000:3d83 sal_read_position_markers + seg000:3df4
 // sal_assign_position_marker. Build the room's standing-position marker array:
 // `count` slots, each 0xff (empty) unless a person is assigned. For each set

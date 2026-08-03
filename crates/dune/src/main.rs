@@ -98,7 +98,9 @@ use crate::{
     point::Point,
     recorder::{RecordFormat, Recorder, RecorderTee},
     rect::Rect,
-    room_renderer::{DrawOptions, RoomRenderer, RoomSheet, sal_position_markers},
+    room_renderer::{
+        DrawOptions, RoomRenderer, RoomSheet, sal_position_markers, sal_position_markers_from_list,
+    },
     sprite_blitter::{draw_sprite, draw_sprite_from_sheet, sprite_blitter},
     sprite_sheet::SpriteSheet,
     talking_head::TalkingHead,

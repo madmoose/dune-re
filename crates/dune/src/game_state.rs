@@ -515,6 +515,15 @@ pub struct GameState {
     // that displays them is unported.
     pub(crate) comm_sightings: Vec<u16>,
 
+    // = seg001:0016/0018 for_condit_ds_16 / for_condit_ds_18 — the
+    // per-presented-line speaker seeds (loc_094f3, seg000:94f3): ds:16 =
+    // game_time minus the speaker's room-person travel timestamp, ds:18 = the
+    // speaker's room-person flags byte. Conditions test ds:18 bit 0x40
+    // (travelling with Paul — Jessica's "I feel nothing particular in this
+    // room" palace-search lines) and bit 0x04 (left in the desert).
+    pub(crate) for_condit_ds_16: u16,
+    pub(crate) for_condit_ds_18: u8,
+
     // = seg001:00cf days_left_until_spice_shipment — the CONDIT day counter
     // actions_time_in_day_3 maintains while a demand date is ahead.
     pub(crate) days_left_until_spice_shipment: u8,
@@ -896,8 +905,8 @@ pub struct GameState {
     // hostile-zone warning menu.
     pub(crate) menu_destination_warning: menu_defs::Menu,
 
-    // = seg001:1fae menu_prospector_troop_after_specializing_in_spice.
-    pub(crate) menu_prospector_continue: menu_defs::Menu,
+    // = seg001:1fae menu_continue_or_what.
+    pub(crate) menu_continue_or_what: menu_defs::Menu,
 
     // = seg001:1fba menu_multiple_provide_continue_option.
     pub(crate) menu_continue: menu_defs::Menu,
@@ -1609,6 +1618,11 @@ pub struct GameState {
     // value aborts the move (test_dialogue_interrupt_gate).
     pub(crate) dialogue_interrupt_gate: u8,
 
+    // = seg001:001a related_to_arguing_ds_1a — cleared per finish_room_screen_
+    // setup pass and set to 1 while its room-entry scan is live; the arguing
+    // logic around seg000:2241..24fe (unported) reads and steps it.
+    pub(crate) related_to_arguing_ds_1a: u8,
+
     // = seg001:47a6 data_047a6 — armed (0xff) at the top of draw_room_game_screen
     // and consumed by finish_room_screen_setup (loc_035ad).
     pub(crate) data_047a6: u8,
@@ -2111,6 +2125,8 @@ impl GameState {
             person_marker_base: 0,
             data_000c6: 0,
             days_left_until_spice_shipment: 0,
+            for_condit_ds_16: 0,
+            for_condit_ds_18: 0,
             contact_distance_related_ds_d5: 0,
             number_of_sietches_visited: 0,
             number_of_rallied_troops: 0,
@@ -2251,7 +2267,7 @@ impl GameState {
             menu_npc_actions: menu_defs::MENU_NPC_ACTIONS.into(),
             menu_go_towards_this_place: menu_defs::MENU_GO_TOWARDS_THIS_PLACE.into(),
             menu_destination_warning: menu_defs::MENU_DESTINATION_WARNING.into(),
-            menu_prospector_continue: menu_defs::MENU_PROSPECTOR_CONTINUE.into(),
+            menu_continue_or_what: menu_defs::MENU_CONTINUE_OR_WHAT.into(),
             menu_continue: menu_defs::MENU_CONTINUE.into(),
             menu_dynamic: menu_defs::MENU_DYNAMIC.into(),
             menu_comms_room_messages_viewed: menu_defs::MENU_COMMS_ROOM_MESSAGES_VIEWED.into(),
@@ -2284,7 +2300,7 @@ impl GameState {
 
             // = seg001:2220 dw menu_prospector_troop_after_specializing_in_
             //   spice — the static initial value.
-            sequence_menu: MenuRef::MenuProspectorContinue,
+            sequence_menu: MenuRef::MenuContinueOrWhat,
             sequence_script: None,
             sequence_cursor: 0,
             sequence_return_cursor: None,
@@ -2365,6 +2381,7 @@ impl GameState {
             is_dialogue_active: false,
             room_render_flags: 0,
             dialogue_interrupt_gate: 0,
+            related_to_arguing_ds_1a: 0,
             data_047a6: 0,
             data_047a7: 0,
             data_047aa: 0,
@@ -3050,6 +3067,10 @@ impl GameState {
     // = seg000:da5f remove_frame_task — remove by id.
     pub(crate) fn remove_frame_task(&mut self, id: TaskId) {
         self.frame_tasks.retain(|t| t.task_id != id);
+    }
+
+    pub(crate) fn has_frame_task(&self, id: TaskId) -> bool {
+        self.frame_tasks.iter().any(|t| t.task_id == id)
     }
 
     // = seg000:3a7c add_room_frame_task — (re)install the in-room frame task

@@ -20,6 +20,8 @@ fn condit_var_name(addr: u16) -> Option<(&'static str, bool)> {
         0x10 => ("persons_travelling_with", true),
         0x12 => ("persons_in_room", true),
         0x14 => ("persons_talking_to", true),
+        0x16 => ("for_condit_ds_16.speaker_travel_time", true),
+        0x18 => ("for_condit_ds_18.speaker_flags", false),
         0x19 => ("line_spoken_this_conversation", false),
         0x1b => ("stay_here_come_with_me_count", false),
         0x23 => ("pending_room_action", false),
@@ -125,6 +127,10 @@ impl GameState {
             0x0c => self.pending_destination_room,
             // = seg001:000d previous_room.
             0x0d => self.previous_room,
+            // = seg001:0018 for_condit_ds_18 — the speaker's room-person flags
+            // byte, seeded per presented line (loc_094f3): bit 0x40 =
+            // travelling with Paul, bit 0x04 = left in the desert.
+            0x18 => self.for_condit_ds_18,
             // = seg001:0019 line_spoken_this_conversation — 0 = no line spoken
             // yet, 0xff once any line is presented. A fallback dialogue line's
             // condition tests it == 0, so the fallback presents only when no
@@ -256,6 +262,9 @@ impl GameState {
             0x10 => self.persons_travelling_with,
             0x12 => self.persons_in_room,
             0x14 => self.persons_talking_to,
+            // = seg001:0016 for_condit_ds_16 — game_time since the speaker's
+            // travel timestamp, seeded per presented line (loc_094f3).
+            0x16 => self.for_condit_ds_16,
             // = seg001:002c..004a the staged troop block words.
             0x2c => self.troop_condit.offset_of_location,
             0x32 => self.troop_condit.bitfield_10,

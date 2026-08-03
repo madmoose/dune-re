@@ -388,11 +388,6 @@ impl GameState {
             ofs = container::entry_offset(&self.dialogue, self.dialogue_topic_index);
         }
 
-        println!(
-            "\n\nmenu_callback_choice_talk_to_me: starting at ofs {ofs:#06x} (cursor {:#04x})",
-            self.dialogue_topic_index
-        );
-
         // The person-0xd restart (loc_094cc) re-enters the topic walk with the
         // auto mask; if nothing matches then either, DOS would loop forever, so
         // the port latches the restart to one attempt.
@@ -405,10 +400,6 @@ impl GameState {
                 self.head_sign_lower();
                 // = seg000:94a2 call present_first_matching_dialogue_line.
                 let (next, presented) = self.present_first_matching_dialogue_line(ofs as usize);
-
-                println!(
-                    "menu_callback_choice_talk_to_me: present_first_matching_dialogue_line({ofs:#06x}) -> next {next:#06x}, presented {presented}",
-                );
 
                 // = seg000:94a5 dialogue_resume_entry_ptr = si — the next TALK TO
                 //   ME continues from the entry after the presented one.
@@ -918,11 +909,9 @@ impl GameState {
         // = seg000:9f9e mov [dialogue_current_record_ptr], si — the phrase-bank
         //   selector load_PHRASExx_HSQ (seg000:d00f) consults.
         self.dialogue_current_record_ptr = start as u16;
-        // = seg000:9fa2 call loc_094f3 — seed for_condit_ds_16 with game_time
-        //   minus the speaker's room-person timestamp (entry word +8 or +0xa) and
-        //   run the illness-location menu-origin hook. The room-person runtime
-        //   timestamps are not modelled, so time-gated conditions read ds:0x16
-        //   as 0. TODO when the room-person runtime fields land.
+        // = seg000:9fa2 call loc_094f3 — seed the per-line speaker condit
+        //   fields (ds:16/ds:18) and stage the illness-location placeholders.
+        self.seed_speaker_condit_fields();
         // = seg000:9fa5 data_047bc = 0xa6b0 — reset the subtitle string-buffer
         //   write cursor; condition evaluation can leave override text there
         //   (the seg000:a005..a02c draw_subtitle_body path). Text engine
@@ -990,6 +979,46 @@ impl GameState {
         (next, true)
     }
 
+    // = seg000:94f3 loc_094f3 — the per-presented-line speaker seeds, run at
+    // the head of present_first_matching_dialogue_line (seg000:9fa2). For a
+    // real speaker (id < 0x10): ds:18 = the speaker's room-person flags byte,
+    // so conditions can test the travelling bit 0x40 (Jessica's "I feel
+    // nothing particular in this room" palace-search lines) and the
+    // left-in-desert bit 0x04; ds:16 = game_time minus the entry's travel
+    // timestamp (time_joined while travelling, else time_dismissed). Then,
+    // before the endgame and for speakers < 9, stage the latest illness
+    // location's name placeholders.
+    fn seed_speaker_condit_fields(&mut self) {
+        // = seg000:94f3 cmp current_lip_sync_resource_id,10h; jnb ret.
+        let id = self.current_lip_sync_resource_id;
+        if id >= 0x10 {
+            return;
+        }
+        // = seg000:94fb si = [data_047a2] — the speaker's room_persons entry.
+        let entry = self.room_persons[id as usize];
+        // = seg000:94ff/9502 ds:18 = the entry's flags byte (+0xf).
+        self.for_condit_ds_18 = entry.flags;
+        // = seg000:9505..9515 ds:16 = game_time - (+8 time_joined while
+        //   travelling, else +0xa time_dismissed).
+        let stamp = if entry.flags & 0x40 != 0 {
+            entry.time_joined
+        } else {
+            entry.time_dismissed
+        };
+        self.for_condit_ds_16 = self.game_time.wrapping_sub(stamp);
+        // = seg000:9519..952f before phase 0x64 and for speakers < 9, the
+        //   latest illness location's name fills the 0x81/0x82 placeholders
+        //   ("There is a strange disease here in ....").
+        if self.game_phase >= 0x64 || id >= 9 {
+            return;
+        }
+        if self.latest_location_with_illness == 0 {
+            return;
+        }
+        let li = crate::locations::location_index_from_ptr(self.latest_location_with_illness);
+        self.stage_location_name_placeholders(li);
+    }
+
     // = seg000:a0f1 adjust_subtitle_mode_for_dialogue_line — in
     // voice_subtitle_mode 2 only, the selected sentence entry decides the mode
     // for this line. `entry2` is the entry's third byte.
@@ -1054,9 +1083,6 @@ impl GameState {
             //   0x0f; 0 = none) via the table at seg000:a107.
             let event = b0 & 0x0f;
             if event != 0 {
-                println!(
-                    "fire_dialogue_line_event: dispatching event {event:#04x} for entry {entry_offset:#06x}\n"
-                );
                 self.dispatch_dialogue_line_event(event, b0);
             }
             // = seg000:a05e..a08d — append the line to the dialogue-played log
@@ -1121,9 +1147,13 @@ impl GameState {
             // = 97c8 call update_screen_palette, 97cb jmp present_game_area.
             self.update_screen_palette();
             self.present_game_area();
-            // = seg000:a0bd cmp data_04774,0; jnz -> a0c5 call loc_02ebf — while
-            //   a dialogue is active, push the menu at [data_02220].
-            //   TODO: that element (the dialogue text window) is not modelled.
+            // = seg000:a0bd cmp data_04774,0; jnz -> a0c5 call loc_02ebf — a
+            //   scripted scene is active (the spoken line's event started one,
+            //   or an action-01 step presented this line): (re-)push the
+            //   scene's " Continue…" panel so the next click steps the script.
+            if self.is_dialogue_active {
+                self.sequence_push_continue_menu();
+            }
         }
         // = seg000:a0c9 loc_0a0c9 — start the voice unless suppressed.
         if self.data_000ea <= 0 {
@@ -1255,7 +1285,269 @@ impl GameState {
 mod tests {
     use std::sync::mpsc;
 
-    use crate::{GameState, container, dat_file::DatFile};
+    use crate::{GameState, container, dat_file::DatFile, menu_defs::MenuRef};
+
+    // Jessica's "It looks like a communication room, used to send and receive
+    // long distance messages. I'm going to try to open this door on the
+    // right." (topic 1, phrase 0x846, condition game_phase in 8..13 &&
+    // current_room == 8) fires event 0x0c: the phase advances to 0xc, whose
+    // callback unlocks the two comm-room doors and starts the scripted
+    // gather scene (cutscene_game_phase_0c_dialogue): Leto and Jessica take
+    // turns speaking over " Continue…" clicks until the scene ends.
+    #[test]
+    #[ignore = "needs assets/DUNE.DAT"]
+    fn jessica_communication_room_line_starts_the_gather_scene() {
+        let dat_path = concat!(env!("CARGO_MANIFEST_DIR"), "/../../assets/DUNE.DAT");
+        let Ok(dat_file) = DatFile::open(dat_path) else {
+            eprintln!("skipping: {dat_path} not found");
+            return;
+        };
+        // Not headless: the silent-Leto blink guard below inspects the frames
+        // the scene actually presents.
+        let (tx, rx) = mpsc::sync_channel(1024);
+        let mut game = GameState::new(dat_file, tx);
+        game.start(true);
+        while rx.try_recv().is_ok() {}
+
+        // Into the palace communication room (0x2008) at phase 8, Jessica
+        // standing there.
+        game.game_phase = 8;
+        game.room_persons[1].location_and_room = 0x2008;
+        game.room_persons[1].location_appearance = game.location_appearance;
+        game.pending_room_action = 5;
+        game.commit_room_move(0x2008, game.location_appearance);
+        while rx.try_recv().is_ok() {}
+
+        // Talk to Jessica. Earlier topic-1 lines (the special-training talk)
+        // present first; keep clicking TALK TO ME until the communication-room
+        // line comes up, as the player would.
+        game.common_dialogue(1);
+        for _ in 0..8 {
+            while rx.try_recv().is_ok() {}
+            if game.current_subtitle_id == 0x846 {
+                break;
+            }
+            game.menu_callback_choice_talk_to_me(0, 0);
+        }
+        assert_eq!(
+            game.current_subtitle_id, 0x846,
+            "It looks like a communication room..."
+        );
+        assert_eq!(game.game_phase, 0x0c, "event 0x0c advanced the phase");
+        assert_eq!(
+            game.scene_records[7].exits[1] & 0x80,
+            0,
+            "palace room 7's east door unlocked"
+        );
+        assert_eq!(
+            game.scene_records[6].exits[3] & 0x80,
+            0,
+            "palace room 6's west door unlocked"
+        );
+        assert!(game.is_dialogue_active, "the scripted scene is active");
+        assert_eq!(
+            game.get_active_menu_ref(),
+            MenuRef::MenuContinueOrWhat,
+            "the scene's Continue panel is up"
+        );
+
+        // The first " Continue…" click runs the script's action 00: the
+        // communication room redraws with the shot's cast placement list —
+        // Leto and Jessica standing in the room (slots 7/8).
+        while rx.try_recv().is_ok() {}
+        game.menu_callback_choice_continue_for_sequence(0, 0);
+        assert!(
+            game.is_dialogue_active,
+            "the scene waits for the next click"
+        );
+        assert_ne!(
+            game.character_screen_pos[0],
+            (0xffff, 0xffff),
+            "Leto stands in the communication room"
+        );
+        assert_ne!(
+            game.character_screen_pos[1],
+            (0xffff, 0xffff),
+            "Jessica stands in the communication room"
+        );
+
+        // While the scene waits for a click, the " Continue…" verb blinks:
+        // the blink frame task toggles sequence_blink, and each idle-frame
+        // highlight pass (seg000:d515/d51c) flips the slot between
+        // highlighted (0) and plain (0xff).
+        game.sequence_blink = false;
+        game.index_of_last_hovered_action_item = 0xff;
+        assert!(
+            game.highlight_hovered_text_action_item(),
+            "blink on repaints the slot"
+        );
+        assert_eq!(
+            game.index_of_last_hovered_action_item, 0,
+            "blink on highlights the Continue slot"
+        );
+        game.tick_sequence_blink();
+        assert!(
+            game.highlight_hovered_text_action_item(),
+            "blink off repaints the slot"
+        );
+        assert_eq!(
+            game.index_of_last_hovered_action_item, 0xff,
+            "blink off un-highlights the Continue slot"
+        );
+
+        // Walk the rest of the scene: each " Continue…" click steps the
+        // script. The speaker-line steps present Leto's and Jessica's
+        // phase-0xc topic-7 lines; the 0xff terminator ends the scene.
+        let mut lines = Vec::new();
+        let mut saw_silent_leto = false;
+        for _ in 0..12 {
+            if !game.is_dialogue_active {
+                break;
+            }
+            while rx.try_recv().is_ok() {}
+            let before = game.current_subtitle_id;
+            game.menu_callback_choice_continue_for_sequence(0, 0);
+            if game.current_subtitle_id != before {
+                lines.push(game.current_subtitle_id);
+            }
+            // The click that runs the third shot chains action 00 (re-show
+            // the room, Leto out of the cast) into action 03 (show Leto's
+            // head silently) and parks at the wait byte, script index 43.
+            if game.sequence_cursor == 43 && !saw_silent_leto {
+                saw_silent_leto = true;
+                assert_eq!(
+                    game.current_lip_sync_resource_id, 0,
+                    "action 03 made Leto the speaker"
+                );
+                assert!(
+                    game.talking_head.is_none(),
+                    "the silent head carries no lip-sync/idle animator"
+                );
+                // The head image itself stays composited in fb1 over the
+                // clean fb2 backdrop the shot's redraw saved (~14k px differ;
+                // without the head render only ~240 px of unrelated HUD noise
+                // remain, so the threshold separates the two decisively).
+                let area = 320 * 152;
+                let head_px = |px: &[u8]| {
+                    px[..area]
+                        .iter()
+                        .zip(&game.framebuffer_saved.pixels()[..area])
+                        .filter(|(a, b)| a != b)
+                        .count()
+                };
+                let diff = head_px(game.framebuffer.pixels());
+                assert!(
+                    diff > 5000,
+                    "Leto's head must be drawn over the gather shot ({diff} px differ)"
+                );
+                // The blink guard: every frame this click presented must
+                // already carry the head — the shot's room redraw renders
+                // offscreen, so a head-less communication room (matching the
+                // clean fb2 backdrop) never reaches the display.
+                let mut presented = 0;
+                while let Ok((frame, _pal)) = rx.try_recv() {
+                    presented += 1;
+                    let diff = head_px(frame.pixels());
+                    assert!(
+                        diff > 5000,
+                        "a presented frame shows the room without Leto ({diff} px differ from the clean backdrop)"
+                    );
+                }
+                assert!(presented > 0, "the silent-Leto shot presented a frame");
+            }
+        }
+        assert!(
+            saw_silent_leto,
+            "the script's action-03 silent-Leto shot was reached"
+        );
+        assert!(
+            !game.is_dialogue_active,
+            "the scene ran to its 0xff end (lines presented: {lines:x?})"
+        );
+        // Leto's gather line is the scene's first spoken step.
+        assert_eq!(
+            lines.first().copied(),
+            Some(0x826),
+            "Leto: A communication room! Let's all gather here..."
+        );
+        assert!(
+            lines.len() >= 4,
+            "the scene presented its speaker turns (got {lines:x?})"
+        );
+    }
+
+    // Switching the conversation between two travelling companions (the
+    // companion-portrait click over the dialogue panel: dismiss_stacked_menus,
+    // then the other companion's dialogue) must take the old head off the
+    // screen before the new one goes up. A companion-bar dialogue has no room
+    // anchor, so menu_npc_actions_cleanup's no-zoom travelling branch leaves
+    // the head on screen (DOS quirk); the CHANGED-head reload at seg000:91c2
+    // then runs tear_down_prior_talking_head_overlay, restoring the game area
+    // from fb2 before the new head's backdrop save. Without it, the old head
+    // stayed visible and setup_talking_head baked it into fb2.
+    #[test]
+    #[ignore = "needs assets/DUNE.DAT"]
+    fn companion_switch_tears_down_the_old_head() {
+        let dat_path = concat!(env!("CARGO_MANIFEST_DIR"), "/../../assets/DUNE.DAT");
+        let Ok(dat_file) = DatFile::open(dat_path) else {
+            eprintln!("skipping: {dat_path} not found");
+            return;
+        };
+        let (tx, _rx) = mpsc::sync_channel(64);
+        let mut game = GameState::new(dat_file, tx);
+        game.set_headless();
+        game.start(true);
+
+        // Leto (0) and Jessica (1) are travelling companions; neither stands
+        // in the rendered room (no anchor -> the no-zoom dialogue path, as a
+        // HUD-portrait click gives).
+        game.room_persons[0].flags |= 0x40;
+        game.room_persons[1].flags |= 0x40;
+        game.character_screen_pos[0] = (0xffff, 0xffff);
+        game.character_screen_pos[1] = (0xffff, 0xffff);
+
+        // Open the conversation with Leto: his head composites into fb1 over
+        // the fb2-saved backdrop.
+        game.common_dialogue(0);
+        assert_eq!(
+            game.talking_head.as_ref().map(|h| h.talking_head_id),
+            Some(0),
+            "Leto's head is up"
+        );
+
+        // The switch's first half: the portrait click dismisses the dialogue
+        // panel; the cleanup's travelling no-zoom branch keeps Leto's head on
+        // screen (its subtitle_restore_prior un-bakes the line's bubble from
+        // fb2, leaving fb2 the clean backdrop again).
+        game.dismiss_stacked_menus();
+        assert!(
+            game.talking_head.is_some(),
+            "the cleanup's travelling branch leaves the old head up"
+        );
+        // The game area above the bottom-centre HUD head ornament (rows
+        // 144..151, redrawn by the surrounding flow, not by the head setup) —
+        // the old head's rect lies inside it.
+        let game_area = 320 * 144;
+        let clean: Vec<u8> = game.framebuffer_saved.pixels()[..game_area].to_vec();
+
+        // The switch's second half opens Jessica's dialogue, whose head setup
+        // runs the changed-head reload.
+        game.setup_talking_head(1, 0);
+
+        assert_eq!(
+            game.talking_head.as_ref().map(|h| h.talking_head_id),
+            Some(1),
+            "the head switched to Jessica"
+        );
+        // The teardown restored the game area from fb2 before the new
+        // backdrop save re-snapshotted it, so fb2's game area is unchanged —
+        // Leto's head was not baked into Jessica's backdrop.
+        assert_eq!(
+            &game.framebuffer_saved.pixels()[..game_area],
+            &clean[..],
+            "fb2 backdrop must stay the clean room across the switch"
+        );
+    }
 
     // Regression for the fly-over ("it looks like a sietch") line playing no
     // voice: travel_play_flyover_line arms data_047dc (seg000:96db), so
@@ -1265,6 +1557,76 @@ mod tests {
     // present in the DAT for the companion heads, while the per-speaker index
     // the old (data_047dc-less) path computed is not — i.e. the rebase is what
     // makes the fly-over line audible.
+    // After COME WITH ME on Jessica during the phase-6 palace search, her
+    // TALK TO ME line follows the room: "I feel nothing particular in this
+    // room." (0x844) anywhere ordinary, "...I feel something here... It's so
+    // faint... No! Let's continue." (0x843) in the hallway above the
+    // equipment room (room 7), and "I think there is a hidden door on the
+    // left." (0x83b, event 0x0c -> phase 8) in the equipment room itself.
+    // The gating conditions read ds:18 - the speaker's room-person flags
+    // byte, seeded per presented line by loc_094f3 (seed_speaker_condit_
+    // fields) - whose bit 0x40 is the travelling flag COME WITH ME set.
+    #[test]
+    #[ignore = "needs assets/DUNE.DAT"]
+    fn jessica_palace_search_lines_follow_the_room() {
+        let dat_path = concat!(env!("CARGO_MANIFEST_DIR"), "/../../assets/DUNE.DAT");
+        let Ok(dat_file) = DatFile::open(dat_path) else {
+            eprintln!("skipping: {dat_path} not found");
+            return;
+        };
+        let (tx, _rx) = mpsc::sync_channel(256);
+        let mut game = GameState::new(dat_file, tx);
+        game.set_headless();
+        game.start(true);
+
+        // Phase 6, Jessica travelling with Paul (COME WITH ME) in the throne
+        // room (0x200a).
+        game.game_phase = 6;
+        game.room_persons[1].flags |= 0x40;
+        game.room_persons[1].location_and_room = game.location_and_room;
+        game.room_persons[1].location_appearance = game.location_appearance;
+        game.persons_travelling_with |= 2;
+
+        // The one-shot special-training pair comes first; after that, every
+        // TALK TO ME in an ordinary room gives the search line.
+        game.common_dialogue(1);
+        for _ in 0..8 {
+            if game.current_subtitle_id == 0x844 {
+                break;
+            }
+            game.menu_callback_choice_talk_to_me(0, 0);
+        }
+        assert_eq!(
+            game.current_subtitle_id, 0x844,
+            "I feel nothing particular in this room."
+        );
+        // The line's word0 bit 0x40 keeps it eligible after the spoken mark,
+        // so it repeats on the next click.
+        game.menu_callback_choice_talk_to_me(0, 0);
+        assert_eq!(
+            game.current_subtitle_id, 0x844,
+            "the search line repeats in ordinary rooms"
+        );
+
+        // The hallway above the equipment room (room 7): the faint feeling.
+        game.commit_room_move(0x2007, game.location_appearance);
+        game.common_dialogue(1);
+        assert_eq!(
+            game.current_subtitle_id, 0x843,
+            "...I feel something here... It's so faint..."
+        );
+
+        // The equipment room (room 2): the hidden door on the left; its
+        // event 0x0c advances the story to phase 8.
+        game.commit_room_move(0x2002, game.location_appearance);
+        game.common_dialogue(1);
+        assert_eq!(
+            game.current_subtitle_id, 0x83b,
+            "I think there is a hidden door on the left."
+        );
+        assert_eq!(game.game_phase, 8, "the discovery advanced the phase");
+    }
+
     #[test]
     #[ignore = "needs assets/DUNE.DAT"]
     fn flyover_line_resolves_to_a_voc_file() {
