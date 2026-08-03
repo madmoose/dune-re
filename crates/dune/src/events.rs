@@ -997,8 +997,11 @@ mod tests {
 
         // Vision messages queue only once Paul has had his first vision.
         game.bitfield_paul_events |= 1;
-        // A rallied spice-prospecting troop chained to an eligible sietch —
-        // the only hired troop anywhere, so the picker must choose it.
+        // A rallied awaiting-orders troop chained to an eligible sietch — the
+        // only hired troop anywhere, so the picker must choose it. Occupation
+        // 2 has no per-period callback; a working occupation (say spice
+        // prospecting, 1) would stop itself at a spice-less sietch (occupation
+        // bit 4), pushing it past the picker's `occupation < 8` gate.
         let li = (0..game.locations.len())
             .find(|&i| {
                 game.locations[i].appearance < 0x28
@@ -1008,7 +1011,7 @@ mod tests {
             .expect("an eligible sietch");
         let li_ptr = crate::locations::location_ptr_from_index(li);
         game.locations[li].troop_id = 1;
-        game.troops[0].occupation = 0x01;
+        game.troops[0].occupation = 0x02;
         game.troops[0].next_troop_id = 0;
         game.troops[0].offset_of_location = li_ptr;
         // Phase 0x5c with the day gate armed; cross one new day.

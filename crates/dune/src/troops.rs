@@ -2237,13 +2237,15 @@ impl GameState {
     }
 
     // = seg000:6c26 array_callbacks_for_troop_occupation_06c26 — the per-period
-    // callback for each occupation nibble. Only spice mining is ported; the
-    // others (prospecting, military training, espionage, attacking, irrigation,
-    // wind-trap assembly, bulb growing) are their own subsystems, and slots
-    // 2/3/7/11..15 are nullsub_00f66.
+    // callback for each occupation nibble. Spice mining (0) and prospecting (1)
+    // are ported; the others (military training, espionage, attacking,
+    // irrigation, wind-trap assembly, bulb growing) are their own subsystems,
+    // and slots 2/3/7/11..15 are nullsub_00f66.
     fn run_troop_occupation_callback(&mut self, ti: usize) {
-        if self.troops[ti].occupation & 0x0f == 0 {
-            self.troop_occupation_event_spice_mining(ti);
+        match self.troops[ti].occupation & 0x0f {
+            0 => self.troop_occupation_event_spice_mining(ti),
+            1 => self.troop_occupation_event_spice_prospecting(ti),
+            _ => {}
         }
     }
 
@@ -2351,6 +2353,99 @@ impl GameState {
         }
         // = seg000:7052..705b the density drops, clamped at 0.
         self.locations[li].spice_density = loc.spice_density.saturating_sub(consumed);
+    }
+
+    // = seg000:70cc callback_troop_location_for_troop_occupation_spice_
+    // prospecting — one time period of prospecting: the first working period
+    // fixes the job's duration from the field's richness and the troop's
+    // ability, the following periods tick a progress percent, and on
+    // completion the location is marked prospected, the troop gets better at
+    // spice work and either moves on (the prospector queue) or reports in.
+    fn troop_occupation_event_spice_prospecting(&mut self, ti: usize) {
+        let li = locations::location_index_from_ptr(self.troops[ti].offset_of_location);
+        let loc = self.locations[li];
+        // = seg000:70cc..70d1 a battle at the location suspends the job.
+        if loc.status & 0x02 != 0 {
+            return;
+        }
+        // = seg000:70d3/70d5 an area already prospected goes straight to the
+        //   finish tail.
+        if loc.status & 0x40 == 0 {
+            // = seg000:70d7/70da the viability sync (troop_location_test_for_
+            //   location_area_prospected via the occupation-1 arm); not viable
+            //   (vegetation covers the area) ends the period.
+            if self.troop_occupation_not_viable(ti) {
+                return;
+            }
+            // = seg000:70dc..70f4 dep_C caches the job's duration in periods,
+            //   computed once on the first working period: (spice_amount * 16)
+            //   / (motivation + spice_skill). Both the add and the divide are
+            //   8-bit in DOS — the sum wraps, a zero divisor or a quotient
+            //   over 0xff would trap, so the port guards and caps them.
+            let mut duration = self.troops[ti].harvest_rate;
+            if duration == 0 {
+                let dividend = (loc.spice_amount as u16) << 4;
+                let divisor = self.troops[ti]
+                    .motivation
+                    .wrapping_add(self.troops[ti].spice_skill);
+                if divisor == 0 {
+                    return;
+                }
+                duration = (dividend / divisor as u16).min(0xff);
+                self.troops[ti].harvest_rate = duration;
+            }
+            // = seg000:70f7..70fe cx = periods elapsed since ralliement.
+            let elapsed = self
+                .game_time
+                .wrapping_sub(self.troops[ti].time_period_of_ralliement);
+            if duration > elapsed {
+                // = seg000:7102 a first period still at zero elapsed does
+                //   nothing.
+                if elapsed == 0 {
+                    return;
+                }
+                // = seg000:7104..710c dep_E = elapsed * 100 / duration — the
+                //   progress percent the info panel shows.
+                self.troops[ti].harvest_total = (elapsed as u32 * 100 / duration as u32) as u16;
+                return;
+            }
+            // = seg000:7110..7114 prospecting complete: spice skill +2
+            //   (rank-up marker 1).
+            self.troop_increase_spice_skill(ti, 2, 0);
+            // = seg000:7117 the location is prospected now.
+            self.locations[li].status |= 0x40;
+            // = seg000:711b..7122 with the spice overlay up, the new shade
+            //   marks it for a repaint.
+            if self.data_046eb & 0x40 != 0 {
+                self.spice_density_overlay_dirty = self.spice_density_overlay_dirty.wrapping_add(1);
+            }
+        }
+        // = seg000:7126..712d loc_07126 — the finish tail: re-sync the stopped
+        //   bit (prospecting here is no longer viable, so bit 4 sets and the
+        //   icon swaps) and pin the progress at 100%. The occupation captured
+        //   before the sync (push ax) feeds the message test below.
+        let was_stopped = self.troops[ti].occupation & 0x10 != 0;
+        self.troop_occupation_not_viable(ti);
+        self.troops[ti].harvest_total = 0x64;
+        // = seg000:7133/7137 the troop whose contact popup is up stays put and
+        //   says nothing — the player is already looking at it.
+        if self.map_contact_troop == Some(ti) {
+            return;
+        }
+        // = seg000:7139..713e/7149 with a prospector destination queued, move
+        //   on (troop_issue_move_order re-syncs the queue for troops[2]; di
+        //   still holds the current location for anyone else).
+        if self.prospector_destinations[0] != 0 {
+            self.troop_issue_move_order(ti, li);
+            return;
+        }
+        // = seg000:7140..7146 a troop that was already stopped has reported
+        //   before; otherwise queue message 0xe = "We have finished our
+        //   prospecting job, here in ...".
+        if was_stopped {
+            return;
+        }
+        self.queue_vision_message_f00(0x0e, li);
     }
 
     // = seg000:6b96 troop_location_test_spice_mining_viable, called directly
