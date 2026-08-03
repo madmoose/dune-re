@@ -4,6 +4,7 @@ DUNE.DAT
 *.png
 /docs
 *.avi
+*.mov
 *.mp4
 *.sav
 TODO.md

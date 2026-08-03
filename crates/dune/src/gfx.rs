@@ -1596,31 +1596,31 @@ pub(crate) fn vga_xor_rect_outline_inner(state: &mut GameState, x: i16, y: i16, 
     let w = x1 - x0 + 1;
     let h = y1 - y0 - 2;
     let screen = &mut state.screen;
-    let mut px = |x: i16, y: i16| {
+    let mut toggle = |x: i16, y: i16| {
         let y = y + yoff;
         let c = screen.get(x as u16, y as u16);
         screen.set(x as u16, y as u16, c ^ 0x0f);
     };
     // = segvga:3784 the top row, left to right.
     for i in 0..w {
-        px(x0 + i, y0);
+        toggle(x0 + i, y0);
     }
     // = segvga:378f the right side, then the step onto the bottom row.
     let mut by = y0;
     if h > 0 {
         for j in 1..=h {
-            px(x1, y0 + j);
+            toggle(x1, y0 + j);
         }
         by = y0 + h + 1;
     }
     // = segvga:379d the bottom row, right to left.
     for i in 0..w {
-        px(x1 - i, by);
+        toggle(x1 - i, by);
     }
     // = segvga:37a8 the left side, bottom to top.
     if h > 0 {
         for j in 1..=h {
-            px(x0, by - j);
+            toggle(x0, by - j);
         }
     }
 }

@@ -146,11 +146,6 @@ impl GameState {
             return;
         }
 
-        println!(
-            "show_voice_subtitle: phrase_id {phrase_id}, text {:?}",
-            sub_trace_text(&text)
-        );
-
         // Fix type in Duncan's voc 21
         if phrase_id == 2282 {
             // Replace "You can notice than" with "You can notice that"

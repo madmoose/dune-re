@@ -566,7 +566,7 @@ impl GameState {
             }
             // DOS paces the slide by the full-area present's cost on period
             // hardware; hold each presented step a couple of PIT ticks.
-            self.sleep_ticks(start, 2);
+            self.sleep_ticks(start, 4);
         }
     }
 
@@ -588,7 +588,7 @@ impl GameState {
             if self.globe_decoration_offset == 0 {
                 break;
             }
-            self.sleep_ticks(start, 2);
+            self.sleep_ticks(start, 4);
         }
         // = seg000:b92a..b92d redraw them into fb1 at the closed position.
         self.set_fb1_as_active_framebuffer();
