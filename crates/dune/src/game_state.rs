@@ -97,6 +97,9 @@ pub(crate) enum TaskId {
     // sequence's blink toggle (interval 0x64), installed by
     // start_scripted_dialogue.
     SequenceBlink,
+    // = seg000:2cc7 vision_shimmer_frame_task — the vision dream's fb1
+    // water-ripple present (interval 6), installed by vision_dream_backdrop.
+    VisionShimmer,
 }
 
 pub(crate) struct FrameTask {
@@ -511,9 +514,56 @@ pub struct GameState {
 
     // = seg001:00c8 comm_sighting_count + seg001:1179 comm_sighting_list —
     // the COMM-room person-sighting words ((location index << 8) | person
-    // id), max 10, appended by comm_add_person_sighting. The COMM screen
-    // that displays them is unported.
+    // id), max 10, appended by comm_add_person_sighting. Bit 7 of the low
+    // byte marks an entry viewed (menu_callback_comms_message_selected); the
+    // COMM message list (messages.rs) filters on it.
     pub(crate) comm_sightings: Vec<u16>,
+
+    // = seg001:00c9 for_condit_comms_room_message_count_ds_c9 — the COMM
+    // unread badge: incremented per new sighting (seg000:2713), decremented
+    // when a new message is viewed (seg000:2941). The COMM verbs grey off it
+    // and comm_return_to_room mirrors it into ds:eb.
+    pub(crate) comm_unread_count_ds_c9: u8,
+
+    // = seg001:0024 for_dialogue_enemies_ds_24 — the location-index byte of
+    // the COMM message being viewed (the sighting's high byte), staged for
+    // the message dialogue conditions; cleared by comm_return_to_room.
+    pub(crate) for_dialogue_enemies_ds_24: u8,
+
+    // = seg001:00db comm_list_filter_seen_ds_db — the COMM message-list
+    // filter: 0 while viewing new messages (rows with sighting bit 7 clear),
+    // 0xff while re-viewing already-seen ones.
+    pub(crate) comm_list_filter_seen: u8,
+
+    // = seg001:00e9 for_condit_ds_e9 — the person id of the COMM message
+    // being presented (0 between messages); the message dialogue records'
+    // conditions read it.
+    pub(crate) for_condit_ds_e9: u8,
+
+    // = seg001:00eb for_condit_presence_of_comms_room_message_which_needs_
+    // viewing_there_ds_eb — comm_return_to_room and the vision dream mirror
+    // the unread state here for CONDIT.
+    pub(crate) comm_message_needs_viewing_ds_eb: u8,
+
+    // = seg001:47a9 comm_displayed_message_person — person id of the COMM
+    // message face currently displayed over the room view (0 = none). A
+    // game-area click while nonzero runs the Viewed action, and
+    // build_room_command_records shows the comm console sprite 0x28.
+    pub(crate) comm_displayed_message_person: u8,
+
+    // = seg001:2ccc6 _unk_2CCC6_comm_glow_index — the COMM console glow /
+    // flicker animation frame counter.
+    pub(crate) comm_glow_index: u16,
+
+    // = seg001:1141 array_likelihood_of_worm_related_spice_mining_troop_
+    // events_by_region — [0] is the base event probability (incremented by
+    // the phase-0x4c and 0x5c callbacks; the smuggler dialogue also reads
+    // it), [1..12] the per-region base indexed by Location.first_name.
+    pub(crate) worm_event_likelihood_by_region: [u8; 13],
+
+    // = segvga:34fc data_segvga_034fc — the water-ripple row counter the
+    // vision-dream shimmer (vga effect 0x0a) advances one row per pass.
+    pub(crate) vision_shimmer_phase: u16,
 
     // = seg001:0016/0018 for_condit_ds_16 / for_condit_ds_18 — the
     // per-presented-line speaker seeds (loc_094f3, seg000:94f3): ds:16 =
@@ -538,6 +588,11 @@ pub struct GameState {
     // to the left of the heading, 1 when to the right. Feeds the companion's
     // fly-over dialogue line (the spoken-line tail is not ported yet).
     pub(crate) data_000e1: u8,
+
+    // = seg001:00e7 Paul_found_unconscious_in_desert_ds_e7 — cleared by the
+    // desert walk-out (seg000:3fd2) and after an auto-dialogue line
+    // (seg000:354c).
+    pub(crate) paul_found_unconscious_ds_e7: u8,
 
     // = seg001:00e8 _byte_1F598_ui_hud_head_index.
     pub(crate) ui_hud_head_index: u8,
@@ -726,7 +781,8 @@ pub struct GameState {
     // = seg001:1190 vision_message_count + seg001:1191 vision_message_queue —
     // the queued vision messages, (message id, location ptr or 0), max 10;
     // queue_vision_message appends (deduplicated, oldest dropped on
-    // overflow). The vision presentation that consumes them is unported.
+    // overflow). Consumed by the idle-room presenter and the vision dream
+    // (messages.rs) and purged when the sender delivers in person.
     pub(crate) vision_messages: Vec<(u16, u16)>,
 
     // = seg001:2222 ui_hud_companion_blink — per-companion-slot blink countdown
@@ -1942,6 +1998,23 @@ pub struct GameState {
     // which slot to un-highlight before painting the new hover.
     pub(crate) index_of_last_hovered_action_item: u8,
 
+    // = seg001:dce4 data_0dce4 — the active menu's skip byte as sampled by
+    // redraw_active_command_menu, with bit 0x80 OR'd in when more records
+    // follow the visible window. read_command_menu_record_for_slot decides
+    // what the " Others..." row does from it: sign set = advance a page,
+    // else positive = rewind to the first page. The port keeps the skip in
+    // record units (DOS stores a byte offset, 4 bytes per record).
+    pub(crate) command_menu_more_state: u8,
+
+    // = seg001:dce5 data_0dce5 — the slot the " Others..." (0xa0) row was
+    // painted into by the last redraw, 0xff = none.
+    pub(crate) command_menu_more_slot: u8,
+
+    // = seg001:dce8 data_0dce8 — how many non-blank slots the last
+    // redraw_active_command_menu painted (records plus the " Others..." row);
+    // the hover highlight walks only these.
+    pub(crate) command_menu_slot_count: u8,
+
     // = the segvga A000:FA00 cursor-background save area and the geometry
     // vga_draw_cursor records (cs:[cursor_fb_pos/_width/_height]). The port keeps
     // `screen` exactly 320x200, so the save lives here rather than past the
@@ -2158,6 +2231,18 @@ impl GameState {
             globe_param_4: 0,
             vision_messages: Vec::new(),
             comm_sightings: Vec::new(),
+            comm_unread_count_ds_c9: 0,
+            for_dialogue_enemies_ds_24: 0,
+            comm_list_filter_seen: 0,
+            for_condit_ds_e9: 0,
+            comm_message_needs_viewing_ds_eb: 0,
+            comm_displayed_message_person: 0,
+            comm_glow_index: 0,
+            // = the seg001:1141 static initializer.
+            worm_event_likelihood_by_region: [
+                0x03, 0x0d, 0x0f, 0x32, 0x64, 0x80, 0x28, 0x14, 0x28, 0x23, 0x32, 0x46, 0x80,
+            ],
+            vision_shimmer_phase: 0,
             scene_records: crate::room_scene::SCENE_RECORDS,
             charisma: 0,
             discovered_sietch_count: 0,
@@ -2171,6 +2256,7 @@ impl GameState {
             book_topic_filter: 0,
             book_page_video_id: 0,
             data_000c8: 0,
+            paul_found_unconscious_ds_e7: 0,
             ui_hud_head_index: 0,
             data_000ea: 0,
             data_000e1: 0,
@@ -2475,6 +2561,9 @@ impl GameState {
             cursor_hide_counter: -1,
             mouse_cursor_restore_needed: 0,
             index_of_last_hovered_action_item: 0xff,
+            command_menu_more_state: 0,
+            command_menu_more_slot: 0xff,
+            command_menu_slot_count: 0,
             cursor_save: Vec::new(),
             cursor_save_pos: 0,
             cursor_save_w: 0,
@@ -2732,14 +2821,21 @@ impl GameState {
                 // = seg000:d838 call ui_hud_companion_blink_task.
                 self.ui_hud_companion_blink_task();
 
-                // = seg000:1b0d loc_01b0d -> run_events_for_current_time_period
-                // (seg000:1b23). DOS gates the call on is_voc_pcm_playing /
-                // game_suspend_count / [2a] < 0xc8; the port checks
-                // game_suspend_count (the rest is unported state). The routine
-                // itself consumes new_time_period_pending, so the flag pre-check
-                // here just skips the call when nothing is pending.
-                if self.new_time_period_pending != 0 && self.game_suspend_count == 0 {
-                    self.run_events_for_current_time_period();
+                // = seg000:1b0d game_loop_sub_01b0d — gated on no voice
+                // playing (is_voc_pcm_playing), the clock not suspended and
+                // the game not ended (game_phase < 0xc8): run the idle-room
+                // message check (loc_02b2a), then the per-period events
+                // (seg000:1b23). run_events itself consumes
+                // new_time_period_pending, so the flag pre-check just skips
+                // the call when nothing is pending.
+                if !self.talking_head.as_ref().is_some_and(|h| h.speaking)
+                    && self.game_suspend_count == 0
+                    && self.game_phase < 0xc8
+                {
+                    self.idle_room_message_check();
+                    if self.new_time_period_pending != 0 {
+                        self.run_events_for_current_time_period();
+                    }
                 }
             }
 
@@ -3197,6 +3293,9 @@ impl GameState {
                 }
                 TaskId::SequenceBlink => {
                     self.tick_sequence_blink();
+                }
+                TaskId::VisionShimmer => {
+                    self.tick_vision_shimmer();
                 }
             }
         }
@@ -4124,6 +4223,46 @@ impl GameState {
                         break;
                     }
                 }
+            }
+            // = blit_mode_dispatch_table[5] (segvga:31e6 → segvga:3500)
+            //   blit_water_ripple — one pass per call (the vision-dream
+            //   shimmer task fires it every 6 ticks): the rect's rows copy
+            //   from fb1 with a per-row horizontal shift from the wave table
+            //   (segvga:3487), the wave origin advancing one row per call
+            //   (data_segvga_034fc). DOS smears the rows in place on the VGA
+            //   surface and cycles the water palette (palette_cycle_water);
+            //   the port simplifies to a clean shifted copy from fb1, which
+            //   reads the same rolling-wave distortion without accumulating
+            //   smear.
+            0x0a => {
+                // = segvga:3487 wave_displacement_tbl — a ±5 px sine-like
+                //   ramp, 116 rows per period.
+                #[rustfmt::skip]
+                const WAVE: [i16; 116] = [
+                    1, 1, 1, 1, 1, 1, 1, 1, 1, 2, 2, 2, 2, 2, 2, 2,
+                    3, 3, 3, 3, 3, 3, 4, 4, 4, 4, 4, 4, 5, 5, 5, 5,
+                    5, 5, 5, 5, 5, 4, 4, 4, 4, 4, 4, 4, 3, 3, 3, 3,
+                    3, 3, 2, 2, 2, 2, 2, 1, 1, 1, 1, 0, 0, 0, -1, -1,
+                    -1, -2, -2, -2, -2, -3, -3, -3, -3, -3, -4, -4, -4, -4, -4, -4,
+                    -5, -5, -5, -5, -5, -5, -5, -5, -5, -4, -4, -4, -4, -4, -4, -3,
+                    -3, -3, -3, -3, -3, -2, -2, -2, -2, -2, -2, -2, -1, -1, -1, -1,
+                    -1, -1, -1, -1,
+                ];
+                let phase = self.vision_shimmer_phase as usize;
+                self.vision_shimmer_phase = self.vision_shimmer_phase.wrapping_add(1);
+                let yoff = self.y_offset as i16;
+                let w = self.screen.w() as i16;
+                let src = self.framebuffer.pixels();
+                let dst = self.screen.pixels_mut();
+                for row in rect.y0..rect.y1 {
+                    let shift = WAVE[(row as usize + phase) % WAVE.len()];
+                    let y = (row + yoff) as usize;
+                    for x in rect.x0..rect.x1 {
+                        let sx = (x + shift).clamp(0, w - 1) as usize;
+                        dst[y * w as usize + x as usize] = src[y * w as usize + sx];
+                    }
+                }
+                self.send_frame_to_display();
             }
             // = the remaining vga_effect_dispatch effects are unported; this
             //   dispatcher only serves the PALACE PLAN and GLOBE effects.

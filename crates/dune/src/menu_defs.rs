@@ -50,6 +50,12 @@ pub(crate) enum MenuRef {
 
 pub(crate) struct Menu {
     pub priority: u8,
+    // = the menu buffer's second header byte (e.g. seg001:1fc3
+    // menu_dynamic_skip_byte): the index of the first record the verb strip
+    // shows. DOS stores a byte offset stepping by 0x10 (4 records); the port
+    // keeps it in record units. The " Others..." row advances or rewinds it
+    // (read_command_menu_record_for_slot). Static menus keep it 0.
+    pub skip: u8,
     pub records: Vec<MenuItem>,
 }
 
@@ -57,6 +63,7 @@ impl From<MenuDef> for Menu {
     fn from(def: MenuDef) -> Self {
         Self {
             priority: def.priority,
+            skip: 0,
             records: def.records.to_vec(),
         }
     }
@@ -171,7 +178,7 @@ pub(crate) const MENU_DYNAMIC: MenuDef = menu(0xfc, &[
 /// = seg001:1ff2 menu_comms_room_messages_viewed
 #[rustfmt::skip]
 pub(crate) const MENU_COMMS_ROOM_MESSAGES_VIEWED: MenuDef = menu(0xfb, &[
-    item(cmd::VIEWED, 0x2993, |_, _, _| println!("menu: Viewed (seg000:2993) not ported")),
+    item(cmd::VIEWED, 0x2993, GameState::menu_callback_choice_comms_room_message_viewed),
     item(cmd::WHAT,   0x9ed5, GameState::menu_callback_choice_what),
 ]);
 

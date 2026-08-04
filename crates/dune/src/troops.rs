@@ -2287,9 +2287,10 @@ impl GameState {
                 self.troop_make_stop_working(ti);
                 return;
             }
-            // = seg000:6ff7 call troop_location_events_for_spice_mining_troops_
-            //   with_harvesters — the worm / saboteur events that damage or eat
-            //   the harvester. Not ported (they queue messages).
+            // = seg000:6ff7 call troop_location_events_for_spice_mining_
+            //   troops_with_harvesters — the worm / saboteur events that
+            //   damage or eat the harvester.
+            self.troop_harvester_events(ti);
         }
         // = seg000:6ffa or bitfield_10,100h — the troop is working.
         self.troops[ti].bitfield_10 |= 0x100;
@@ -2458,6 +2459,105 @@ impl GameState {
     // the "stopped" bit the icon script and the info panel read.
     pub(crate) fn troop_make_stop_working(&mut self, ti: usize) {
         self.troops[ti].occupation |= 0x10;
+    }
+
+    // = seg000:714c troop_location_events_for_spice_mining_troops_with_
+    // harvesters — the once-per-day (period nibble == troop-id nibble) worm
+    // roll for a mining troop with a harvester, active once Paul has had his
+    // first vision. A roll under the region's likelihood marks the worm
+    // attack; without an ornithopter to scare it off the low bits pick the
+    // damage: 1 = twenty Fremen eaten, 2 = the harvester damaged, 3 = the
+    // harvester swallowed (message 6).
+    fn troop_harvester_events(&mut self, ti: usize) {
+        // = seg000:714c test [bitfield_Paul_events],1; jz ret.
+        if self.bitfield_paul_events & 1 == 0 {
+            return;
+        }
+        // = seg000:7153 no harvester, no worm interest.
+        if self.troops[ti].equipment & 0x80 == 0 {
+            return;
+        }
+        // = seg000:7159..7163 fire on the time period whose low nibble
+        // matches the troop id's.
+        if self.game_time & 0x0f != (self.troops[ti].troop_id & 0x0f) as u16 {
+            return;
+        }
+        let li = locations::location_index_from_ptr(self.troops[ti].offset_of_location);
+        // = seg000:7165 call troop_location_spice_mining_troop_events_
+        // randomize_saboteurs.
+        self.troop_randomize_saboteurs(ti, li);
+        // = seg000:7168..7173 the worm roll: rand's high byte against the
+        // region's base likelihood (table[first_name]).
+        let roll = self.rand();
+        let likelihood =
+            self.worm_event_likelihood_by_region[self.locations[li].first_name as usize];
+        if likelihood < (roll >> 8) as u8 {
+            return;
+        }
+        // = seg000:7175 or bitfield_10,4000h — worm attacked.
+        self.troops[ti].bitfield_10 |= 0x4000;
+        // = seg000:717a..717e an ornithopter scares the worm off.
+        if self.troops[ti].equipment & 0x40 != 0 {
+            return;
+        }
+        // = seg000:7180..718a the roll's low bits pick the damage.
+        match (roll >> 8) as u8 & 3 {
+            // = seg000:7183 0: no harvester attack.
+            0 => {}
+            // = seg000:718c..719b 1: the worm ate 20 Fremen — undone when it
+            // would empty the troop.
+            1 => {
+                self.troops[ti].bitfield_10 |= 0x2000;
+                let pop = self.troops[ti].population.wrapping_sub(2);
+                if pop > 0 && pop < self.troops[ti].population {
+                    self.troops[ti].population = pop;
+                }
+            }
+            // = seg000:718a jz troop_make_harvester_damaged.
+            2 => self.troop_make_harvester_damaged(ti),
+            // = seg000:71a4..71b0 3: the worm swallowed the harvester —
+            // strip it from the troop and the location and queue message 6
+            // ("A worm has swallowed our harvester here in ...").
+            _ => {
+                self.troops[ti].bitfield_10 |= 0x1000;
+                self.troops[ti].equipment &= 0x7f;
+                self.locations[li].equipment.harvesters =
+                    self.locations[li].equipment.harvesters.wrapping_sub(1);
+                self.queue_vision_message_f00(6, li);
+            }
+        }
+    }
+
+    // = seg000:719c troop_make_harvester_damaged — bitfield_10 bit 0x200 (the
+    // harvester needs repairing) and the troop stops working.
+    fn troop_make_harvester_damaged(&mut self, ti: usize) {
+        self.troops[ti].bitfield_10 |= 0x200;
+        self.troop_make_stop_working(ti);
+    }
+
+    // = seg000:71bc troop_location_spice_mining_troop_events_randomize_
+    // saboteurs — from game phase 0x35, a dissatisfied troop (bit 0x40) has a
+    // 1-in-8 chance (three rolled rand bits all clear) of harbouring
+    // saboteurs: the harvester is damaged, the troop and location are
+    // flagged, and message 3 ("There are saboteurs here in ...") is queued.
+    fn troop_randomize_saboteurs(&mut self, ti: usize, li: usize) {
+        // = seg000:71bc..71c8 the phase and dissatisfaction gates.
+        if self.game_phase < 0x35 {
+            return;
+        }
+        if self.troops[ti].dissatisfaction_and_speech & 0x40 == 0 {
+            return;
+        }
+        // = seg000:71ca..71dc rol [rand_bits] three times; test 7.
+        self.rand_bits = self.rand_bits.rotate_left(3);
+        if self.rand_bits & 7 != 0 {
+            return;
+        }
+        // = seg000:71de..71ec the sabotage.
+        self.troop_make_harvester_damaged(ti);
+        self.troops[ti].bitfield_10 |= 0x8000;
+        self.locations[li].status |= 4;
+        self.queue_vision_message_f00(3, li);
     }
 
     // = seg000:6edd troop_clamp_skill_and_do_something_else — raise the troop's

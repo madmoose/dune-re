@@ -8,9 +8,8 @@
 //! dispatcher) with the helpers it calls from further afield (seg000:26da,
 //! 29ee..2a50, 40ae, 6f78). Still stubbed: start_scripted_dialogue
 //! (seg000:1771, the cutscene_game_phase_* byte scripts), the troop-system
-//! effects (motivation, worm-event likelihood, the phase-0x64 location scan),
-//! the palace-plan locked-door icon-list truncation, and the string
-//! substitution table.
+//! effects (motivation, the phase-0x64 location scan), the palace-plan
+//! locked-door icon-list truncation, and the string substitution table.
 
 use crate::{GameState, cmd};
 
@@ -148,6 +147,39 @@ impl GameState {
         self.mark_locations_discovered(&[21, 22, 23]);
     }
 
+    // = seg000:1071 loc_01071 — Paul's first vision, fired by the idle
+    // checker at game phase exactly 0x14 (first_vision_idle_check): advance
+    // to phase 0x15, restation the household (the Duke's presence becomes
+    // matchable, Gurney to room 0x0b of location 0x20, Jessica to room 10),
+    // arm the spice-shipment plot with a fresh demand, and — with visions now
+    // enabled (Paul-event bit 0) — queue message 1 ("A message has arrived in
+    // the palace.").
+    pub(crate) fn first_vision_phase_advance(&mut self) {
+        // = seg000:1071/1076 ds:ff = 0; game_phase = 0x15.
+        self.days_since_last_game_phase_change = 0;
+        self.game_phase = 0x15;
+        // = seg000:107b data_00fdb = 1 — room_persons[0].location_appearance
+        //   high byte (the visibility byte, cf. phase_callback_20).
+        let rp = &mut self.room_persons[0];
+        rp.location_appearance = (rp.location_appearance & 0x00ff) | 0x0100;
+        // = seg000:1080/1086 room_persons[4] to (0x200b, slot 0x180).
+        self.room_persons[4].location_and_room = 0x200b;
+        self.room_persons[4].location_appearance = 0x180;
+        // = seg000:108c room_persons[1].location_and_room low byte = 0x0a.
+        let rp = &mut self.room_persons[1];
+        rp.location_and_room = (rp.location_and_room & 0xff00) | 0x0a;
+        // = seg000:1091 [contact_distance_related_ds_d5] = 0xff.
+        self.contact_distance_related_ds_d5 = 0xff;
+        // = seg000:1096 call loc_02090 — stamp today as the shipment event
+        //   day and roll the first demand.
+        self.ingame_day_of_last_spice_shipment_event = self.get_ingame_day_in_ax();
+        self.spice_shipment_roll_new_demand();
+        // = seg000:1099 or [bitfield_Paul_events], 1 — visions enabled.
+        self.bitfield_paul_events |= 1;
+        // = seg000:109e/10a1 queue message 1.
+        self.queue_vision_message_without_location(1);
+    }
+
     // = seg000:10a4 callback_game_phase_change_1c — unlock palace_rooms[6]'s
     // east exit, drop a locked-door icon, refresh the compass arrows.
     fn phase_callback_1c(&mut self) {
@@ -265,9 +297,10 @@ impl GameState {
     // ("Oh Paul, how I would like you to be here at a time like this!").
     fn phase_callback_4c_leto_killed(&mut self) {
         // = seg000:1166 inc byte [array_likelihood_of_worm_related_spice_
-        //   mining_troop_events_by_region]. TODO: the troop-event system is
-        //   not modelled.
-        println!("phase_callback_4c_leto_killed: worm-event likelihood bump unported");
+        //   mining_troop_events_by_region] — raise the base worm-event
+        //   probability.
+        self.worm_event_likelihood_by_region[0] =
+            self.worm_event_likelihood_by_region[0].wrapping_add(1);
         // = seg000:116a/116f Jessica to room 2, slot 0x180.
         let rp = &mut self.room_persons[1];
         rp.location_and_room = (rp.location_and_room & 0xff00) | 2;
@@ -317,9 +350,11 @@ impl GameState {
         rp.location_and_room = (rp.location_and_room & 0xff00) | 5;
         // = seg000:11b8 add byte [data_011d0], 0x0c — a byte of the region
         //   table read at seg000:5f15 (troop events). TODO: not modelled.
-        // = seg000:11c6 inc byte [array_likelihood_of_worm_related_...].
-        //   TODO: not modelled (see phase_callback_4c_leto_killed).
-        println!("phase_callback_5c: troop-event pressure bumps unported");
+        println!("phase_callback_5c: seg000:5f15 pressure bump unported");
+        // = seg000:11c6 inc byte [array_likelihood_of_worm_related_...] —
+        //   raise the base worm-event probability.
+        self.worm_event_likelihood_by_region[0] =
+            self.worm_event_likelihood_by_region[0].wrapping_add(1);
         // = seg000:11bd..11c3 data_01156 = get_ingame_day + 3.
         self.illness_plot_armed_after_ingame_day = self.get_ingame_day_in_ax().wrapping_add(3);
     }
@@ -388,9 +423,12 @@ impl GameState {
         //   list (build_room_command_records reads it for the COMM verbs).
         self.comm_sightings.push(sighting);
         self.data_000c8 = self.comm_sightings.len() as u8;
-        // = seg000:2713 inc byte [RES_SMUG_HSQ] — the COMM unread badge
-        //   (DOS keeps it in the byte the SMUG resource-table entry starts
-        //   with); its reader, the COMM screen, is unported.
+        // = seg000:2713 inc byte [for_condit_comms_room_message_count_ds_c9]
+        //   — the COMM unread badge (viewing the message decrements it). An
+        //   unread entry dropped by the overflow path above leaves the badge
+        //   high — mirroring DOS, whose comm_drop_oldest_sighting does not
+        //   touch ds:c9 either.
+        self.comm_unread_count_ds_c9 = self.comm_unread_count_ds_c9.wrapping_add(1);
         // = seg000:2717..2728 the arrival notification.
         if self.game_phase >= 0x38 && self.current_room != 8 {
             self.queue_vision_message_without_location(0x201);
@@ -439,8 +477,8 @@ impl GameState {
     }
 
     // = seg000:2a34 dequeue_vision_message — drop the oldest queued message.
-    // DOS also clears the byte at seg001:118f when the queue drains; its
-    // reader (the vision presentation) is unported.
+    // (DOS also clears the byte at seg001:118f when the queue drains; nothing
+    // reads it, so the port does not carry it.)
     pub(crate) fn dequeue_vision_message(&mut self) {
         if !self.vision_messages.is_empty() {
             self.vision_messages.remove(0);

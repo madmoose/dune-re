@@ -36,6 +36,7 @@ mod locations;
 mod map;
 mod map_renderer;
 mod menu_defs;
+mod messages;
 mod midi;
 mod mouse;
 mod music;

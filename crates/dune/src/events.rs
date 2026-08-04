@@ -687,8 +687,13 @@ impl GameState {
             self.days_left_until_spice_shipment = (diff as u8).wrapping_neg();
             return;
         }
-        // = seg000:20d2 loc_020d2 — roll a new demand. Base quantity =
-        //   (sequence * 150 + 100), saturating to 0xffff on overflow.
+        self.spice_shipment_roll_new_demand();
+    }
+
+    // = seg000:20d2 loc_020d2 — roll a new spice demand (also entered from
+    // the first-vision advance via loc_02090). Base quantity = (sequence *
+    // 150 + 100), saturating to 0xffff on overflow.
+    pub(crate) fn spice_shipment_roll_new_demand(&mut self) {
         let seq = self.spice_shipment_sequence_number;
         self.spice_shipment_sequence_number = seq.wrapping_add(1);
         let base = (seq as u32) * 0x96 + 0x64;

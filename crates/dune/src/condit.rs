@@ -93,8 +93,13 @@ fn condit_var_name(addr: u16) -> Option<(&'static str, bool)> {
         0xac => ("data_000ac", true),
         0xc5 => ("person_marker_base", false),
         0xc6 => ("data_000c6", false),
+        0x24 => ("for_dialogue_enemies_ds_24", false),
         0xc8 => ("data_000c8", false),
+        0xc9 => ("comm_unread_count_ds_c9", false),
         0xe1 => ("data_000e1", false),
+        0xe7 => ("paul_found_unconscious_ds_e7", false),
+        0xe9 => ("for_condit_ds_e9", false),
+        0xeb => ("comm_message_needs_viewing_ds_eb", false),
         0xe8 => ("ui_hud_head_index", false),
         0xea => ("data_000ea", false),
         0xed => ("data_000ed", false),
@@ -201,9 +206,23 @@ impl GameState {
             0xc5 => self.person_marker_base,
             // = seg001:00c6 data_000c6.
             0xc6 => self.data_000c6,
+            // = seg001:0024 for_dialogue_enemies_ds_24 — the COMM message
+            // being viewed: its sighting's location-index byte.
+            0x24 => self.for_dialogue_enemies_ds_24,
             // = seg001:00c8 data_000c8 — DOS's comm_sighting_count byte,
             // kept in step with comm_sightings.
             0xc8 => self.data_000c8,
+            // = seg001:00c9 for_condit_comms_room_message_count_ds_c9 — the
+            // COMM unread badge.
+            0xc9 => self.comm_unread_count_ds_c9,
+            // = seg001:00e7 Paul_found_unconscious_in_desert_ds_e7.
+            0xe7 => self.paul_found_unconscious_ds_e7,
+            // = seg001:00e9 for_condit_ds_e9 — the person id of the COMM
+            // message being presented.
+            0xe9 => self.for_condit_ds_e9,
+            // = seg001:00eb for_condit_presence_of_comms_room_message_which_
+            // needs_viewing_there_ds_eb.
+            0xeb => self.comm_message_needs_viewing_ds_eb,
             // = seg001:00ce..00e6 the nearest-location compass octants
             // (condit_scan_nearest_locations, troops.rs).
             0xce => self.nearest_location.octant,

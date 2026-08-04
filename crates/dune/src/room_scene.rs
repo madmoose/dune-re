@@ -370,10 +370,10 @@ impl GameState {
         // move (a speaker may still be mid-line when a compass button is hit).
         self.lip_sync_stop();
 
-        // = seg000:3f32 mov [data_047a9],0 — clear the comms-room
-        //   "message pending" flag (callback_main_ui_element_20_room_game_area
-        //   jumps to menu_callback_choice_comms_room_message_viewed on it). The
-        //   comms-room flow is not ported, so there is no flag to clear yet.
+        // = seg000:3f32 mov [comm_displayed_message_person],0 — drop the COMM
+        //   message-face display (a game-area click while it is set runs the
+        //   Viewed action); moving rooms abandons it.
+        self.comm_displayed_message_person = 0;
 
         // = seg000:3f37
         self.entering_new_sietch = 0;
@@ -413,8 +413,8 @@ impl GameState {
         // = seg000:3f70 js loc_03fd2 — a special exit (0x80..0xFF): walk out
         //   of the location into the desert.
         if exit & 0x80 != 0 {
-            // = seg000:3fd2 mov [data_000e7],0 — a write-only desert-redraw
-            //   counter (no DOS reader); not modelled.
+            // = seg000:3fd2 mov [Paul_found_unconscious_in_desert_ds_e7],0.
+            self.paul_found_unconscious_ds_e7 = 0;
             // = seg000:3fd7/3fd9 xor dh,dh; neg dl — bp = -exit, the
             //   desert_step_deltas index (0xff..0xfb -> 1..5).
             let bp = exit.wrapping_neg() as usize;

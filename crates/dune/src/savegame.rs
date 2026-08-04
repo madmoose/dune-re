@@ -338,6 +338,12 @@ impl GameState {
         // = seg001:00c8 — one byte in DOS: the comm sighting count (and the
         // comms-room "message queued" flag the port carries as data_000c8).
         w8(b, 0x00c8, self.comm_sightings.len() as u8);
+        // = seg001:00c9 the COMM unread badge.
+        w8(b, 0x00c9, self.comm_unread_count_ds_c9);
+        // = seg001:0024 / 00e7 / 00eb the COMM / vision condit bytes.
+        w8(b, 0x0024, self.for_dialogue_enemies_ds_24);
+        w8(b, 0x00e7, self.paul_found_unconscious_ds_e7);
+        w8(b, 0x00eb, self.comm_message_needs_viewing_ds_eb);
         // = seg001:00ca..00e6 the five nearest-location triples
         // (condit_scan_nearest_locations).
         for (base, t) in [
@@ -483,6 +489,12 @@ impl GameState {
         w8(b, 0x11bb, self.spice_shipment_unpaid);
         w8(b, 0x11bc, self.harkonnen_raid_suppress_once);
 
+        // = seg001:1141 the worm-event likelihood table (index 0 mutates with
+        // the game phase).
+        for (k, v) in self.worm_event_likelihood_by_region.iter().enumerate() {
+            w8(b, 0x1141 + k, *v);
+        }
+
         w16(b, 0x11c5, self.travel_destination_ptr);
         w8(b, 0x11c7, self.travel_heading);
         w8(b, 0x11c8, self.travel_heading_mode);
@@ -587,6 +599,10 @@ impl GameState {
         self.data_000c6 = r8(b, 0x00c6);
         let comm_count = r8(b, 0x00c8);
         self.data_000c8 = comm_count;
+        self.comm_unread_count_ds_c9 = r8(b, 0x00c9);
+        self.for_dialogue_enemies_ds_24 = r8(b, 0x0024);
+        self.paul_found_unconscious_ds_e7 = r8(b, 0x00e7);
+        self.comm_message_needs_viewing_ds_eb = r8(b, 0x00eb);
         for (base, t) in [
             (0x00ca, &mut self.nearest_location),
             (0x00d0, &mut self.nearest_village),
@@ -706,6 +722,9 @@ impl GameState {
         }
 
         self.ingame_day_of_last_spice_shipment_event = r16(b, 0x118d);
+        for (k, v) in self.worm_event_likelihood_by_region.iter_mut().enumerate() {
+            *v = r8(b, 0x1141 + k);
+        }
         self.spice_shipment_unpaid = r8(b, 0x11bb);
         self.harkonnen_raid_suppress_once = r8(b, 0x11bc);
 

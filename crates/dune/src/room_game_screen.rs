@@ -52,16 +52,20 @@ const CMD_WAIT_FOR_MORNING: MenuItem = item(
     GameState::menu_callback_choice_wait_for_morning,
 );
 // = 21e8: "VIEW NEW MESSAGES" — the palace communications-room verb
-// (bh==1, dl==8) for reading newly-received transmissions; gated on
-// data_000c8 != 0 (a new message is queued).
-const CMD_VIEW_NEW_MESSAGES: MenuItem = item(cmd::VIEW_NEW_MESSAGES, 0x283a, |_, _, _| {
-    println!("menu: VIEW NEW MESSAGES (seg000:283a) not ported")
-});
+// (bh==1, dl==8) for reading newly-received transmissions; greyed while the
+// unread badge (ds:c9) is 0.
+const CMD_VIEW_NEW_MESSAGES: MenuItem = item(
+    cmd::VIEW_NEW_MESSAGES,
+    0x283a,
+    GameState::menu_callback_choice_comms_room_view_new_messages,
+);
 // = 21ec: "Messages already seen" — the communications-room companion
 // verb to CMD_VIEW_NEW_MESSAGES (replay previously-viewed messages).
-const CMD_MESSAGES_ALREADY_SEEN: MenuItem = item(cmd::MESSAGES_ALREADY_SEEN, 0x283e, |_, _, _| {
-    println!("menu: Messages already seen (seg000:283e) not ported")
-});
+const CMD_MESSAGES_ALREADY_SEEN: MenuItem = item(
+    cmd::MESSAGES_ALREADY_SEEN,
+    0x283e,
+    GameState::menu_callback_choice_comms_room_messages_already_seen,
+);
 // = 21f0: "LOOK AT MIRROR" — the palace bedroom verb (bh==1, dl==9; Paul's
 // room with the mirror).
 const CMD_LOOK_AT_MIRROR: MenuItem =
@@ -373,8 +377,13 @@ impl GameState {
         self.data_047aa = 0;
         // = seg000:2dcd bp = ui_draw_room_command_panel; draw it offscreen.
         self.gfx_call_bp_with_front_buffer_as_screen(|s| s.ui_draw_room_command_panel());
+        self.draw_room_scene_and_present();
+    }
 
-        // = seg000:2dd3 loc_02dd3.
+    // = seg000:2dd3 callback_transition_02dd3 — the scene render + reveal tail
+    // of the reload, also entered directly (skipping the 2dbf head) by
+    // comm_return_to_room (seg000:29c7).
+    pub(crate) fn draw_room_scene_and_present(&mut self) {
         if self.night_attack_stage != 0 {
             // = seg000:2dda the scripted night-attack scene branch.
             self.data_04732 = 0;
@@ -524,8 +533,27 @@ impl GameState {
     // (read_command_menu_record_for_slot), and unless it has no handler or is
     // greyed, dispatch it (DOS `jmp bx`).
     pub(crate) fn dispatch_command_menu_slot(&mut self, slot: usize) {
-        // = seg000:d454 read_command_menu_record_for_slot
-        let Some(rec) = self.active_menu_records().get(slot).copied() else {
+        // = seg000:d45d the " Others..." row (data_0dce5): with more records
+        // ahead (data_0dce4 sign set) advance a page (loc_0d423, skip +=
+        // 0x10 = 4 records); otherwise a scrolled menu rewinds to page one
+        // (loc_0d429, skip = 0); an unscrolled dead row does nothing (bx=0).
+        if slot as u8 == self.command_menu_more_slot {
+            let more = self.command_menu_more_state;
+            let menu_ref = self.get_active_menu_ref();
+            if more & 0x80 != 0 {
+                self.menu_buffer_mut(menu_ref).skip += 4;
+            } else if more > 0 {
+                self.menu_buffer_mut(menu_ref).skip = 0;
+            } else {
+                return;
+            }
+            self.redraw_active_command_menu();
+            return;
+        }
+        // = seg000:d454 read_command_menu_record_for_slot — records + skip +
+        // slot*4.
+        let index = self.menu_buffer(self.get_active_menu_ref()).skip as usize + slot;
+        let Some(rec) = self.active_menu_records().get(index).copied() else {
             return;
         };
         // = seg000:d448 or bx,bx; jz — no handler.
@@ -537,9 +565,10 @@ impl GameState {
             return;
         }
         // = seg000:d451 jmp bx — run the record's bound callback with the
-        // record's text id (DOS's ax at the jmp) and the clicked slot (DOS's
-        // cx, loaded by the per-row trampolines d443..d42f).
-        (rec.callback)(self, rec.text_id, slot);
+        // record's text id (DOS's ax at the jmp) and the record's index in
+        // the buffer (DOS's cx is the raw slot; the port folds the skip in
+        // so callbacks that use the index address the right record).
+        (rec.callback)(self, rec.text_id, index);
     }
 
     // = seg000:0f48 menu_callback_choice_wait_for_evening — the plain-room "WAIT
@@ -675,7 +704,7 @@ impl GameState {
     // (subtitle_restore_prior) — subtitle state not modelled yet. The room path's
     // pending_room_action-gated transition-reveal variant (loc_09898, a wiped
     // re-render + leave scan that lets an evicted companion speak) is not ported.
-    fn menu_npc_actions_cleanup(&mut self) {
+    pub(crate) fn menu_npc_actions_cleanup(&mut self) {
         // = seg000:97cf call lip_sync_stop — stop the speaker's voice lip-sync
         //   (also patching the TALK TO ME verb template back to its idle text
         //   for the next dialogue).
@@ -923,7 +952,13 @@ impl GameState {
     // click. When the look-away overlay is the active menu, pop it and return
     // to the room (menu_callback_choice_palace_look_away_from_mirror).
     pub(crate) fn game_area_click(&mut self) {
-        // = seg000:9422 cmp data_047a9,0 (the smuggler branch) is not modelled.
+        // = seg000:9422/9424 a COMM message face is displayed
+        // (comm_displayed_message_person != 0): the game-area click acts as
+        // the Viewed verb.
+        if self.comm_displayed_message_person != 0 {
+            self.menu_callback_choice_comms_room_message_viewed(0, 0);
+            return;
+        }
         // = seg000:9427 call get_active_screen_element; 942a cmp bp,20c2h.
         if self.get_active_menu_ref() != MenuRef::MenuPalaceMirrorRoom {
             // TODO: the other game-area click branches (dialogue / map modes,
@@ -1274,7 +1309,9 @@ impl GameState {
     // location_and_room, game phase, ornithopter count, smuggler flag, and
     // time-of-day. The DOS `xor ax,ax; stosw` terminator is the empty Vec tail.
     pub(crate) fn build_room_command_records(&mut self) {
-        // = seg000:2efd di=1f0fh; xor al,al; stosb — the empty header skip byte.
+        // = seg000:2efd di=1f0fh; xor al,al; stosb — reset the header skip
+        // byte: a rebuilt verb list always starts unscrolled.
+        self.command_menu_buf.skip = 0;
         let mut recs: Vec<MenuItem> = Vec::new();
         // = seg000:2f03 bx = data_00006 (location_appearance); dx = location_and_room.
         let bx = self.location_appearance;
@@ -1309,19 +1346,26 @@ impl GameState {
             } else if bh == 1 {
                 // = seg000:2f58 loc_02f58 — the bh==1 palace branch.
                 if dl == 8 && self.data_000c8 != 0 {
-                    // = seg000:2f62 palace room 8 is the communications room
-                    // with a new transmission queued (data_000c8 != 0). The
-                    // verbs are the message viewer ("VIEW NEW MESSAGES" /
-                    // "Messages already seen").
-                    // = seg000:2f6d ch picks a sprite (27h/26h/28h via
-                    // RES_SMUG_HSQ and data_047a9) and stores it into
-                    // palace_rooms[7]; the verbs grey off the RES_SMUG_HSQ
-                    // loaded flag (treated as not loaded here) and data_000c8.
-                    // TODO: port the palace_rooms[7] sprite side-effect + the
-                    // RES_SMUG_HSQ / data_047a9 inputs.
-                    let messages_loaded = false;
-                    recs.push(CMD_VIEW_NEW_MESSAGES.grayed_if(!messages_loaded));
-                    recs.push(CMD_MESSAGES_ALREADY_SEEN.grayed_if(!messages_loaded));
+                    // = seg000:2f62 palace room 8 is the communications room:
+                    // the message-viewer verbs appear once any sighting is
+                    // recorded (comm_sighting_count != 0).
+                    // = seg000:2f6d..2f83 the comm console sprite for the
+                    // room scene: 0x26 idle, 0x27 with unread messages
+                    // (ds:c9 != 0), 0x28 while a message face is displayed
+                    // (comm_displayed_message_person != 0).
+                    let unread = self.comm_unread_count_ds_c9;
+                    let mut ch = if unread != 0 { 0x27 } else { 0x26 };
+                    if self.comm_displayed_message_person != 0 {
+                        ch = 0x28;
+                    }
+                    self.scene_records[7].background = ch;
+                    // = seg000:2f73..2f8a VIEW NEW MESSAGES greys off the
+                    // unread badge (cmp cl,1; sbb -> 0x4000 when ds:c9 == 0).
+                    recs.push(CMD_VIEW_NEW_MESSAGES.grayed_if(unread == 0));
+                    // = seg000:2f8d..2f97 Messages already seen greys while
+                    // every sighting is still unread (cl >= count: none
+                    // viewed yet).
+                    recs.push(CMD_MESSAGES_ALREADY_SEEN.grayed_if(unread >= self.data_000c8));
                 } else if dl == 9 {
                     // = seg000:2f9e si=21f0h; "LOOK AT MIRROR" — palace room 9
                     // is Paul's bedroom with the mirror.
@@ -1581,10 +1625,12 @@ impl GameState {
     }
 
     // = seg000:d397 redraw_active_command_menu — paint the active verb menu
-    // (the active element's record buffer) into HUD rows 7..11. Up to five slots are drawn; a
-    // sixth-or-later verb collapses into the 0xa0 "more" arrow in slot 4, and any
-    // slots past the last record are filled blank (clearing stale verbs). Falls
-    // into highlight_hovered_text_action_item (loc_0d410) so the slot under the
+    // (the active element's record buffer) into HUD rows 7..11, honouring the
+    // menu's skip byte (the scroll page): up to five records from `skip` on
+    // are drawn; when the buffer is scrolled or more records follow, the last
+    // useful slot shows the 0xa0 " Others..." row instead. Slots past the
+    // last record are filled blank (clearing stale verbs). Falls into
+    // highlight_hovered_text_action_item (loc_0d410) so the slot under the
     // pointer immediately gets the inverse highlight.
     pub(crate) fn redraw_active_command_menu(&mut self) {
         // = seg000:d397 mov [index_of_last_hovered_action_item], 0ffh —
@@ -1594,23 +1640,52 @@ impl GameState {
         // Snapshot the active buffer's records: the per-slot draw below needs
         // `&mut self`, so the walk reads a local copy (a handful of 4-byte
         // records).
-        let recs = self.active_menu_records().to_vec();
+        let menu = self.menu_buffer(self.get_active_menu_ref());
+        let skip = menu.skip as usize;
+        let recs = menu.records.clone();
         let n = recs.len();
-        // = seg000:d3b5 walk the records, one per slot (cl = 0..4).
-        for slot in 0..5u8 {
-            let i = slot as usize;
-            // = seg000:d3b9 a 0 record (past the end) draws a blank slot.
-            // = seg000:d3be slot 4 with more records behind it shows the "more"
-            // arrow (text_id 0xa0); the skip-byte path that also forces it is the
-            // empty header here, so only the overflow case applies.
-            let text_id = if i >= n {
-                0
-            } else if slot == 4 && n > 5 {
-                0xa0
-            } else {
-                recs[i].text_id
-            };
+        // = seg000:d3a3/d3a4 sample the skip byte into data_0dce4 (the DOS
+        // byte offset is skip * 4); d3ac/d3b0 reset the drawn count and the
+        // " Others..." slot.
+        self.command_menu_more_state = (skip as u8) << 2;
+        self.command_menu_more_slot = 0xff;
+        self.command_menu_slot_count = 0;
+        // = seg000:d3b5 walk the records from the skip point, one per slot.
+        let mut i = skip;
+        let mut slot = 0u8;
+        while slot < 5 {
+            if i >= n || recs[i].text_id == 0 {
+                // = seg000:d3ef loc_0d3ef — records exhausted: a scrolled menu
+                // still shows " Others..." here (it rewinds to page one), then
+                // the remaining slots draw blank.
+                if self.command_menu_more_state != 0 {
+                    self.command_menu_more_slot = slot;
+                    self.command_menu_slot_count += 1;
+                    self.draw_command_menu_item(slot, 0xa0);
+                    slot += 1;
+                }
+                // = seg000:d403 loc_0d403 — the blank filler.
+                while slot < 5 {
+                    self.draw_command_menu_item(slot, 0);
+                    slot += 1;
+                }
+                break;
+            }
+            let mut text_id = recs[i].text_id;
+            // = seg000:d3bb..d3d5 slot 4 with the menu scrolled or another
+            // record behind it collapses into the " Others..." row; bit 0x80
+            // in data_0dce4 records that more records follow (advance on
+            // click rather than rewind).
+            if slot == 4 && (self.command_menu_more_state != 0 || i + 1 < n) {
+                self.command_menu_more_state |= 0x80;
+                self.command_menu_more_slot = slot;
+                text_id = 0xa0;
+            }
+            // = seg000:d3de inc data_0dce8.
+            self.command_menu_slot_count += 1;
             self.draw_command_menu_item(slot, text_id);
+            i += 1;
+            slot += 1;
         }
         // = seg000:d3ed jmp loc_0d410; loc_0d410 jmp highlight_hovered_text_action_item.
         // DOS falls through so the slot under the pointer is highlighted as part
@@ -1635,11 +1710,9 @@ impl GameState {
     // (data_04774) early return are not modelled.
     // Returns true when a slot was repainted so game_loop can re-present.
     pub(crate) fn highlight_hovered_text_action_item(&mut self) -> bool {
-        // = seg000:d3ac data_0dce8 = the slot count painted by the preceding
-        // redraw — at most five record slots, plus one for the "more" arrow
-        // when n > 5 (slot 4 already holds it; the count stays at five).
-        let n = self.active_menu_records().len();
-        let slot_count = n.min(5) as u8;
+        // = data_0dce8 — the slot count painted by the preceding redraw (the
+        // visible records plus the " Others..." row, at most five).
+        let slot_count = self.command_menu_slot_count;
         if slot_count == 0 {
             return false;
         }
@@ -1706,17 +1779,18 @@ impl GameState {
     // = seg000:d454 loc_0d454 — resolve the text_id painted into the
     // requested slot. Mirrors the slot-selection in redraw_active_command_menu
     // so the un-highlight / highlight repaint uses the same string the slot
-    // originally held (including the 0xa0 "more" arrow at slot 4).
+    // originally held (including the 0xa0 " Others..." row the last redraw
+    // recorded in data_0dce5).
     fn slot_text_id(&self, slot: u8) -> u16 {
-        let i = slot as usize;
-        let recs = self.active_menu_records();
-        let n = recs.len();
-        if i >= n {
-            0
-        } else if slot == 4 && n > 5 {
-            0xa0
-        } else {
-            recs[i].text_id
+        // = seg000:d45d cmp cl,[data_0dce5]; jz loc_0d475.
+        if slot == self.command_menu_more_slot {
+            return 0xa0;
+        }
+        let menu = self.menu_buffer(self.get_active_menu_ref());
+        // = seg000:d463..d46d si = records + skip + slot*4.
+        match menu.records.get(menu.skip as usize + slot as usize) {
+            Some(rec) => rec.text_id,
+            None => 0,
         }
     }
 
@@ -2053,12 +2127,6 @@ impl GameState {
     // dialogue line if its condition matches and, having spoken, install the
     // person's dialogue verb menu. data_047a7 latches after the first person
     // speaks so only one interrupts the move.
-    //
-    // MINIMAL PORT: the present path (present_room_person_dialogue) and the
-    // fall-through into install_pending_room_action_menu (loc_03551) are
-    // modelled. Deferred: the messages_02aaf queued-message path taken when no
-    // line is selected (seg000:3533). The room-leave scan runs with
-    // pending_room_action == 1, so loc_03551 takes its speaker branch.
     fn npc_auto_dialogue(&mut self, _index: u8, entry: &RoomPerson) {
         // = seg000:3520 cmp byte [data_047a7], 0; jnz ret — someone already spoke.
         if self.data_047a7 != 0 {
@@ -2066,14 +2134,29 @@ impl GameState {
         }
         // = seg000:3527 al = entry.person_index; call present_room_person_dialogue — present this
         //   person's topic-4 auto-dialogue line if a condition selects one.
-        // = seg000:3531 jnb loc_03542 — only continue to the menu install when a
-        //   line was actually spoken; otherwise DOS takes the messages_02aaf path
-        //   (not modelled), which does not install the verb menu for our case.
+        // = seg000:3531 jnb loc_03542 — continue to the menu install when a
+        //   line was spoken.
         if !self.present_room_person_line(entry.person_index) {
-            return;
+            // = seg000:3533..353d no line: look for a queued vision message
+            //   from this person about the current location
+            //   (find_vision_message_from_person); none -> loc_035ac (ret).
+            let speaker = self.current_lip_sync_resource_id as u8;
+            let loc_ptr = self.current_location_ptr_word();
+            let Some((id, loc)) = self.find_vision_message_from_person(speaker, loc_ptr) else {
+                return;
+            };
+            // = seg000:353f call present_vision_message — the person delivers
+            //   the queued message instead.
+            self.present_vision_message(id, loc);
         }
-        // = seg000:3542..354c messages_02a51 (the "<person> is here" queued
-        //   message) is not modelled; fall through into loc_03551.
+        // = seg000:3542..3549 loc_03542 — purge the delivered messages: the
+        //   speaker has said their piece in person, so their queued reports
+        //   (for this location, when class 0x0f) are moot.
+        let speaker = self.current_lip_sync_resource_id as u8;
+        let loc_ptr = self.current_location_ptr_word();
+        self.purge_vision_messages_of_class(speaker, loc_ptr);
+        // = seg000:354c mov byte [Paul_found_unconscious_in_desert_ds_e7], 0.
+        self.paul_found_unconscious_ds_e7 = 0;
         self.install_pending_room_action_menu();
     }
 

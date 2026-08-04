@@ -1961,10 +1961,17 @@ impl GameState {
     // start at DIALOGUE[244], the block every contacted troop speaks from.
     // Returns whether a line was presented (DOS's carry-clear exit).
     fn map_present_troop_contact_line(&mut self) -> bool {
-        // = seg000:9719 cmp related_to_contacting_troops_ds_4c,0; js — a troop
-        //   answering from afar queues no message; one in range queues the
-        //   "<troop> is here" message for its location (al = 0x0f, di =
-        //   [si+4], messages_02a51). The message queue is not ported.
+        // = seg000:9719..9729 in contact range (ds:4c sign clear), purge the
+        //   troop location's queued class-0x0f vision messages
+        //   (purge_vision_messages_of_class, al = 0x0f, di = the contacted
+        //   troop's location) — the player is hearing from the troop
+        //   directly, so its queued reports are moot.
+        if self.contacting_troops_ds_4c & 0x80 == 0 {
+            if let Some(ti) = self.map_contact_troop {
+                let loc = self.troops[ti].offset_of_location;
+                self.purge_vision_messages_of_class(0x0f, loc);
+            }
+        }
         // = seg000:972c call loc_09f82 — the subtitle font setup.
         self.font_state.color = 0x00f0;
         self.font_select_tall_font();
