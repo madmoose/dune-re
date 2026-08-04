@@ -560,6 +560,10 @@ impl GameState {
         if self.voc_pcm_playing {
             return;
         }
+        // Port-only override; see GameState::let_voices_finish.
+        if self.let_voices_finish && self.pcm_player.is_playing() {
+            return;
+        }
         // = seg000:ab64/ab67 call check_pcm_enabled; jz loc_0ab44. The
         //   duck_music_and_start_narration_voice_clip entry tests this too,
         //   but the three direct callers (seg000:023d, 261c, 4340) come

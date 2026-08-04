@@ -1065,6 +1065,12 @@ impl GameState {
         if self.voc_pcm_playing {
             return;
         }
+        // Port-only override (--let-voices-finish): treat a clip the mixer is
+        // still playing as blocking, which the original's flag does not. See
+        // GameState::let_voices_finish.
+        if self.let_voices_finish && self.pcm_player.is_playing() {
+            return;
+        }
         // = seg000:ab1a/ab1d call check_pcm_enabled; jz loc_0ab44.
         if !self.check_pcm_enabled() {
             return;
@@ -1736,6 +1742,55 @@ mod tests {
             Some("SN6.HSQ"),
             "the gate is open after the teardown, so the effect cuts the clip"
         );
+    }
+
+    // --let-voices-finish, the port-only override: the same sequence as the
+    // test above, except a clip the mixer is still playing keeps the gate shut
+    // so the effect never starts and never cuts it. Asset-gated:
+    //   cargo test -p dune -- --ignored let_voices_finish
+    #[test]
+    #[ignore = "needs assets/DUNE.DAT"]
+    fn let_voices_finish_holds_the_effect_off_a_live_clip() {
+        let dat_path = concat!(env!("CARGO_MANIFEST_DIR"), "/../../assets/DUNE.DAT");
+        let Ok(dat_file) = DatFile::open(dat_path) else {
+            eprintln!("skipping: {dat_path} not found");
+            return;
+        };
+        let (tx, _rx) = mpsc::sync_channel(64);
+        let mut game = GameState::new(dat_file, tx);
+        game.set_headless();
+        game.settings_flags |= 0x1;
+        game.let_voices_finish = true;
+
+        // The declaration has already been cleared by a teardown, exactly as
+        // in the faithful case — but the mixer is still playing.
+        game.voc_pcm_playing = false;
+        // Silence the mixer before enabling it: the override can only be
+        // exercised with real playback running, and a test suite should not
+        // put engine noise through the speakers.
+        game.pcm_player.set_volume(0);
+        game.pcm_player.set_enabled(true);
+        let voc = game
+            .dat_file
+            .read("SN6.HSQ")
+            .expect("a .voc to stand in for a voice");
+        assert!(
+            game.pcm_player.start_playback(&voc[26..], 0),
+            "the mixer is playing"
+        );
+
+        game.audio_start_voc("SN7.VOC");
+        assert!(
+            game.audio_current_sfx.is_none(),
+            "the override keeps the effect from cutting an audible clip"
+        );
+
+        // With the override off, the same state lets the effect through — the
+        // original behaviour the flag alone produces.
+        game.let_voices_finish = false;
+        game.audio_start_voc("SN7.VOC");
+        assert_eq!(game.audio_current_sfx.as_deref(), Some("SN7.VOC"));
+        game.pcm_player.set_enabled(false);
     }
 
     // Duncan's "Here are our current stocks of spice." (phrase 0x08e8) fires

@@ -259,6 +259,19 @@ pub struct GameState {
     // why a sound effect can cut a voice that is still audible.
     pub(crate) voc_pcm_playing: bool,
 
+    // Port-only, NOT the original behaviour: when set, a sound effect will not
+    // start while the mixer is still playing a voice, so an audible line is
+    // never cut short by one. The game gates on voc_pcm_playing above, which a
+    // teardown clears early — that is why a companion's refusal line is cut by
+    // the ornithopter engine loop, and how much survives depends on machine
+    // speed. This makes the gate mean what it looks like it means instead.
+    //
+    // It only covers effects. An explicit pcm_stop_voc still stops a clip, so
+    // routes that reach seg000:478c quickly (the map menu's GO THERE verb,
+    // which never arms the takeoff animation) still truncate the line.
+    // Wired to --let-voices-finish; off by default.
+    pub let_voices_finish: bool,
+
     pub(crate) audio_current_sfx: Option<String>,
     pub(crate) audio_current_sfx_data: Vec<u8>,
 
@@ -2160,6 +2173,7 @@ impl GameState {
 
             pcm_player,
             voc_pcm_playing: false,
+            let_voices_finish: false,
             audio_current_sfx: None,
             audio_current_sfx_data: Vec::new(),
 

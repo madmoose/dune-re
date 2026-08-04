@@ -1357,6 +1357,15 @@ struct Args {
     #[arg(long, value_enum, default_value_t = Toggle::On)]
     pcm: Toggle,
 
+    /// Port-only deviation: stop sound effects from cutting off a voice line
+    /// that is still audible. The original gates effects on a flag its own
+    /// teardowns clear early (seg000:ab18 reading seg001:dc2b), so e.g. the
+    /// ornithopter engine loop truncates a companion's refusal line — by a
+    /// machine-speed-dependent amount, which is why period recordings differ.
+    /// Off by default so the port behaves like the game.
+    #[arg(long, value_enum, default_value_t = Toggle::Off)]
+    let_voices_finish: Toggle,
+
     /// The DUNE.DAT data file.
     dat_file: PathBuf,
 }
@@ -1432,6 +1441,7 @@ fn main() {
         // not detecting a PCM / MIDI card). These gate both the game logic and the
         // actual audio backends, which the intro drives directly.
         game.set_pcm_enabled(args.pcm.is_on());
+        game.let_voices_finish = args.let_voices_finish.is_on();
         game.set_music_enabled(args.music != MusicMode::Off);
 
         game.start(skip_intro);
