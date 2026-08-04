@@ -2083,16 +2083,18 @@ pub(crate) const LOCATIONS: [Location; 70] = [
 
 impl GameState {
     // = seg000:5d36 location_is_Atreides_05d36 — carry set (true) when the
-    // location is an Atreides holding: a developed appearance (>= 0x28) with
-    // status bit 3 (Atreides-held). Every DOS caller reads carry-set as
-    // "friendly": a safe orni destination (seg000:4196), no battle possible
-    // (627e), the minimal map popup (6252), attack/espionage orders cancel
-    // on arrival (83a7), captured troops speak for themselves (7a7d), and
-    // the Harkonnen spice production sums the locations this REJECTS (1cda).
-    // Beware the DOS call sites' `jb` = carry = TRUE branch when porting.
+    // location reads as friendly: any sietch/village-class location
+    // (appearance < 0x28 — the `jb` early-out returns with the cmp's carry
+    // still SET), or a developed location (appearance >= 0x28) with status
+    // bit 3 (Atreides-held). Every DOS caller reads carry-set as "friendly":
+    // a safe orni destination (seg000:4196), no battle possible (627e), the
+    // minimal map popup (6252), attack/espionage orders cancel on arrival
+    // (83a7), captured troops speak for themselves (7a7d), and the Harkonnen
+    // spice production sums the locations this REJECTS (1cda). Beware the
+    // DOS call sites' `jb` = carry = TRUE branch when porting.
     pub(crate) fn location_is_atreides(&self, location_index: usize) -> bool {
         let loc = &self.locations[location_index];
-        loc.appearance >= 0x28 && loc.status & 8 != 0
+        loc.appearance < 0x28 || loc.status & 8 != 0
     }
 
     // = seg000:6231 get_location_type_string_offset — classify a location's

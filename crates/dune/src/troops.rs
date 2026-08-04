@@ -2897,9 +2897,11 @@ impl GameState {
         self.troops[ti].gps_coordinates_1 = self.locations[li].map_x as u16;
         self.troops[ti].gps_coordinates_2 = self.locations[li].map_y as u16;
         // = seg000:837c..8385 a battle-flagged (status bit 1) or hostile
-        //   (non-Atreides) location resolves the arrival (loc_08387: the
-        //   espionage reveal / battle won paths); the 8385 jb routes an
-        //   Atreides holding to the loc_083a7 mission-cancel path instead.
+        //   location resolves the arrival (loc_08387: the espionage reveal /
+        //   battle won / notify-residents paths); the 8385 jb routes a
+        //   friendly location — any sietch, or an Atreides-held developed one
+        //   (location_is_Atreides_05d36) — to the loc_083a7 mission-cancel /
+        //   peaceful-settle path instead.
         if self.locations[li].status & 2 != 0 || !self.location_is_atreides(li) {
             self.troop_settle_into_location(ti);
             if occ_low == 5 {
@@ -3407,6 +3409,68 @@ mod tests {
             game.locations[li].equipment.ornithopters,
             orni_before + 1,
             "the ornithopter folded into the location"
+        );
+    }
+
+    // A troop arriving at a friendly sietch takes the peaceful loc_083a7
+    // path: location_is_Atreides_05d36 returns carry SET for any location
+    // with appearance < 0x28 straight from its cmp/jb short-circuit
+    // (regardless of the Atreides-held status bit), so the arrival settles
+    // without the hostile-arrival resident notification (seg000:83fd, which
+    // stops the miners and flips everyone else to defending). Asset-gated:
+    //   cargo test -p dune --bin dune -- --ignored friendly_sietch
+    #[test]
+    #[ignore = "needs assets/DUNE.DAT"]
+    fn arrival_at_friendly_sietch_settles_peacefully() {
+        let dat_path = concat!(env!("CARGO_MANIFEST_DIR"), "/../../assets/DUNE.DAT");
+        let Ok(dat_file) = DatFile::open(dat_path) else {
+            eprintln!("skipping: {dat_path} not found");
+            return;
+        };
+        let (tx, _rx) = mpsc::sync_channel(64);
+        let mut game = GameState::new(dat_file, tx);
+        game.set_headless();
+        game.start(true);
+
+        // A plain unrallied sietch (appearance < 0x28, no battle flag, no
+        // Atreides-held bit) with one hired spice-mining resident as the
+        // chain head.
+        let li = 20;
+        game.locations[li].appearance = 0x01;
+        game.locations[li].status = 0;
+        let dest_ptr = crate::locations::location_ptr_from_index(li);
+        let tj = 5;
+        game.troops[tj].occupation = 1;
+        game.troops[tj].bitfield_10 = 0;
+        game.troops[tj].offset_of_location = dest_ptr;
+        game.troops[tj].next_troop_id = 0;
+        game.troops[tj].position = 1;
+        game.locations[li].troop_id = game.troops[tj].troop_id;
+
+        // The arriving troop: moving (bit 6), class 2, no equipment.
+        let ti = 0;
+        game.troops[ti].occupation = 0x42;
+        game.troops[ti].bitfield_10 = 0;
+        game.troops[ti].dissatisfaction_and_speech = 0;
+        game.troops[ti].equipment = 0;
+        game.troops[ti].offset_of_location = dest_ptr;
+
+        game.troop_arrive_at_destination(ti);
+
+        // The peaceful settle: the arrival joined the chain and stopped
+        // moving, and the resident miner was left alone (the hostile path
+        // would have stop-worked it to occupation 0x11).
+        assert_eq!(
+            game.troops[ti].occupation, 2,
+            "arrival settled, moving bit gone"
+        );
+        assert_eq!(
+            game.troops[tj].next_troop_id, game.troops[ti].troop_id,
+            "arrival appended after the resident"
+        );
+        assert_eq!(
+            game.troops[tj].occupation, 1,
+            "the resident miner keeps working — a friendly sietch arrival is not an attack"
         );
     }
 
