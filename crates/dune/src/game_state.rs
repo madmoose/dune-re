@@ -248,6 +248,17 @@ pub struct GameState {
     // loc_0ab35) instead of stopping the voice and opening it again. DOS keys
     // this on the resource index; the port keys it on the resource name, which
     // is what its callers pass.
+    // = seg001:dc2b _byte_2D0DB_is_voc_pcm_playing — "a voice was started and
+    // has not yet been declared finished". Deliberately NOT a mirror of the
+    // mixer: lip_sync_stop clears it (seg000:a7b9) while the clip is still
+    // being transferred, and pcm_stop_voc (seg000:ac14) leaves it set. Set at
+    // the talking-head voice start (seg000:a768); DOS also sets it on two
+    // paths the port does not have (seg000:a567's blocking narration and the
+    // seg000:b1f5 video transition). audio_start_voc and
+    // start_narration_voice_clip gate on THIS, not on real playback, which is
+    // why a sound effect can cut a voice that is still audible.
+    pub(crate) voc_pcm_playing: bool,
+
     pub(crate) audio_current_sfx: Option<String>,
     pub(crate) audio_current_sfx_data: Vec<u8>,
 
@@ -2148,6 +2159,7 @@ impl GameState {
             midi,
 
             pcm_player,
+            voc_pcm_playing: false,
             audio_current_sfx: None,
             audio_current_sfx_data: Vec::new(),
 

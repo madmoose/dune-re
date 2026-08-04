@@ -1028,6 +1028,9 @@ impl GameState {
         self.pcm_player.stop();
         let baseline = self.pcm_player.samples_played();
         let total = voc.pcm.len() as u64;
+        // = seg000:a768 mov [is_voc_pcm_playing], 1 — declared playing, and it
+        //   stays declared until a teardown says otherwise.
+        self.voc_pcm_playing = true;
         self.pcm_player.start_playback(&data, 0);
 
         // = seg000:a774/a77a — DOS seeds the next mouth-frame time from the
@@ -1054,13 +1057,12 @@ impl GameState {
     // head this needs no lip-sync stream. Silently does nothing if the file is
     // absent or has no audio.
     pub fn audio_start_voc(&mut self, name: &str) {
-        // = seg000:ab15/ab18 call is_voc_pcm_playing; jnz loc_0ab44 — an
-        //   effect never interrupts a clip that is still playing; it simply
-        //   does not start. The ornithopter takeoff leans on this: a companion
-        //   who declines the flight is still speaking when SN6 would start
-        //   (seg000:47f6), so the engine loop stays silent and the line runs
-        //   to the pcm_stop_voc that ends the departure (seg000:478c).
-        if self.pcm_player.is_playing() {
+        // = seg000:ab15/ab18 call is_voc_pcm_playing; jnz loc_0ab44 — the gate
+        //   is the DECLARED flag, not whether audio is actually coming out.
+        //   Any teardown that ran lip_sync_stop has already cleared it, so an
+        //   effect started after one will happily stop a clip mid-transfer via
+        //   the pcm_stop_voc below.
+        if self.voc_pcm_playing {
             return;
         }
         // = seg000:ab1a/ab1d call check_pcm_enabled; jz loc_0ab44.
@@ -1275,20 +1277,26 @@ impl GameState {
         // mouth stream. The playing flag (head.speaking = _byte_2D0DB) is read
         // here for the a7b4 gate and cleared in the same step (= seg000:a7b9
         // call set_voc_pcm_is_not_playing).
-        let was_speaking = self.talking_head.as_mut().is_some_and(|head| {
+        if let Some(head) = self.talking_head.as_mut() {
             head.voc_lipsync.clear();
-            std::mem::take(&mut head.speaking)
-        });
+            head.speaking = false;
+        }
         // = seg000:a7b1 call mark_talk_to_me_verb_idle — flip the verb to its
         // quoted idle variant (0x9f '" TALK TO ME "') and redraw it in place.
         self.set_talk_to_me_verb_text(0x9f);
         // = seg000:a7b4 call is_voc_pcm_playing; a7b7 jz ret.
-        if !was_speaking {
+        if !self.voc_pcm_playing {
             return;
         }
-        // = seg000:a7b9/a7bc set_voc_pcm_is_not_playing + close_pcm_voice_file_
-        // handle — bookkeeping only (the flag above is already cleared, and the
-        // port holds no file handle). The clip keeps playing.
+        // = seg000:a7b9 call set_voc_pcm_is_not_playing. THIS is what lets a
+        // later sound effect cut the clip: audio_start_voc's gate reads this
+        // flag, so once it is clear the effect starts and its own pcm_stop_voc
+        // halts a voice that is still audible. Faithful to the original — the
+        // ornithopter engine loop cuts a departing companion's line exactly
+        // this way (seg000:47f6 -> ab18 -> ab29).
+        self.voc_pcm_playing = false;
+        // = seg000:a7bc close_pcm_voice_file_handle — no port equivalent; the
+        // clip itself keeps playing either way.
         // = seg000:a7bf jmp midi_restore_music_volume — swell the score back to
         // its normal level now the voice line is over.
         self.midi_restore_music_volume();
@@ -1680,6 +1688,53 @@ mod tests {
         assert!(
             game.audio_current_sfx.is_none(),
             "= seg000:ab1d jz loc_0ab44 — the gate returns before open_voc_resource"
+        );
+    }
+
+    // The is_voc_pcm_playing flag (seg001:dc2b) is a DECLARATION, not a mirror
+    // of the mixer, and that difference is load-bearing: lip_sync_stop clears
+    // it (seg000:a7b9) while the clip is still being transferred, which opens
+    // audio_start_voc's gate (seg000:ab18) so the effect's own pcm_stop_voc
+    // (ab29) halts a voice that is still audible. This is how the ornithopter
+    // engine loop cuts a departing companion's line in the original, at both
+    // emulator speeds we measured. Do not "fix" this by gating on real
+    // playback — that makes the port quieter than the game. Asset-gated:
+    //   cargo test -p dune -- --ignored voc_pcm_playing
+    #[test]
+    #[ignore = "needs assets/DUNE.DAT"]
+    fn voc_pcm_playing_gate_lets_an_effect_cut_a_live_clip() {
+        let dat_path = concat!(env!("CARGO_MANIFEST_DIR"), "/../../assets/DUNE.DAT");
+        let Ok(dat_file) = DatFile::open(dat_path) else {
+            eprintln!("skipping: {dat_path} not found");
+            return;
+        };
+        let (tx, _rx) = mpsc::sync_channel(64);
+        let mut game = GameState::new(dat_file, tx);
+        game.set_headless();
+        // check_pcm_enabled reads settings_flags bit 0; the player itself stays
+        // disabled, so this exercises the gates without making any sound.
+        game.settings_flags |= 0x1;
+
+        // A voice has been declared playing (= seg000:a768).
+        game.voc_pcm_playing = true;
+        game.audio_start_voc("SN6.HSQ");
+        assert!(
+            game.audio_current_sfx.is_none(),
+            "= seg000:ab18 — the effect is dropped while a voice is declared playing"
+        );
+
+        // A teardown runs. It does not touch the mixer, but it does clear the
+        // declaration.
+        game.lip_sync_stop();
+        assert!(!game.voc_pcm_playing, "= seg000:a7b9");
+
+        // Now the same effect starts, and its pcm_stop_voc silences whatever
+        // the card was still transferring.
+        game.audio_start_voc("SN6.HSQ");
+        assert_eq!(
+            game.audio_current_sfx.as_deref(),
+            Some("SN6.HSQ"),
+            "the gate is open after the teardown, so the effect cuts the clip"
         );
     }
 

@@ -553,9 +553,11 @@ impl GameState {
         // template yields "PZ\PZ<ax:3-hex>I.VOC".
         let name = format!("PZ\\PZ{ax:03X}I.VOC");
 
-        // = seg000:ab5f/ab62 call is_voc_pcm_playing; jnz loc_0ab44 — a clip
-        //   still playing is left alone; this one does not start.
-        if self.pcm_player.is_playing() {
+        // = seg000:ab5f/ab62 call is_voc_pcm_playing; jnz loc_0ab44 — as in
+        //   audio_start_voc, the gate is the declared flag rather than real
+        //   playback. Note ab4f does NOT set the flag itself: a narration clip
+        //   started here never blocks the next one.
+        if self.voc_pcm_playing {
             return;
         }
         // = seg000:ab64/ab67 call check_pcm_enabled; jz loc_0ab44. The
@@ -622,6 +624,10 @@ impl GameState {
             // tasks and the PIT keep advancing.
             self.tick_one_frame();
         }
+        // = seg000:abba jz set_voc_pcm_is_not_playing / seg000:abc4 fall
+        //   through — both exits of the wait clear the declared-playing flag,
+        //   which is what re-arms audio_start_voc after a narration clip.
+        self.voc_pcm_playing = false;
         // = seg000:abb3 call frame_task_callback_0ab92 — on the pass after
         //   playback ends the monitor swells the score back up. The port runs
         //   that restore half here (cf. tick_pcm_voice_music_restore).
