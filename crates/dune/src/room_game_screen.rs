@@ -1510,11 +1510,14 @@ impl GameState {
         // walk compares the incoming buffer's priority byte (`[buf]`, DOS al)
         // against the top's per iteration (= seg000:d343..d359):
         let priority = self.menu_buffer(menu_ref).priority;
-        while let Some((top_menu_ref, callback)) = self.menu_stack.last().copied() {
+        while let Some((top_menu_ref, top_callback)) = self.menu_stack.last().copied() {
             let top_priority = self.menu_buffer(top_menu_ref).priority;
             if priority == top_priority {
                 // = seg000:d345 jz loc_0d368 — equal priority REPLACES the top
-                // slot in place; the stack does not deepen.
+                // slot in place; the stack does not deepen. Both words are
+                // rewritten there (`mov [si],bp; mov [si+2],bx`), so the slot
+                // takes the INCOMING cleanup func — the replaced element's
+                // teardown is dropped, never run, and never inherited.
                 *self.menu_stack.last_mut().unwrap() = (menu_ref, callback);
                 self.redraw_active_command_menu();
                 return;
@@ -1526,10 +1529,10 @@ impl GameState {
             }
             // = seg000:d349..d359 — the incoming element sorts BENEATH the
             // top (its priority byte is higher): pop the more-transient top,
-            // calling its cleanup func (`ax = [si+2]; call ax`), and retry
+            // calling ITS cleanup func (`ax = [si+2]; call ax`), and retry
             // against the new top.
-            if let Some(callback) = callback {
-                callback(self);
+            if let Some(top_callback) = top_callback {
+                top_callback(self);
             }
             self.menu_stack.pop();
         }
@@ -1736,6 +1739,21 @@ impl GameState {
             // the verb-strip rect test.
             match self.person_hit_test() {
                 Some(person_id) => {
+                    // = seg000:d54c..d55a sub al,0fh; jb; inc al; cmp al,
+                    //   [data_0476b]; jnz; mov cx,17h — the one Fremen-2
+                    //   standing slot whose 1-based run index matches
+                    //   data_0476b is the prospector, and his verb record
+                    //   carries the patched text id 0x8f rather than the
+                    //   0x78 + person_id the rest of the run uses (the patch
+                    //   at seg000:311a). Person 0x17 is how the hover names
+                    //   that record. The click dispatch (seg000:9240) needs
+                    //   no such remap: it indexes fremen2_troop_ptrs by
+                    //   person_id - 0x0f directly, which is why clicking
+                    //   already worked for both.
+                    let person_id = match person_id.checked_sub(0x0f) {
+                        Some(run_index) if run_index + 1 == self.data_0476b => 0x17,
+                        _ => person_id,
+                    };
                     self.slot_for_person_text_id(0x78 + person_id as u16, slot_count)
                 }
                 None => self.verb_strip_hovered_slot(slot_count),
@@ -4503,6 +4521,155 @@ mod tests {
         let lip_anim = head.lipsync.animations.len() - 1;
         let lip_frames = head.lipsync.animations[lip_anim].frames.len();
         assert_eq!(lip_frames, 60, "FRM1 lip bank = 15 variants x 4 mouths");
+    }
+
+    // = seg000:d368 `mov [si],bp; mov [si+2],bx` — an equal-priority push
+    // rewrites BOTH words of the top slot, so the replacing element brings its
+    // own cleanup func and the replaced one's is dropped without running. The
+    // pop path (seg000:d34c) is the opposite: it runs the cleanup belonging to
+    // the element being popped. Asset-gated:
+    //   cargo test -p dune -- --ignored equal_priority_push
+    #[test]
+    #[ignore = "needs assets/DUNE.DAT"]
+    fn equal_priority_push_takes_the_incoming_cleanup() {
+        let dat_path = concat!(env!("CARGO_MANIFEST_DIR"), "/../../assets/DUNE.DAT");
+        let Ok(dat_file) = DatFile::open(dat_path) else {
+            eprintln!("skipping: {dat_path} not found");
+            return;
+        };
+        let (tx, _rx) = mpsc::sync_channel(64);
+        let mut game = GameState::new(dat_file, tx);
+        game.set_headless();
+        game.start(true);
+
+        // menu_npc_actions (seg001:1f7e, priority 0xfc) over the room verb menu
+        // (command_menu_buf, 0xff): more transient, so it deepens the stack.
+        let depth = game.menu_stack.len();
+        game.menu_stack_push(
+            MenuRef::MenuNpcActions,
+            Some(GameState::menu_npc_actions_cleanup),
+        );
+        assert_eq!(game.menu_stack.len(), depth + 1, "the stack deepened");
+
+        // menu_go_towards_this_place carries the same 0xfc, so this replaces
+        // the top in place rather than deepening — and the slot must end up
+        // holding this push's cleanup (here, none at all).
+        game.menu_stack_push(MenuRef::MenuGoTowardsThisPlace, None);
+        let (top, cleanup) = *game.menu_stack.last().expect("the stack is not empty");
+        assert_eq!(game.menu_stack.len(), depth + 1, "replaced, did not deepen");
+        assert_eq!(top, MenuRef::MenuGoTowardsThisPlace, "the incoming element");
+        assert!(
+            cleanup.is_none(),
+            "the slot must take the incoming cleanup, not keep the replaced element's"
+        );
+    }
+
+    // Two Fremen-2 troops in one room — the case the prospector arriving at a
+    // sietch that already houses a hired chief creates. They share person index
+    // 0x0f, so the room stands them up through the second marker pass
+    // (seg000:3dd4) with the ids 0x0f and 0x10, and sal_draw_character's fold
+    // (seg000:3d4d..3d56) gives each id its own troop's sprite rather than
+    // repeating the selected one. Asset-gated:
+    //   cargo test -p dune -- --ignored two_fremen2
+    #[test]
+    #[ignore = "needs assets/DUNE.DAT"]
+    fn two_fremen2_troops_get_their_own_slots_and_sprites() {
+        let dat_path = concat!(env!("CARGO_MANIFEST_DIR"), "/../../assets/DUNE.DAT");
+        let Ok(dat_file) = DatFile::open(dat_path) else {
+            eprintln!("skipping: {dat_path} not found");
+            return;
+        };
+        let (tx, _rx) = mpsc::sync_channel(64);
+        let mut game = GameState::new(dat_file, tx);
+        game.set_headless();
+        game.start(true);
+
+        // A sietch holding two settled troops without occupation bit 7: the
+        // resident chief (troops[7], troop_id 8) as the chain head and the
+        // prospector (troops[2], troop_id 3) behind him.
+        let li = 10;
+        let ptr = crate::locations::location_ptr_from_index(li);
+        for (ti, occupation, next) in [(7usize, 0x10u8, 3u8), (2, 0x11, 0)] {
+            game.troops[ti].occupation = occupation;
+            game.troops[ti].bitfield_10 = 0;
+            game.troops[ti].offset_of_location = ptr;
+            game.troops[ti].next_troop_id = next;
+        }
+        game.locations[li].troop_id = game.troops[7].troop_id;
+
+        // Enter its audience room (room 2; in-room appearance (li+1)<<8 | 0x80).
+        // = seg000:30fe the prospector's " Prospector Chief" text id (0x8f)
+        //   replaces his chained record's only from game_phase 5 on.
+        game.game_phase = 5;
+        game.location_and_room = 0x0002;
+        game.location_appearance = ((li as u16 + 1) << 8) | 0x80;
+        game.build_room_command_records();
+        game.build_persons_in_room_records();
+
+        // = seg000:31a4 both land in the Fremen-2 round-robin, the prospector
+        //   second, so it is data_0476b that names his verb record.
+        assert_eq!(game.data_0476a, 2, "two Fremen-2 troops classified");
+        assert_eq!(game.fremen2_troops[0], Some(7), "the chief took slot 0");
+        assert_eq!(game.fremen2_troops[1], Some(2), "the prospector slot 1");
+        assert_eq!(
+            game.data_0476b, 2,
+            "the prospector is the second of the run"
+        );
+
+        // = seg000:3dd4 the group's own 0x0f plus one more marker id, 0x10.
+        let markers = crate::sal_position_markers(
+            9,
+            game.persons_in_room,
+            game.persons_travelling_with,
+            game.person_marker_base,
+            game.data_0476a,
+        );
+        let mut standing: Vec<i8> = markers.iter().copied().filter(|&m| m != -1).collect();
+        standing.sort_unstable();
+        assert_eq!(standing, [0x0f, 0x10], "both stand in their own slot");
+
+        // = seg000:3d51 each slot resolves its own troop: troop_id 8 -> sprite
+        //   0x0e + 8 % 3 = 0x10, troop_id 3 -> 0x0e + 3 % 3 = 0x0e.
+        let sprites = game.character_sprite_map();
+        assert_eq!(sprites[0x0f], 0x10, "slot 0x0f draws the chief");
+        assert_eq!(sprites[0x10], 0x0e, "slot 0x10 draws the prospector");
+
+        // Hovering either figure lights up its own verb: the chief's record
+        // keeps text id 0x78 + 0x0f = 0x87, while the prospector's is the
+        // 0x8f the seg000:311a patch wrote, which the hover reaches only
+        // through the seg000:d54c data_0476b remap to person 0x17.
+        let chief_verb = game
+            .active_menu_records()
+            .iter()
+            .position(|r| r.text_id == 0x87)
+            .expect("the chief's verb record");
+        let prospector_verb = game
+            .active_menu_records()
+            .iter()
+            .position(|r| r.text_id == 0x8f)
+            .expect("the prospector's verb record");
+        game.command_menu_slot_count = game.active_menu_records().len() as u8;
+        for (person_id, anchor, expected_slot) in [
+            (0x0fu8, (100u16, 60u16), chief_verb),
+            (0x10, (160, 60), prospector_verb),
+        ] {
+            game.character_screen_pos = [(0xffff, 0xffff); 0x17];
+            game.character_screen_pos[person_id as usize] = anchor;
+            // The hit box is 32 px right of and 80 px below the draw anchor.
+            game.mouse_pos_x = anchor.0 + 16;
+            game.mouse_pos_y = anchor.1 + 40;
+            assert_eq!(
+                game.person_hit_test(),
+                Some(person_id),
+                "the cursor is over person {person_id:#04x}"
+            );
+            game.index_of_last_hovered_action_item = 0xff;
+            game.highlight_hovered_text_action_item();
+            assert_eq!(
+                game.index_of_last_hovered_action_item, expected_slot as u8,
+                "hovering person {person_id:#04x} highlights its own verb"
+            );
+        }
     }
 
     // The dialogue text engine (show_voice_subtitle seg000:88af ->

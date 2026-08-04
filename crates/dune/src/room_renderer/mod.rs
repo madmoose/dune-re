@@ -417,16 +417,21 @@ pub fn sal_position_markers_from_list(count: u8, list: &[u8]) -> Vec<i8> {
 // `count` slots, each 0xff (empty) unless a person is assigned. For each set
 // bit of `persons_in_room ^ persons_travelling_with` (person index N),
 // sal_assign_position_marker places N into slot (N + base) % count, or the
-// first free slot if the preferred one is taken.
+// first free slot if the preferred one is taken. The DOS `base` is
+// `person_marker_base & 0x0f` (seg000:3dbe..3dc2).
 //
-// The DOS `base` is `person_marker_base & 0x0f` (seg000:3dbe..3dc2); a second
-// pass fills extra generic NPCs from `[476ah]`, in-game state that is 0 during
-// the intro and is omitted here (TODO when in-game scenes drive this).
+// A room's Fremen-2 troops share the single person index 0x0f, so the bit loop
+// gives the whole group one slot. The second pass (seg000:3dd4..3de3) stands
+// the rest of them up: `fremen2_count` (= data_0476a, the number of troops
+// classify_troop_for_room bucketed as Fremen 2) yields `fremen2_count - 1`
+// further markers with the person ids 0x10, 0x11, … — the same ids the chained
+// 0x88.. verb records in build_room_person_record_body carry.
 pub fn sal_position_markers(
     count: u8,
     persons_in_room: u16,
     persons_travelling_with: u16,
     person_marker_base: u8,
+    fremen2_count: u8,
 ) -> Vec<i8> {
     let count = count as usize;
     let mut markers = vec![-1; count];
@@ -444,6 +449,15 @@ pub fn sal_position_markers(
         }
         bits >>= 1;
         id += 1;
+    }
+
+    // = seg000:3dd4..3de3 mov dl,[data_0476a]; dec dx; jle — the `jle` is
+    //   signed on the decremented count, so a group of 0 or 1 adds nothing
+    //   (the lone Fremen already has the 0x0f slot). dh is zero here because
+    //   the bit loop above exits on `or dx,dx; jnz`.
+    // = seg000:3ddb mov ax,0fh; the inc-then-call sequence starts at 0x10.
+    for k in 1..fremen2_count {
+        assign_position_marker(&mut markers, 0x0f + k as i8, base);
     }
 
     markers
@@ -581,43 +595,43 @@ mod tests {
 
     #[test]
     fn no_persons_leaves_all_slots_empty() {
-        assert_eq!(sal_position_markers(3, 0, 0, 0), [-1, -1, -1]);
+        assert_eq!(sal_position_markers(3, 0, 0, 0, 0), [-1, -1, -1]);
     }
 
     #[test]
     fn zero_count_is_empty() {
-        assert!(sal_position_markers(0, 2, 0, 0).is_empty());
+        assert!(sal_position_markers(0, 2, 0, 0, 0).is_empty());
     }
 
     #[test]
     fn lady_jessica_stands_in_the_single_slot() {
         // intro_14: persons_in_room = 2 (person index 1), one standing slot.
-        assert_eq!(sal_position_markers(1, 2, 0, 0), [1]);
+        assert_eq!(sal_position_markers(1, 2, 0, 0, 0), [1]);
     }
 
     #[test]
     fn person_index_goes_to_preferred_slot() {
         // person index 1 -> slot (1 + base=0) % 3 = 1.
-        assert_eq!(sal_position_markers(3, 0b10, 0, 0), [-1, 1, -1]);
+        assert_eq!(sal_position_markers(3, 0b10, 0, 0, 0), [-1, 1, -1]);
     }
 
     #[test]
     fn travelling_companions_are_xored_out() {
         // A person both in the room and travelling with the player cancels.
-        assert_eq!(sal_position_markers(2, 0b10, 0b10, 0), [-1, -1]);
+        assert_eq!(sal_position_markers(2, 0b10, 0b10, 0, 0), [-1, -1]);
     }
 
     #[test]
     fn multiple_persons_take_distinct_slots() {
         // person indices 1 and 2 -> slots 1 and 2.
-        assert_eq!(sal_position_markers(3, 0b110, 0, 0), [-1, 1, 2]);
+        assert_eq!(sal_position_markers(3, 0b110, 0, 0, 0), [-1, 1, 2]);
     }
 
     #[test]
     fn preferred_slot_collision_falls_back_to_first_free() {
         // count 2, person indices 0 and 2 both prefer slot 0; index 2 spills to
         // the first free slot.
-        assert_eq!(sal_position_markers(2, 0b101, 0, 0), [0, 2]);
+        assert_eq!(sal_position_markers(2, 0b101, 0, 0, 0), [0, 2]);
     }
 
     #[test]
@@ -625,7 +639,45 @@ mod tests {
         // Only the low nibble of person_marker_base is the base. person index 1
         // -> slot (1 + base) % 3: base 1 -> slot 2, base 0x12 (nibble 2) -> slot
         // (1 + 2) % 3 = 0.
-        assert_eq!(sal_position_markers(3, 0b10, 0, 1), [-1, -1, 1]);
-        assert_eq!(sal_position_markers(3, 0b10, 0, 0x12), [1, -1, -1]);
+        assert_eq!(sal_position_markers(3, 0b10, 0, 1, 0), [-1, -1, 1]);
+        assert_eq!(sal_position_markers(3, 0b10, 0, 0x12, 0), [1, -1, -1]);
+    }
+
+    #[test]
+    fn a_lone_fremen2_group_adds_no_extra_marker() {
+        // = seg000:3dd8 dec dx; jle — counts 0 and 1 both skip the loop, so the
+        // group's single person index 0x0f keeps the one slot it took from the
+        // bit loop.
+        for count in [0, 1] {
+            assert_eq!(
+                sal_position_markers(4, 1 << 0x0f, 0, 0, count),
+                [-1, -1, -1, 0x0f]
+            );
+        }
+    }
+
+    #[test]
+    fn extra_fremen2_troops_stand_in_their_own_slots() {
+        // Two Fremen-2 troops (the chief and the prospector sharing person
+        // index 0x0f): the group takes slot (0x0f + 0) % 4 = 3 and the second
+        // pass stands id 0x10 in slot (0x10 + 0) % 4 = 0.
+        assert_eq!(
+            sal_position_markers(4, 1 << 0x0f, 0, 0, 2),
+            [0x10, -1, -1, 0x0f]
+        );
+        // Four of them run the ids 0x10..0x12.
+        assert_eq!(
+            sal_position_markers(4, 1 << 0x0f, 0, 0, 4),
+            [0x10, 0x11, 0x12, 0x0f]
+        );
+    }
+
+    #[test]
+    fn extra_fremen2_troops_spill_when_the_room_runs_out_of_slots() {
+        // = seg000:3e09 cmp bl,cl; jnb — a group larger than the room's slots
+        // drops the leftovers rather than growing the array. Of the ids
+        // 0x10..0x12 only 0x10 fits: it takes slot (0x10 + 0) % 2 = 0, and the
+        // rest find neither their preferred slot nor a free one.
+        assert_eq!(sal_position_markers(2, 1 << 0x0f, 0, 0, 4), [0x10, 0x0f]);
     }
 }

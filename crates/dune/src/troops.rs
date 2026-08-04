@@ -2713,16 +2713,20 @@ impl GameState {
     // idle expression for the walk/facing persons 0x0e..0x10: the sprite is
     // 0x0e + (troop_id % 3) (the three Fremen figures), the expression
     // (troop_id / 3) % (15 or 17) + 1. Person 0x0e reads fremen1_troop_ptr;
-    // 0x0f/0x10 read fremen2_troop_ptrs[selected_fremen2_index] unless
-    // game_phase == 0xc8 (then the raw id with expression 0).
-    pub(crate) fn walk_facing_sprite(&self, id: u8) -> (u8, u8) {
+    // 0x0f/0x10 read fremen2_troop_ptrs[fremen2_index] unless game_phase ==
+    // 0xc8 (then the raw id with expression 0).
+    //
+    // `fremen2_index` is seg001:476c selected_fremen2_index as the caller
+    // leaves it (DOS reads the global at seg000:914a): the room draw supplies
+    // each drawn slot's own index, everyone else the live value.
+    pub(crate) fn walk_facing_sprite(&self, id: u8, fremen2_index: u8) -> (u8, u8) {
         let troop = if id == 0x0e {
             self.fremen1_troop
         } else if self.game_phase == 0xc8 {
             // = seg000:9143/9148 jz char_to_sprite_store_expr.
             return (id, 0);
         } else {
-            self.fremen2_troops[(self.selected_fremen2 & 7) as usize]
+            self.fremen2_troops[(fremen2_index & 7) as usize]
         };
         let Some(ti) = troop else {
             // No troop classified (an empty slot): DOS would chase a stale

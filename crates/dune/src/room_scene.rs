@@ -1106,6 +1106,7 @@ impl GameState {
                 self.persons_in_room,
                 self.persons_travelling_with,
                 self.person_marker_base,
+                self.data_0476a,
             ),
         };
 
@@ -1176,14 +1177,28 @@ impl GameState {
 
     // = seg000:9123 character_id_to_sprite, as sal_draw_character (seg000:3d58)
     // consumes it: the PERS.HSQ sprite-pair index per drawable person id.
-    // Named characters (and SMUG) keep their id; the walk/facing persons
-    // 0x0e..0x10 resolve through their classified troop (walk_facing_sprite);
-    // anything higher is the player figure (char_to_sprite_player, 0x2d).
+    // Named characters (and SMUG) keep their id; person 0x0e resolves through
+    // fremen1_troop (walk_facing_sprite).
+    //
+    // = seg000:3d4d..3d56 every id >= 0x0f is one of the room's Fremen-2 slots
+    // — the 0x0f the bit loop assigns plus the 0x10.. the second marker pass
+    // adds. sal_draw_character sets selected_fremen2_index = id - 0x0f and
+    // folds the id to 0x0f before resolving the sprite, so each slot draws its
+    // own troop instead of repeating the selected one. The fold happens here
+    // because this map is a pure per-id lookup; DOS additionally leaves the
+    // last drawn slot's index in the global for later readers (contact_verb_
+    // troop, seg000:68eb), which the port does not reproduce.
+    //
+    // char_to_sprite_player (id >= 0x11 -> sprite 0x2d) is unreachable through
+    // this path precisely because of that fold; it serves character_id_to_
+    // sprite's other callers (loc_091b8, seg000:a72e).
     pub(crate) fn character_sprite_map(&self) -> Vec<u16> {
         (0..0x17u8)
             .map(|id| match id {
-                0x0e..=0x10 => self.walk_facing_sprite(id).0 as u16,
-                0x11.. => 0x2d,
+                // = seg000:3d4f jb loc_03d58 — ids below 0x0f leave the global
+                //   alone, and 0x0e ignores it anyway (it reads fremen1_troop).
+                0x0e => self.walk_facing_sprite(id, self.selected_fremen2).0 as u16,
+                0x0f.. => self.walk_facing_sprite(0x0f, id - 0x0f).0 as u16,
                 _ => id as u16,
             })
             .collect()

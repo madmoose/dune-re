@@ -547,13 +547,24 @@ impl GameState {
     // open_pcm_voice_file and steps _dword_22CC1_pcm_voc_resource_offset by 0x1a
     // bytes per refill. The port loads the whole .voc in one go via voc::parse
     // and hands it to the PCM mixer, so the streaming offset and frame task have
-    // no equivalent. Missing file / disabled PCM is silent (= seg000:ab73 jb
-    // loc_0ab8d / seg000:ab67 jz loc_0ab44). DOS also refuses to interrupt a
-    // clip already playing (seg000:ab5f is_voc_pcm_playing; jnz ret).
+    // no equivalent. Missing file is silent (= seg000:ab73 jb loc_0ab8d).
     pub(crate) fn start_narration_voice_clip(&mut self, ax: u16) {
         // = seg000:a8bc create_voc_file_name_from_bx with bx=0x19: the
         // template yields "PZ\PZ<ax:3-hex>I.VOC".
         let name = format!("PZ\\PZ{ax:03X}I.VOC");
+
+        // = seg000:ab5f/ab62 call is_voc_pcm_playing; jnz loc_0ab44 — a clip
+        //   still playing is left alone; this one does not start.
+        if self.pcm_player.is_playing() {
+            return;
+        }
+        // = seg000:ab64/ab67 call check_pcm_enabled; jz loc_0ab44. The
+        //   duck_music_and_start_narration_voice_clip entry tests this too,
+        //   but the three direct callers (seg000:023d, 261c, 4340) come
+        //   straight here.
+        if !self.check_pcm_enabled() {
+            return;
+        }
 
         // = seg000:ab70 open_pcm_voice_file; seg000:ab73 jb loc_0ab8d — bail on
         // missing resource (DAT without narration, e.g. floppy distributions).

@@ -626,7 +626,7 @@ impl GameState {
             // derive from the classified troop's id — fremen1_troop_ptr for
             // person 0x0e, fremen2_troop_ptrs[selected_fremen2_index]
             // otherwise (troops.rs walk_facing_sprite).
-            let (sprite, facing) = self.walk_facing_sprite(id);
+            let (sprite, facing) = self.walk_facing_sprite(id, self.selected_fremen2);
             (sprite as usize, facing)
         } else {
             // = id < 0x0d named characters: head index = id, facing 0 (random idle).
@@ -1053,19 +1053,41 @@ impl GameState {
     // PCM block, and queues it on the Sound Blaster voice. Unlike a talking
     // head this needs no lip-sync stream. Silently does nothing if the file is
     // absent or has no audio.
-    //
-    // The DOS `is_voc_pcm_playing` non-interrupt guard (don't restart while a
-    // voice is mid-playback) is not modelled; callers in the intro only fire a
-    // single effect when nothing else is playing.
     pub fn audio_start_voc(&mut self, name: &str) {
-        let Ok(data) = self.dat_file.read(name) else {
+        // = seg000:ab15/ab18 call is_voc_pcm_playing; jnz loc_0ab44 — an
+        //   effect never interrupts a clip that is still playing; it simply
+        //   does not start. The ornithopter takeoff leans on this: a companion
+        //   who declines the flight is still speaking when SN6 would start
+        //   (seg000:47f6), so the engine loop stays silent and the line runs
+        //   to the pcm_stop_voc that ends the departure (seg000:478c).
+        if self.pcm_player.is_playing() {
             return;
-        };
-        // = pcm_stop_voc then start the clip on the dnsdb driver. The driver
-        // parses the VOC blocks itself, so the raw bytes (past the 0x1a header)
-        // are handed straight to it.
-        self.pcm_player.stop();
-        self.pcm_player.start_playback(&data[26..], 0);
+        }
+        // = seg000:ab1a/ab1d call check_pcm_enabled; jz loc_0ab44.
+        if !self.check_pcm_enabled() {
+            return;
+        }
+        // = seg000:ab23..ab33 cmp al,[audio_current_sfx_id]; jz loc_0ab35 —
+        //   the resident effect replays from the resource already open, so
+        //   only a different one pays for the stop and the reload.
+        if self.audio_current_sfx.as_deref() != Some(name) {
+            // = seg000:ab29 call pcm_stop_voc.
+            self.pcm_player.stop();
+            // = seg000:ab30 call open_voc_resource. A missing resource leaves
+            //   nothing resident (DOS's al == 0 exit at seg000:ab2e).
+            let Ok(data) = self.dat_file.read(name) else {
+                self.audio_current_sfx = None;
+                self.audio_current_sfx_data.clear();
+                return;
+            };
+            // The driver parses the VOC blocks itself, so the raw bytes (past
+            // the 0x1a header) are what it is handed.
+            self.audio_current_sfx = Some(name.to_string());
+            self.audio_current_sfx_data = data[26..].to_vec();
+        }
+        // = seg000:ab3c call [pcm_vtable_start_playback].
+        self.pcm_player
+            .start_playback(&self.audio_current_sfx_data, 0);
     }
 
     // = seg000:a7c2 lip_sync_frame_task (+ advance_lipsync / set_lipsync_data_to_al).
@@ -1230,11 +1252,22 @@ impl GameState {
         }
     }
 
-    // = seg000:a7a5 lip_sync_stop — stop any active voice lip-sync: remove the
+    // = seg000:a7a5 lip_sync_stop — stop any active voice LIP-SYNC: remove the
     // voc frame task, drop the mouth stream and flip the TALK TO ME verb to its
-    // idle text. While a voice is marked playing (is_voc_pcm_playing),
-    // additionally silence the PCM voice and swell the score back to its normal
-    // level.
+    // idle text. While a voice is marked playing (is_voc_pcm_playing), clear
+    // that flag and swell the score back to its normal level.
+    //
+    // It does NOT silence the voice. The tail is `set_voc_pcm_is_not_playing`
+    // (seg000:abc6, one flag byte), `close_pcm_voice_file_handle` (seg000:a9a1,
+    // an INT 21h/3Eh on the streaming handle — it never touches the PCM driver
+    // vtable) and `midi_restore_music_volume`. Whatever the Sound Blaster has
+    // already been handed plays out; only pcm_stop_voc (seg000:ac14) actually
+    // cuts a clip. That is why a companion who refuses to board is still heard
+    // over the room re-render and the takeoff: every teardown between her line
+    // and seg000:478c runs through here.
+    //
+    // The port has no streaming file handle to close — whole .voc resources are
+    // handed to the mixer — so the a7bc call has no equivalent here.
     pub(crate) fn lip_sync_stop(&mut self) {
         // = seg000:a7a5 mov si, lip_sync_frame_task; a7a8 call remove_frame_task.
         self.remove_frame_task(crate::TaskId::TalkingHeadVoc);
@@ -1253,8 +1286,9 @@ impl GameState {
         if !was_speaking {
             return;
         }
-        // = seg000:a7bc call close_pcm_voice_file_handle — silence the voice.
-        self.pcm_player.stop();
+        // = seg000:a7b9/a7bc set_voc_pcm_is_not_playing + close_pcm_voice_file_
+        // handle — bookkeeping only (the flag above is already cleared, and the
+        // port holds no file handle). The clip keeps playing.
         // = seg000:a7bf jmp midi_restore_music_volume — swell the score back to
         // its normal level now the voice line is over.
         self.midi_restore_music_volume();
@@ -1618,6 +1652,36 @@ mod tests {
     use std::sync::mpsc;
 
     use crate::{GameState, dat_file::DatFile};
+
+    // audio_start_voc's gates (seg000:ab15..ab27) run before it touches the
+    // resource, so a sound effect requested with digital sound off loads
+    // nothing at all. The is_voc_pcm_playing gate above it — the one that keeps
+    // the ornithopter engine loop from cutting off a companion's line — cannot
+    // be reached here: is_playing() is false whenever the player is disabled,
+    // and enabling it in a test would put real audio out of the speakers.
+    // Asset-gated:
+    //   cargo test -p dune -- --ignored sfx_gates
+    #[test]
+    #[ignore = "needs assets/DUNE.DAT"]
+    fn sfx_gates_skip_the_resource_when_pcm_is_off() {
+        let dat_path = concat!(env!("CARGO_MANIFEST_DIR"), "/../../assets/DUNE.DAT");
+        let Ok(dat_file) = DatFile::open(dat_path) else {
+            eprintln!("skipping: {dat_path} not found");
+            return;
+        };
+        let (tx, _rx) = mpsc::sync_channel(64);
+        let mut game = GameState::new(dat_file, tx);
+        // set_headless clears settings_flags bit 0x1, the flag
+        // check_pcm_enabled reads.
+        game.set_headless();
+        assert!(!game.check_pcm_enabled(), "headless runs with no PCM card");
+
+        game.audio_start_voc("SN6.HSQ");
+        assert!(
+            game.audio_current_sfx.is_none(),
+            "= seg000:ab1d jz loc_0ab44 — the gate returns before open_voc_resource"
+        );
+    }
 
     // Duncan's "Here are our current stocks of spice." (phrase 0x08e8) fires
     // dialogue-line event 0x0a, which arms the sign he holds up: COMMAND string

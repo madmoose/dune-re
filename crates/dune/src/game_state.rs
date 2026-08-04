@@ -241,6 +241,16 @@ pub struct GameState {
 
     pub(crate) pcm_player: PcmPlayer,
 
+    // = seg001 _byte_22C1A_audio_current_sfx_id / _dword_22CC1_pcm_voc_
+    // resource_offset — which sound effect audio_start_voc (seg000:ab15) last
+    // opened, and its loaded bytes. Re-requesting the same effect replays the
+    // resident resource (seg000:ab23 cmp al,[audio_current_sfx_id]; jz
+    // loc_0ab35) instead of stopping the voice and opening it again. DOS keys
+    // this on the resource index; the port keys it on the resource name, which
+    // is what its callers pass.
+    pub(crate) audio_current_sfx: Option<String>,
+    pub(crate) audio_current_sfx_data: Vec<u8>,
+
     // The clip recorder, kept here so the in-game EXIT GAME path (`exit_to_dos`)
     // can finalise a recording before `std::process::exit` skips all destructors.
     pub(crate) recorder: std::sync::Arc<Recorder>,
@@ -2138,6 +2148,8 @@ impl GameState {
             midi,
 
             pcm_player,
+            audio_current_sfx: None,
+            audio_current_sfx_data: Vec::new(),
 
             recorder,
 
