@@ -135,7 +135,7 @@ const CMD_FIGHT_FOR_A_WHOLE_DAY: MenuItem = item(cmd::FIGHT_FOR_A_WHOLE_DAY, 0x0
 /// room branch writes fresh values that make those entries match the room.
 #[derive(Clone, Copy)]
 pub(crate) struct RoomPerson {
-    /// Matched against `location_and_room` in scan_matching_room_person_entries.
+    /// Matched against `location_and_room` in scan_current_room_npcs.
     pub(crate) location_and_room: u16,
     /// Matched against `location_appearance` (data_00006).
     pub(crate) location_appearance: u16,
@@ -230,9 +230,8 @@ fn room_person_menu_item(text_id: u16, handler: u16) -> MenuItem {
 pub(crate) const ROOM_PERSON_TABLE_BASE: u16 = 0x0fd8;
 
 // = seg001:0fd8 room_persons — the static initializer of the 16-entry
-// room-person table. GameState owns a mutable copy in `room_persons` that
-// scan_matching_room_person_entries walks; this constant only seeds it on
-// startup. The last four entries' (location_and_room, location_appearance) are
+// room-person table. GameState owns a mutable copy in `room_persons`.
+// The last four entries' (location_and_room, location_appearance) are
 // rewritten at runtime by init_room_persons + the loc_06603 classification.
 pub(crate) const ROOM_PERSON_TABLE_INIT: [RoomPerson; 16] = [
     rp(0x200a, 0x0180, 0x92f2, 0x00, 0x02),
@@ -2085,44 +2084,42 @@ impl GameState {
         // = seg000:30a1 persons_in_room = 0.
         self.persons_in_room = 0;
         // = seg000:30a9 bp = build_room_person_record_a (flags bit 0x40 clear).
-        self.scan_matching_room_person_entries(Self::build_room_person_record_a);
+        self.scan_current_room_npcs(Self::build_room_person_record_a);
         // = seg000:30af bp = build_room_person_record_b (flags bit 0x40 set).
-        self.scan_matching_room_person_entries(Self::build_room_person_record_b);
+        self.scan_current_room_npcs(Self::build_room_person_record_b);
         // = seg000:30b5 xor ax,ax; stosw — the DOS terminator. The Vec needs none.
     }
 
-    // = seg000:36ee scan_matching_room_person_entries — walk the 16-entry
+    // = seg000:36ee scan_current_room_npcs — walk the 16-entry
     // room-person table at seg001:0fd8; for each entry whose
     // (location_and_room, location_appearance) matches the current room, invoke
-    // `builder` with the entry and its 0..15 index. DOS passes the entry's
-    // seg001 pointer in si; the index lets a builder reconstruct that pointer
+    // `callback` with the entry and its 0..15 index. DOS passes the entry's
+    // seg001 pointer in si; the index lets a callback reconstruct that pointer
     // when it stores it elsewhere (e.g. template-a's data_047aa write).
-    pub(crate) fn scan_matching_room_person_entries(
-        &mut self,
-        builder: fn(&mut Self, u8, &RoomPerson),
-    ) {
+    pub(crate) fn scan_current_room_npcs(&mut self, callback: fn(&mut Self, u8)) {
         // = seg000:36f0..36f6 si = 0fd8h; cx = 0x10; bx = location_appearance;
         //   dx = location_and_room.
         for index in 0..self.room_persons.len() {
-            // Snapshot the entry: RoomPerson is Copy, and the builder needs
+            // Snapshot the entry: RoomPerson is Copy, and the callback needs
             // `&mut self` so we cannot keep a borrow into self.room_persons
             // live across the call. The classification path that mutates the
             // table runs in init_room_persons before this scan, so a snapshot
             // here matches DOS behavior.
             let entry = self.room_persons[index];
-            // = seg000:36fe cmp bx, game_time[si]; cmp dx, rand_bits[si].
-            if entry.location_appearance == self.location_appearance
-                && entry.location_and_room == self.location_and_room
+            // = seg000:36fe cmp bx, [si+2]; cmp dx, [si].
+            if (entry.location_appearance, entry.location_and_room)
+                == (self.location_appearance, self.location_and_room)
             {
                 // = seg000:370e call bp.
-                builder(self, index as u8, &entry);
+                callback(self, index as u8);
             }
         }
     }
 
-    // = seg000:36d3 run_room_leave_dialogue_scan — the pending_room_action-gated room-person dialogue scan run
-    // when leaving a room (ui_click_move_room) or re-entering one. When the leave
-    // flag is set, walk the standing room-persons (bp = room_person_present_auto_dialogue) so one of them
+    // = seg000:36d3 run_room_leave_dialogue_scan — the
+    // pending_room_action-gated room-person dialogue scan run when leaving a
+    // room (ui_click_move_room) or re-entering one. When the leave flag is set,
+    // walk the standing room-persons (bp = npc_auto_dialogue) so one of them
     // can speak an auto-dialogue line, then clear the flag.
     pub(crate) fn run_room_leave_dialogue_scan(&mut self) {
         // = seg000:36d3 cmp byte [pending_room_action], 0; jz ret.
@@ -2135,17 +2132,18 @@ impl GameState {
         self.tear_down_prior_talking_head_overlay();
         // = seg000:36dd mov byte [data_047a7], 0 — clear the "someone spoke" latch.
         self.data_047a7 = 0;
-        // = seg000:36e2 bp = room_person_present_auto_dialogue; call scan_matching_room_person_entries.
-        self.scan_matching_room_person_entries(Self::npc_auto_dialogue);
+        // = seg000:36e2 bp = npc_auto_dialogue; call scan_current_room_npcs.
+        self.scan_current_room_npcs(Self::npc_auto_dialogue);
         // = seg000:36e8 mov byte [pending_room_action], 0.
         self.pending_room_action = 0;
     }
 
-    // = seg000:3520 room_person_present_auto_dialogue — per standing room-person, present their auto-
+    // = seg000:3520 npc_auto_dialogue — per standing room-person, present their auto-
     // dialogue line if its condition matches and, having spoken, install the
     // person's dialogue verb menu. data_047a7 latches after the first person
     // speaks so only one interrupts the move.
-    fn npc_auto_dialogue(&mut self, _index: u8, entry: &RoomPerson) {
+    fn npc_auto_dialogue(&mut self, index: u8) {
+        let entry = self.room_persons[index as usize];
         // = seg000:3520 cmp byte [data_047a7], 0; jnz ret — someone already spoke.
         if self.data_047a7 != 0 {
             return;
@@ -2179,12 +2177,12 @@ impl GameState {
     }
 
     // = seg000:3551 loc_03551 — install the command menu (or dialogue speaker)
-    // for the currently-armed pending_room_action, then reveal it with the panel
-    // fold. Fallen into by room_person_present_auto_dialogue after a room-leave
-    // line (pending_room_action == 1 -> the loc_03595 speaker branch) and called
-    // from the fly-over dispatch (travel_settle_companion_dispatch, seg000:3633)
-    // after the companion's line (pending_room_action 3 / 4 -> the divert /
-    // hostile-zone-warning menus).
+    // for the currently-armed pending_room_action, then reveal it with the
+    // panel fold. Fallen into by npc_auto_dialogue after a room-leave line
+    // (pending_room_action == 1 -> the loc_03595 speaker branch) and called
+    // from the fly-over dispatch (travel_settle_companion_dispatch,
+    // seg000:3633) after the companion's line (pending_room_action 3 / 4 -> the
+    // divert / hostile-zone-warning menus).
     pub(crate) fn install_pending_room_action_menu(&mut self) {
         // = seg000:3551 inc byte [data_047a7] — latch so no other standing
         //   person speaks (or a further settle pass raises the cabin) this scan.
@@ -2266,13 +2264,13 @@ impl GameState {
     }
 
     // = seg000:30b9 build_room_person_record_a — template-a builder for
-    // scan_matching_room_person_entries. Skip when the entry's flags bit 0x40
+    // scan_current_room_npcs. Skip when the entry's flags bit 0x40
     // is set; on the first non-skipped match, capture the entry's si into
     // data_047aa so draw_room_game_screen's tail picks it as the lip-sync
     // speaker; then fall into the shared body.
-    fn build_room_person_record_a(&mut self, index: u8, entry: &RoomPerson) {
+    fn build_room_person_record_a(&mut self, index: u8) {
         // = seg000:30b9 test byte ptr [si+0fh], 40h; jnz ret.
-        if entry.flags & 0x40 != 0 {
+        if self.room_persons[index as usize].flags & 0x40 != 0 {
             return;
         }
         // = seg000:30bf cmp [data_047aa], 0; jnz loc_030ca.
@@ -2282,7 +2280,7 @@ impl GameState {
             self.data_047aa = ROOM_PERSON_TABLE_BASE + (index as u16) * 0x10;
         }
         // = seg000:30c9 jmp loc_030ca (fall through).
-        self.build_room_person_record_body(entry);
+        self.build_room_person_record_body(index);
     }
 
     // = seg000:3120 build_room_person_record_b — template-b builder. Mirror of
@@ -2291,12 +2289,12 @@ impl GameState {
     // without touching data_047aa. The static room-person table has no
     // bit-0x40 entries, so this only fires once game state writes the bit at
     // runtime.
-    fn build_room_person_record_b(&mut self, _index: u8, entry: &RoomPerson) {
+    fn build_room_person_record_b(&mut self, index: u8) {
         // = seg000:3120 test byte ptr [si+0fh], 40h; jnz loc_030ca.
-        if entry.flags & 0x40 == 0 {
+        if self.room_persons[index as usize].flags & 0x40 == 0 {
             return;
         }
-        self.build_room_person_record_body(entry);
+        self.build_room_person_record_body(index);
     }
 
     // = seg000:30ca build_room_person_record_body — shared tail of the two
@@ -2305,7 +2303,8 @@ impl GameState {
     // and — only when person_index == 0x0f — emit `data_0476a - 1` chained
     // 0x88.. records, then patch one of them to 0x8f when game_phase >= 5
     // and data_0476b is non-zero.
-    fn build_room_person_record_body(&mut self, entry: &RoomPerson) {
+    fn build_room_person_record_body(&mut self, index: u8) {
+        let entry = &self.room_persons[index as usize];
         // = seg000:30ca mov al, [si+0eh] — entry.person_index. The DOS disasm
         //   spells it `_word_1F4BE_persons_met[si]`, but that resolves to
         //   `[si + persons_met_offset(0x0e)]` — the byte at offset 0x0e
@@ -2830,9 +2829,9 @@ impl GameState {
         //   state pending (ds:c0 masked by data_01158) and Duncan present
         //   (persons_in_room bit 3), loc_02566 runs the shipment-report scene
         //   first. Not ported.
-        // = seg000:35e3/35e6 bp = room_person_present_auto_dialogue; jmp
+        // = seg000:35e3/35e6 bp = npc_auto_dialogue; jmp
         //   scan_matching_room_person_entries — the room-entry scan.
-        self.scan_matching_room_person_entries(Self::npc_auto_dialogue);
+        self.scan_current_room_npcs(Self::npc_auto_dialogue);
     }
 
     // = seg000:3723 loc_03723 — handle the pending dialogue / auto-action queued
@@ -3177,7 +3176,7 @@ mod tests {
 
     // In the initial palace throne room (0x200a), before Duke Leto has been met,
     // clicking the DOWN compass button (the exit toward room 4) is interrupted:
-    // ui_click_move_room runs the room-leave dialogue scan (run_room_leave_dialogue_scan -> room_person_present_auto_dialogue),
+    // ui_click_move_room runs the room-leave dialogue scan (run_room_leave_dialogue_scan -> npc_auto_dialogue),
     // which presents Leto's topic-4 line "Where are you going so fast? I have to
     // talk to you." (phrase 0x81f). That line's stay_here event (0x02) clears
     // dialogue_interrupt_gate, so test_dialogue_interrupt_gate aborts the move and the player stays in 0x200a.

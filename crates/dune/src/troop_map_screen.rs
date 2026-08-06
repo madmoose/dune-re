@@ -1513,7 +1513,8 @@ impl GameState {
         // = seg000:7c3b data_046f4 = 0; 7c40..7c53 with the interrupt gate at
         //   0x80 (a line whose event armed the equipment hand-over) the popup
         //   also shows the equipment spinners: data_046f4 = 1,
-        //   troop_unpack_equipment_flags, loc_07e1e. Not ported — the spinner
+        //   troop_unpack_equipment_flags_to_location_style_equipment,
+        //   loc_07e1e. Not ported — the spinner
         //   panel and its two mouse handlers (loc_07e97/loc_07eb8) are the
         //   MODIFY EQUIPMENT verb's UI. TODO.
         // = seg000:7c56..7c5d on the map view (data_046eb bit 7) drop the
@@ -2822,7 +2823,8 @@ impl GameState {
     // Each nonzero type stacks `count` icons vertically within [y, bottom]
     // (loc_061d3) and advances x by the icon width; an all-zero row draws the
     // "none" phrase. The troop info panel passes 0/1 flags
-    // (troop_unpack_equipment_flags); the location popup passes real counts.
+    // (troop_unpack_equipment_flags_to_location_style_equipment); the location
+    // popup passes real counts.
     fn map_draw_equipment_columns(&mut self, counts: &[u8; 7], bottom: i16, x0: i16, y: i16) {
         // = seg000:7e4f..7e64 nothing owned: the "none" phrase 12 px in
         //   (add dx,0ch; add bx,5) in the current colour.

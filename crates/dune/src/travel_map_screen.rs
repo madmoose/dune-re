@@ -16,7 +16,6 @@ use crate::{
     locations::{location_index_from_ptr, location_ptr},
     menu_defs::{self, MenuItem, MenuRef},
     rect::rect,
-    room_game_screen::RoomPerson,
     sprite_bank,
 };
 
@@ -1459,13 +1458,14 @@ impl GameState {
         // = seg000:40dd call loc_04ac4 — data_011ca = 0.
         self.data_011ca = 0;
         // = seg000:40e0/40e3 the companion-detach scan.
-        self.scan_matching_room_person_entries(Self::npc_travel_detach_companion);
+        self.scan_current_room_npcs(Self::npc_travel_detach_companion);
     }
 
     // = seg000:40e6 NPC_travel_detach_companion — room-person scan callback
     // for a travel departure: a companion in the room (flags 0x40 and 2 both
     // set) loses the companion flag and its HUD slot updates.
-    fn npc_travel_detach_companion(&mut self, index: u8, entry: &RoomPerson) {
+    fn npc_travel_detach_companion(&mut self, index: u8) {
+        let entry = &self.room_persons[index as usize];
         // = seg000:40e6/40ec both flag bits gate the detach.
         if entry.flags & 0x40 == 0 || entry.flags & 2 == 0 {
             return;

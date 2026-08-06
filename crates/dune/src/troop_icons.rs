@@ -671,11 +671,11 @@ impl GameState {
         }
     }
 
-    // = seg000:8461 troop_refresh_icon (+ troop_0846c) — refresh the troop's map
-    // icon: its sprite and animation script follow its occupation, so drop the
-    // old icon and spawn a fresh one. A stationed troop needs a visible marker
-    // at its location to have an icon at all; a moving one (occupation bit 6)
-    // sits at its gps position and always respawns.
+    // = seg000:8461 troop_refresh_icon (+ troop_respawn_map_icon) — refresh the
+    // troop's map icon: its sprite and animation script follow its occupation,
+    // so drop the old icon and spawn a fresh one. A stationed troop needs a
+    // visible marker at its location to have an icon at all; a moving one
+    // (occupation bit 6) sits at its gps position and always respawns.
     pub(crate) fn troop_refresh_icon(&mut self, ti: usize) {
         // = seg000:8461/8467 call troop_find_icon; jz -> troop_icon_remove.
         if let Some(icon) = self.troop_find_icon(ti) {

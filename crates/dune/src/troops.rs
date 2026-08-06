@@ -2591,9 +2591,9 @@ impl GameState {
     // = seg000:6ad4 troop_06ad4 — the inner entry of troop_set_occupation
     // (no same-occupation early-out): the arrival paths re-enter it to
     // re-initialize an unchanged occupation after a move (troop_arrive_at_
-    // destination / troop_settle_into_location), and troop_06ac5 (seg000:6ac5)
-    // passes occupation & 0xfc through it to drop an espionage/attack
-    // mission's low bits.
+    // destination / troop_settle_into_location), and
+    // troop_clear_occupation_bits_0_and_1 (seg000:6ac5) passes occupation &
+    // 0xfc through it to drop an espionage/attack mission's low bits.
     pub(crate) fn troop_reinit_occupation(&mut self, ti: usize, new: u8) {
         let mut new = new;
         // = seg000:6ad4..6ae8 assigning ecology (8) at the one location whose
@@ -2932,8 +2932,8 @@ impl GameState {
         let mut class = occ_low;
         if (5..=6).contains(&occ_low) {
             // = seg000:83af..83b4 espionage/attack drop the mission's low
-            //   bits (troop_06ac5: occupation & 0xfc through the
-            //   set-occupation reinit).
+            //   bits (troop_clear_occupation_bits_0_and_1: occupation & 0xfc
+            //   through the set-occupation reinit).
             let new = self.troops[ti].occupation & 0xfc;
             self.troop_reinit_occupation(ti, new);
             class = 0;

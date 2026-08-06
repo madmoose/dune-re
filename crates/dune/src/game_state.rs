@@ -1674,7 +1674,7 @@ pub struct GameState {
     pub(crate) data_04735: u8,
 
     // = seg001:0fd8 room_persons — the 16-entry room-person table walked by
-    // scan_matching_room_person_entries. Mutable copy of ROOM_PERSON_TABLE_INIT;
+    // scan_current_room_npcs. Mutable copy of ROOM_PERSON_TABLE_INIT;
     // init_room_persons rewrites entries 12..16 (addresses data_0109a / 10aa /
     // 10ba / 10ca) and the loc_06603 classification path also touches
     // entries 12, 14, 15 plus (selectively) 13.

@@ -825,18 +825,18 @@ impl GameState {
 
     // = seg000:96f1 present_room_person_dialogue -> loc_09702 -> loc_0970b ->
     // present_dialogue_line_with_auto_mask (loc_09f8b) — present a standing
-    // room-person's auto-dialogue line. room_person_present_auto_dialogue
-    // reaches here during the room-leave scan: the person's topic-4 record
-    // (loc_09702 forces topic 4 via `or ax,4`) is walked with the verb mask
-    // 0x20, and on a condition match present_first_matching_dialogue_line shows
-    // the talking head over the zoomed room, fires the line's event callback,
-    // and plays the voice. For Duke Leto in the early game this selects phrase
-    // 0x81f ("Where are you going so fast? I have to talk to you.") whose
-    // stay_here event interrupts the move.
+    // room-person's auto-dialogue line. npc_auto_dialogue reaches here during
+    // the room-leave scan: the person's topic-4 record (loc_09702 forces topic
+    // 4 via `or ax,4`) is walked with the verb mask 0x20, and on a condition
+    // match present_first_matching_dialogue_line shows the talking head over
+    // the zoomed room, fires the line's event callback, and plays the voice.
+    // For Duke Leto in the early game this selects phrase 0x81f ("Where are you
+    // going so fast? I have to talk to you.") whose stay_here event interrupts
+    // the move.
     //
     // Returns whether a line was presented — DOS signals this with the carry
-    // flag, which room_person_present_auto_dialogue tests at seg000:3531 (`jnb`)
-    // to decide whether to install the dialogue verb menu.
+    // flag, which npc_auto_dialogue tests at seg000:3531 (`jnb`) to decide
+    // whether to install the dialogue verb menu.
     pub(crate) fn present_room_person_line(&mut self, person_index: u8) -> bool {
         // = seg000:96f1 mov [_word_23C74_current_lip_sync_resource_id], ax — the
         //   lip-sync resource id is the person index. (seg000:96f4's al == 0x0e

@@ -731,7 +731,7 @@ impl GameState {
     }
 
     // = seg000:40c3 move_all_NPCs_whose_bit_6_of_flags_is_set — via
-    // scan_matching_room_person_entries with the NPC_move_if_flag_bit_6_set_040c9
+    // scan_current_room_npcs with the NPC_move_if_flag_bit_6_set_040c9
     // callback (seg000:40c9): every room-person entry matching the room being
     // left whose flags carry bit 0x40 is rewritten to the destination, so a
     // companion follows the player into the new room. The scan matches the
