@@ -118,6 +118,13 @@ pub const UI_ELEMENTS_INIT: [UiElement; 24] = [
 pub const NAV_PANEL_RECORD_OFFSET: usize = 12; // the first record of the 6-record nav panel (HUD records 12..17)
 pub const NAV_PANEL_RECORD_COUNT: usize = 6; // the nav panel is 6 records long
 
+/// One nav-panel template: the six records `ui_install_nav_panel` copies into
+/// HUD records 12..17. The `NAV_PANEL_*` consts below are the compiled-in
+/// seg001 contents; the live templates are the mutable copies on `GameState`
+/// (`nav_panel_room` and friends), because DOS edits them in place — see
+/// seg000:3056.
+pub type NavPanel = [UiElement; NAV_PANEL_RECORD_COUNT];
+
 /// = seg001:1c36 data_01c36 — the closed-book (normal room view) frieze-side
 /// template: the (flags, sprite_id) applied to HUD records 0..4 by
 /// `ui_set_and_draw_frieze_sides`. The sibling templates (open book 1c56,
@@ -145,7 +152,7 @@ const FRIEZE_SIDES_GLOBE: [(u16, i16); 4] = [(0x40, 0x0d), (0, 6), (0, 3), (0, -
 /// left frieze as a close hotspot, a dead right region, and the close button
 /// (sprite 33) in the compass corner.
 #[rustfmt::skip]
-pub(crate) const NAV_PANEL_BOOK: [UiElement; NAV_PANEL_RECORD_COUNT] = [
+pub(crate) const NAV_PANEL_BOOK: NavPanel = [
     ui2(  0,   0,   0,   0, 0x0000, -1, 0x0f66, None),                                                    // 12 dead
     ui2( 21, 161,  42, 186, 0x0080, -1, 0xafc7, Some(GameState::callback_ui_element_book_prev_page)),     // 13 prev page
     ui2( 43, 161,  63, 186, 0x0080, -1, 0xafb5, Some(GameState::callback_ui_element_book_next_page)),     // 14 next page
@@ -159,7 +166,7 @@ pub(crate) const NAV_PANEL_BOOK: [UiElement; NAV_PANEL_RECORD_COUNT] = [
 /// compass button, the four held-repeat tilt/rotate arrows in the left
 /// frieze, and the centre-on-player button between them.
 #[rustfmt::skip]
-pub(crate) const NAV_PANEL_GLOBE: [UiElement; NAV_PANEL_RECORD_COUNT] = [
+pub(crate) const NAV_PANEL_GLOBE: NavPanel = [
     ui2(266, 171, 285, 184, 0x0080, 41, 0xbc81, Some(GameState::callback_ui_element_globe_exit)),  // 12 exit globe
     ui2( 38, 159,  54, 172, 0x4080, 49, 0xb9b9, Some(GameState::callback_globe_tilt_up)),          // 13 tilt up
     ui2( 54, 168,  72, 185, 0x4080, 50, 0xb9cc, Some(GameState::callback_globe_rotate_east)),      // 14 rotate east
@@ -195,9 +202,10 @@ const SUN_MOON_COORDS: [[(u16, u16); 2]; 16] = [
 /// the 6 records (HUD records 12..18) of the bottom-right compass, a backing box
 /// (sprite 33) and the N/E/S/W move-direction buttons (sprites 29..32, handlers
 /// ui_click_room_*) plus the centre (sprite 36).
-/// `ui_setup_and_draw_nav_panel` copies it into place.
+/// `ui_setup_and_draw_nav_panel` copies the live `nav_panel_room` into place;
+/// the compass rebuild edits that copy's centre record (seg000:3056).
 #[rustfmt::skip]
-pub(crate) const NAV_PANEL_ROOM: [UiElement; NAV_PANEL_RECORD_COUNT] = [
+pub(crate) const NAV_PANEL_ROOM: NavPanel = [
     ui2(255, 162, 295, 192, 0x0000, 33, 0x0f66, None),                                 // 12 box
     ui2(269, 162, 279, 172, 0x0080, 29, 0x3f15, Some(GameState::ui_click_move_up)),    // 13 up
     ui2(284, 172, 294, 182, 0x0080, 30, 0x3f1a, Some(GameState::ui_click_move_right)), // 14 right
@@ -212,7 +220,7 @@ pub(crate) const NAV_PANEL_ROOM: [UiElement; NAV_PANEL_RECORD_COUNT] = [
 /// 13..17 are also the pseudo records the travel-arrow cursor shapes resolve
 /// to in hit_test_ui_elements.
 #[rustfmt::skip]
-pub(crate) const NAV_PANEL_ALT: [UiElement; NAV_PANEL_RECORD_COUNT] = [
+pub(crate) const NAV_PANEL_ALT: NavPanel = [
     ui2(266, 171, 285, 184, 0x0080, 41, 0x5b05, Some(GameState::ui_click_map_center)), // 12 centre
     ui2(267, 162, 284, 171, 0x4080, 37, 0x8829, Some(GameState::ui_click_map_up)),     // 13 up
     ui2(285, 171, 297, 184, 0x4080, 38, 0x8824, Some(GameState::ui_click_map_right)),  // 14 right
@@ -228,7 +236,7 @@ pub(crate) const NAV_PANEL_ALT: [UiElement; NAV_PANEL_RECORD_COUNT] = [
 /// callback_ui_element_04ad7). The two turn arrows carry flag 0x4000, so a held
 /// press auto-repeats the heading change.
 #[rustfmt::skip]
-pub(crate) const NAV_PANEL_FLIGHT: [UiElement; NAV_PANEL_RECORD_COUNT] = [
+pub(crate) const NAV_PANEL_FLIGHT: NavPanel = [
     ui2(262, 168, 263, 169, 0x0200, -1, 0x0f66, None),
     ui1(258, 172, 266, 182, 0x4080, 42, 0x4ad0),
     ui1(270, 170, 279, 182, 0x0080, 43, 0x4f09),
@@ -245,7 +253,7 @@ pub(crate) const NAV_PANEL_FLIGHT: [UiElement; NAV_PANEL_RECORD_COUNT] = [
 /// look-away click instead), a staged night attack, and a travel that cannot be
 /// steered (`rebuild_and_draw_room_nav_panel`).
 #[rustfmt::skip]
-pub(crate) const NAV_PANEL_BLANK: [UiElement; NAV_PANEL_RECORD_COUNT] = [
+pub(crate) const NAV_PANEL_BLANK: NavPanel = [
     ui2(262, 168, 263, 169, 0x0200, -1, 0x0f66, None),
     ui2(258, 172, 266, 182, 0x0000, -1, 0x0f66, None),
     ui2(270, 170, 279, 182, 0x0000, -1, 0x0f66, None),
@@ -500,11 +508,11 @@ impl GameState {
         // = seg000:d721 test game_screen_mode_flags,3 -> map/book panel (1d72),
         // otherwise the room panel (1c76).
         let template = if self.data_046eb != 0 {
-            &NAV_PANEL_ALT
+            self.nav_panel_alt
         } else if self.game_screen_mode_flags & 3 != 0 {
-            &NAV_PANEL_FLIGHT
+            self.nav_panel_flight
         } else {
-            &NAV_PANEL_ROOM
+            self.nav_panel_room
         };
         // = seg000:d715 jmp loc_0d72b (the d712 path falls in the same way).
         self.ui_install_nav_panel(template);
@@ -515,10 +523,14 @@ impl GameState {
     // fills the panel background and draws them. Reached from ui_setup_nav_panel
     // with the view template, and directly from callback_transition_look_at_mirror
     // (si=1d1eh) to blank the compass for the mirror still.
-    pub(crate) fn ui_install_nav_panel(&mut self, template: &[UiElement; NAV_PANEL_RECORD_COUNT]) {
+    //
+    // The template comes by value: the callers pass one of the mutable
+    // `nav_panel_*` templates, which DOS reads straight out of seg001 while it
+    // writes the live records.
+    pub(crate) fn ui_install_nav_panel(&mut self, template: NavPanel) {
         const NAV_PANEL_RECORD_END: usize = NAV_PANEL_RECORD_OFFSET + NAV_PANEL_RECORD_COUNT;
         // = seg000:d72b di=1b8eh; cx=2ah; rep movsw.
-        self.ui_elements[NAV_PANEL_RECORD_OFFSET..NAV_PANEL_RECORD_END].copy_from_slice(template);
+        self.ui_elements[NAV_PANEL_RECORD_OFFSET..NAV_PANEL_RECORD_END].copy_from_slice(&template);
         // = seg000:d735 loc_0d735.
         self.ui_draw_nav_panel();
     }
@@ -1045,7 +1057,7 @@ impl GameState {
         //   four shapes, stepping di one 0eh record per miss, and returns ZF +
         //   stc on a match) the hit-test unconditionally resolves to the
         //   matching nav-panel arrow record: 13 up, 14 right, 15 down, 16
-        //   left — the same live records the NAV_PANEL_ALT install fills. A
+        //   left — the same live records the nav_panel_alt install fills. A
         //   click anywhere with an arrow cursor thus scrolls the map, and the
         //   held-button auto-repeat re-hits the same pseudo record.
         match self.cursor_image {

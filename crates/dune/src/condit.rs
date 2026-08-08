@@ -59,6 +59,7 @@ fn condit_var_name(addr: u16) -> Option<(&'static str, bool)> {
         0xbc => ("spice_shipment_quantity", true),
         0xbe => ("spice_shipment_fulfilment", false),
         0xbf => ("spice_shipment_flags", false),
+        0xc0 => ("for_condit_spice_shipment_ds_c0", true),
         0xc2 => ("final_attack_stage", false),
         0xc3 => ("spice_shipment_sequence_number", false),
         0xc4 => ("number_of_sietches_attacked_by_harkonnen", false),
@@ -104,7 +105,7 @@ fn condit_var_name(addr: u16) -> Option<(&'static str, bool)> {
         0xea => ("data_000ea", false),
         0xed => ("data_000ed", false),
         0xee => ("data_000ee", true),
-        0xf4 => ("desert_walk_counter", false),
+        0xf4 => ("desert_exhaustion_counter", false),
         0xfb => ("room_view_toggle", false),
         0xff => ("days_since_phase_change", false),
         // 0xfc => ("data_000fc", true),
@@ -242,10 +243,10 @@ impl GameState {
             0xcf => self.days_left_until_spice_shipment,
             // = seg001:00d5 contact_distance_related_ds_d5.
             0xd5 => self.contact_distance_related_ds_d5,
-            // = seg001:00f4 desert_walk_counter.
-            0xf4 => self.desert_walk_counter,
+            // = seg001:00f4 desert_exhaustion_counter.
+            0xf4 => self.desert_exhaustion_counter,
             // = seg001:00f5 for_condit_desert_walk_related_ds_f5.
-            0xf5 => self.for_condit_desert_walk_ds_f5,
+            0xf5 => self.for_condit_jessica_commented_on_exhaustion_ds_f5,
             // = seg001:00f8/00f9 the illness-plot counters (events.rs).
             0xf8 => self.number_of_locations_with_illness,
             0xf9 => self.chani_troop_illness_cure_progress,
@@ -314,6 +315,9 @@ impl GameState {
             0xb2 => self.spice_production_lower_than_previous_day,
             // = seg001:00bc spice_shipment_quantity.
             0xbc => self.spice_shipment_quantity,
+            // = seg001:00c0 for_condit_spice_shipment_related_ds_c0 —
+            // Duncan's shipment-mission report state.
+            0xc0 => self.for_condit_spice_shipment_ds_c0,
             // = seg001:00ca..00e4 the nearest-location distances and ptrs
             // (condit_scan_nearest_locations, troops.rs); ds:d6 gates the
             // "There is a sietch very near" messages.

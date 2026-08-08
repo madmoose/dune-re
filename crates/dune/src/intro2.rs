@@ -72,7 +72,7 @@ impl GameState {
             // = seg000:0250 pushf — preserve the wait's ESC flag (DOS ZF) across cleanup.
             // = seg000:0251 remove_all_frame_tasks; seg000:0254 pcm_stop_voc.
             self.remove_all_frame_tasks();
-            self.pcm_player.stop();
+            self.pcm_stop_voc();
 
             // = seg000:0257 midi_restore_music_volume — ramp the score back to
             // its normal level after the clip finishes.
@@ -516,14 +516,15 @@ impl GameState {
         self.midi.set_ducking(0x190, volume, balance);
     }
 
-    // = seg000:ab92 frame_task_callback_0ab92 — the per-frame monitor a ducked
-    // voice clip installs (interval 1). Once PCM playback ends, ramp the music
-    // back to its un-ducked level and remove this task. DOS also pumped the
-    // streaming-VOC refill here (loc_0a9b9) and ran the same body inline from
-    // the blocking wait_for_narration_voice_clip loop (seg000:aba9); the dnsdb
-    // driver owns the whole clip in the port, so the monitor only needs the
-    // music-restore half.
+    // = seg000:ab92 frame_task_callback_0ab92 — the per-frame monitor a
+    // narration clip installs (interval 1). Pump the streaming refill, and
+    // once PCM playback ends, ramp the music back to its un-ducked level and
+    // remove this task. The blocking wait_for_narration_voice_clip loop
+    // (seg000:aba9) runs the same body inline.
     pub(crate) fn tick_pcm_voice_music_restore(&mut self) {
+        // = ab92 call pcm_voice_stream_refill — feed the driver the next
+        // chunk while the clip streams.
+        self.pcm_voice_stream_refill();
         // = ab95 check_pcm_voice_file_open; jnz loc_0ab44 — still playing, wait.
         if self.pcm_player.is_playing() {
             return;
@@ -543,11 +544,11 @@ impl GameState {
     // the WORMSUIT intro narration (seg000:023d, clips 001..008), the message
     // viewer (seg000:261c) and the map screen open (seg000:4340, clip 2BC).
     //
-    // DOS streams the clip in chunks through a loc_0ab92 frame task that polls
-    // open_pcm_voice_file and steps _dword_22CC1_pcm_voc_resource_offset by 0x1a
-    // bytes per refill. The port loads the whole .voc in one go via voc::parse
-    // and hands it to the PCM mixer, so the streaming offset and frame task have
-    // no equivalent. Missing file is silent (= seg000:ab73 jb loc_0ab8d).
+    // The clip streams to the driver in PCM_VOICE_CHUNK pieces: chunk 2 is
+    // queued right after the open (= the pcm_voice_stream_refill call at
+    // seg000:ab7a) and the frame_task_callback_0ab92 monitor (installed at
+    // ab7d, interval 1) pumps the rest each tick. Missing file is silent
+    // (= seg000:ab73 jb loc_0ab8d).
     pub(crate) fn start_narration_voice_clip(&mut self, ax: u16) {
         // = seg000:a8bc create_voc_file_name_from_bx with bx=0x19: the
         // template yields "PZ\PZ<ax:3-hex>I.VOC".
@@ -577,18 +578,23 @@ impl GameState {
         let Ok(data) = self.dat_file.read(&name) else {
             return;
         };
-        // = voc_get_lipsync_data: parse the .voc to confirm it has a usable
-        // type-1 PCM block (narration has no lip-sync stream); a missing block
-        // means nothing to play — same effect as DOS's open failure.
+        // Parse the .voc to confirm it has a usable type-1 PCM block
+        // (narration has no lip-sync stream); a missing block means nothing
+        // to play — same effect as DOS's open failure.
         if crate::voc::parse(&data).is_none() {
             return;
         }
 
-        // = seg000:ab6d pcm_stop_voc; seg000:ab89 word ptr [pcm_vtable_start_
-        // playback] — drain whatever was queued, then start this clip on the
-        // dnsdb driver. Mirrors the talking-head path (= seg000:a75c).
-        self.pcm_player.stop();
-        self.pcm_player.start_playback(&data, 0);
+        // = seg000:ab6d pcm_stop_voc, then stream the clip to the dnsdb
+        // driver: chunk 1 starts (= seg000:ab89 [pcm_vtable_start_playback]),
+        // chunk 2 is queued (= seg000:ab7a call pcm_voice_stream_refill).
+        self.pcm_stop_voc();
+        self.pcm_voice_stream_start(data);
+        // = seg000:ab7d/ab83 add_frame_task(frame_task_callback_0ab92,
+        // interval 1) — the monitor that pumps the refill each tick and
+        // restores the ducked music once the clip ends. A singleton: the
+        // pcm_stop_voc above removed any prior instance.
+        self.add_frame_task(1, crate::TaskId::PcmVoiceMusicRestore);
     }
 
     // = seg000:ab45 duck_music_and_start_narration_voice_clip — with PCM
@@ -620,12 +626,14 @@ impl GameState {
             // = seg000:abbc..abc4 the 0x3e8-tick timeout falls through into
             //   set_voc_pcm_is_not_playing, force-stopping the clip.
             if self.game_ticks() - start >= 0x3e8 {
-                self.pcm_player.stop();
+                self.pcm_stop_voc();
                 break;
             }
-            // DOS's loop body is the ab92 monitor (a no-op while the clip
-            // still plays); the port paces one frame per pass so the frame
-            // tasks and the PIT keep advancing.
+            // = seg000:abb3 call frame_task_callback_0ab92 — the loop body
+            // pumps the streaming refill inline; the port paces one frame per
+            // pass so the frame tasks and the PIT keep advancing, and pumps
+            // explicitly in case no monitor task is installed.
+            self.pcm_voice_stream_refill();
             self.tick_one_frame();
         }
         // = seg000:abba jz set_voc_pcm_is_not_playing / seg000:abc4 fall
@@ -674,7 +682,7 @@ impl GameState {
         // screen buffer so no intro frame shows through before the room is drawn.
         self.screen.pixels_mut().fill(0);
         // = seg000:029a call pcm_stop_voc — drain any queued voice audio.
-        self.pcm_player.stop();
+        self.pcm_stop_voc();
         // = seg000:029d _byte_227D_suppress_sky_240_255 = 0 (in-game uses the full
         // sky palette span).
         self.data_0227d = 0;

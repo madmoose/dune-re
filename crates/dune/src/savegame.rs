@@ -330,6 +330,7 @@ impl GameState {
         w16(b, 0x00bc, self.spice_shipment_quantity);
         w8(b, 0x00be, self.spice_shipment_fulfilment);
         w8(b, 0x00bf, self.spice_shipment_flags);
+        w16(b, 0x00c0, self.for_condit_spice_shipment_ds_c0);
         w8(b, 0x00c2, self.final_attack_stage);
         w8(b, 0x00c3, self.spice_shipment_sequence_number);
         w8(b, 0x00c4, self.number_of_sietches_attacked_by_harkonnen);
@@ -364,8 +365,12 @@ impl GameState {
         w8(b, 0x00ea, self.data_000ea as u8);
         w8(b, 0x00ed, self.data_000ed);
         w16(b, 0x00ee, self.data_000ee);
-        w8(b, 0x00f4, self.desert_walk_counter);
-        w8(b, 0x00f5, self.for_condit_desert_walk_ds_f5);
+        w8(b, 0x00f4, self.desert_exhaustion_counter);
+        w8(
+            b,
+            0x00f5,
+            self.for_condit_jessica_commented_on_exhaustion_ds_f5,
+        );
         w8(b, 0x00f8, self.number_of_locations_with_illness);
         w8(b, 0x00f9, self.chani_troop_illness_cure_progress);
         w8(b, 0x00fa, self.vegetation_started_on_dune);
@@ -592,6 +597,7 @@ impl GameState {
         self.spice_shipment_quantity = r16(b, 0x00bc);
         self.spice_shipment_fulfilment = r8(b, 0x00be);
         self.spice_shipment_flags = r8(b, 0x00bf);
+        self.for_condit_spice_shipment_ds_c0 = r16(b, 0x00c0);
         self.final_attack_stage = r8(b, 0x00c2);
         self.spice_shipment_sequence_number = r8(b, 0x00c3);
         self.number_of_sietches_attacked_by_harkonnen = r8(b, 0x00c4);
@@ -621,8 +627,8 @@ impl GameState {
         self.data_000ea = r8(b, 0x00ea) as i8;
         self.data_000ed = r8(b, 0x00ed);
         self.data_000ee = r16(b, 0x00ee);
-        self.desert_walk_counter = r8(b, 0x00f4);
-        self.for_condit_desert_walk_ds_f5 = r8(b, 0x00f5);
+        self.desert_exhaustion_counter = r8(b, 0x00f4);
+        self.for_condit_jessica_commented_on_exhaustion_ds_f5 = r8(b, 0x00f5);
         self.number_of_locations_with_illness = r8(b, 0x00f8);
         self.chani_troop_illness_cure_progress = r8(b, 0x00f9);
         self.vegetation_started_on_dune = r8(b, 0x00fa);

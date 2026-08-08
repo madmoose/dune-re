@@ -11,11 +11,12 @@
 
 use crate::{
     FbId, GameState, Rect, TaskId,
-    game_ui::{MouseHandlers, NAV_PANEL_ALT},
+    game_ui::MouseHandlers,
     gfx,
     locations::{location_index_from_ptr, location_ptr},
     menu_defs::{self, MenuItem, MenuRef},
     rect::rect,
+    room_game_screen::{NPC_COMPANION, NPC_DETACH_ON_TRAVEL},
     sprite_bank,
 };
 
@@ -258,7 +259,7 @@ impl GameState {
         self.data_046eb = 1;
         // = seg000:4328 si=data_01cca; call loc_0d72b — install and draw the
         //   alternate (travel) nav panel.
-        self.ui_install_nav_panel(&NAV_PANEL_ALT);
+        self.ui_install_nav_panel(self.nav_panel_alt);
         // = seg000:432e si=map_view_rect_template; di=data_046e3_rect;
         //   call set_mouse_nav_rect; call copy_rect_at_si_to_di — install the
         //   map window as both the navigation mouse hot-zone (the hand /
@@ -1467,7 +1468,7 @@ impl GameState {
     fn npc_travel_detach_companion(&mut self, index: u8) {
         let entry = &self.room_persons[index as usize];
         // = seg000:40e6/40ec both flag bits gate the detach.
-        if entry.flags & 0x40 == 0 || entry.flags & 2 == 0 {
+        if entry.flags & NPC_COMPANION == 0 || entry.flags & NPC_DETACH_ON_TRAVEL == 0 {
             return;
         }
         // = seg000:40f2 call npc_clear_travelling — drop the travelling flag
@@ -1918,11 +1919,11 @@ impl GameState {
         }
     }
 
-    // = seg000:35ad loc_035ad / loc_035e9 — the per-settle companion dispatch,
-    // run once per travel step (from loc_02e52). During a travel
-    // (game_screen_mode_flags != 0) this is the mode != 0 branch (loc_035e9):
-    // it re-detects a location the flight passes near
-    // (travel_scan_nearby_location) and the hostile-zone warning
+    // = seg000:35e9 travel_settle_companion_dispatch — the mode != 0 branch of
+    // finish_room_screen_setup (seg000:35ad), run once per travel step (from
+    // loc_02e52). During a travel (game_screen_mode_flags != 0) it re-detects
+    // a location the flight passes near
+    // (travel_scan_nearby_location) and runs the hostile-zone warning
     // (travel_route_hostile_zone_check); if either armed a room action and a
     // companion is aboard, it raises the fly-over cabin — ORNYCAB drawn over
     // the game area plus the companion as a talking head. The mode == 0
@@ -2784,7 +2785,7 @@ impl GameState {
                 let loc = &mut self.locations[self.last_location_index];
                 loc.equipment.ornithopters = loc.equipment.ornithopters.wrapping_sub(1);
                 // = seg000:478c jmp pcm_stop_voc.
-                self.pcm_player.stop();
+                self.pcm_stop_voc();
                 return;
             }
         }
@@ -3421,7 +3422,7 @@ mod tests {
         assert_eq!(game.cursor_image, Some(CursorShapeId::Arrow));
     }
 
-    // Map scrolling: the alternate nav panel's arrows (NAV_PANEL_ALT,
+    // Map scrolling: the alternate nav panel's arrows (nav_panel_alt,
     // seg001:1cca, handlers ui_click_map_up/right/down/left -> ui_click_map_
     // buttons, seg000:8831) move zoomed_globe_longitude/latitude by the
     // map_scroll_delta_* pairs (seg001:145e) and redraw through

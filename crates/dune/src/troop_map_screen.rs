@@ -41,7 +41,7 @@
 
 use crate::{
     GameState, Rect, cmd,
-    game_ui::{MouseHandlers, NAV_PANEL_ALT},
+    game_ui::MouseHandlers,
     gfx,
     locations::location_index_from_ptr,
     menu_defs::{
@@ -203,7 +203,7 @@ impl GameState {
         self.ui_set_and_draw_frieze_sides_map();
         // = seg000:5a97 jmp loc_0d712 — install and draw the alternate
         //   (map-scroll) nav panel.
-        self.ui_install_nav_panel(&NAV_PANEL_ALT);
+        self.ui_install_nav_panel(self.nav_panel_alt);
     }
 
     // = seg000:5a9a ui_main_view_map_interface — compose the full DUNE MAP

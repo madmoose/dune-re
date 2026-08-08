@@ -1289,10 +1289,17 @@ impl From<RecordFmt> for RecordFormat {
 }
 
 /// Music playback mode selected at launch — the persistent state the mixer
-/// panel's MUSIC verbs leave behind (settings_ui.rs).
+/// panel's MUSIC verbs leave behind (settings_ui.rs), plus `Disabled` for the
+/// machine having no MIDI card at all.
 #[derive(Copy, Clone, Debug, PartialEq, Eq, ValueEnum)]
 enum MusicMode {
-    /// Music off (MUSIC OFF).
+    /// No MIDI card: nothing ever plays, the intro included. The equivalent of
+    /// the original game finding no MIDI hardware, and the only mode the mixer
+    /// panel's MUSIC ON verbs cannot undo.
+    Disabled,
+    /// Music switched off (MUSIC OFF), with a card present: the intro still
+    /// scores — it drives the card directly, as in the original — and in-game
+    /// music stays silent until MUSIC ON in the mixer panel.
     Off,
     /// Situation-driven jukebox: the song follows the on-screen state (MUSIC
     /// ON, GAME RELATIVE — the game default).
@@ -1442,12 +1449,12 @@ fn main() {
         // actual audio backends, which the intro drives directly.
         game.set_pcm_enabled(args.pcm.is_on());
         game.let_voices_finish = args.let_voices_finish.is_on();
-        game.set_music_enabled(args.music != MusicMode::Off);
+        // --music: the card-presence half lands now, so the intro honours it;
+        // the mode itself is held pending and applied by start() after its
+        // seg000:0019 music_playlist_flags reset.
+        game.set_music_mode(args.music);
 
         game.start(skip_intro);
-        // --music playlist mode: start() resets music_playlist_flags to 0
-        // (seg000:0019), so the starting in-game mode is applied *after* it.
-        game.set_music_mode(args.music);
         // = seg000:0037 call game_loop — run the in-game loop after start's setup
         // (the port hoists this call out of start() so headless renders can reuse
         // start without entering the loop).

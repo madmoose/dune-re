@@ -688,7 +688,7 @@ mod tests {
     use std::sync::mpsc;
 
     use super::*;
-    use crate::{DatFile, InputState, recorder::Recorder};
+    use crate::{DatFile, InputState, recorder::Recorder, room_game_screen::NPC_COMPANION};
 
     // The game-thread cursor state must self-heal across a character-click
     // conversation (the seg000:d8f4 click hide followed by common_dialogue's
@@ -907,7 +907,7 @@ mod tests {
         // Companion-style speaker: travelling (flags 0x40) and not standing in
         // the room (no zoom anchor), so the dialogue opens un-zoomed and the
         // cleanup takes the non-zoom travelling branch.
-        game.room_persons[0].flags |= 0x40;
+        game.room_persons[0].flags |= NPC_COMPANION;
         game.character_screen_pos[0] = (0xffff, 0xffff);
 
         game.call_restore_cursor();

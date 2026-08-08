@@ -29,7 +29,7 @@
 
 use crate::{
     GameState, Rect, cmd,
-    game_ui::{MouseHandlers, NAV_PANEL_GLOBE},
+    game_ui::MouseHandlers,
     globe_renderer::GLOBE_CLIP_RECT,
     menu_defs::{self, MenuRef},
     sprite_bank,
@@ -98,7 +98,7 @@ impl GameState {
         self.ui_set_and_draw_frieze_sides_globe();
         // = seg000:b841..b844 si = ui_globe_rotation_controls; call loc_0d72b
         // — install and draw the six rotation controls over the nav panel.
-        self.ui_install_nav_panel(&NAV_PANEL_GLOBE);
+        self.ui_install_nav_panel(self.nav_panel_globe);
         // = seg000:b847 jmp loc_0ad5e — re-pick the music for the globe mode.
         self.update_room_music();
     }

@@ -1,6 +1,6 @@
 //! The in-game PALACE PLAN overlay (seg000:18ee ui_draw_palace_plan), reached
 //! from the room-screen nav-panel centre button (the compass centre,
-//! ui_elements[17] / NAV_PANEL_ROOM[5], func_ptr 0x18ee).
+//! ui_elements[17] / nav_panel_room[5], func_ptr 0x18ee).
 //!
 //! The handler toggles a full-screen-right overlay that shows a schematic plan
 //! of the palace with a population marker per room: a coloured backing rect, a
@@ -9,7 +9,10 @@
 //! on the player's current room. A click anywhere (or a second centre click)
 //! closes it again.
 
-use crate::{GameState, Rect, game_ui::MouseHandlers, gfx, menu_defs::MenuRef, sprite_bank};
+use crate::{
+    GameState, Rect, game_ui::MouseHandlers, gfx, menu_defs::MenuRef,
+    room_game_screen::NPC_COMPANION, sprite_bank,
+};
 
 // = seg001:120b _stru_206BB_icon_list — the PALPLAN.HSQ icon list drawn by
 // draw_icons_list_at_si (each entry is (sprite, x, y), 0xffff-terminated): the
@@ -153,7 +156,7 @@ impl GameState {
             // = seg000:196f bx=[si]; dec bl — index by the entry's room number-1.
             let idx = ((rp.location_and_room & 0xff) as i32) - 1;
             // = seg000:1975 test [si+0fh],40h — flag 0x40 selects the second bank.
-            if rp.flags & 0x40 != 0 {
+            if rp.flags & NPC_COMPANION != 0 {
                 // = seg000:197e inc [bx+di].
                 enemies[idx as usize] += 1;
             } else {

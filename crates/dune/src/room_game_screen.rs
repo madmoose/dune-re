@@ -14,7 +14,7 @@ use crate::{
     Equipment, GameState, Location,
     attack::AttackState,
     cmd,
-    game_ui::{NAV_PANEL_BLANK, NAV_PANEL_FLIGHT, NAV_PANEL_RECORD_OFFSET},
+    game_ui::NAV_PANEL_RECORD_OFFSET,
     gfx, locations,
     menu_defs::{self, CMD_GREY, MenuCleanupFn, MenuItem, MenuItemCallback, MenuRef, item},
     sprite_bank,
@@ -121,6 +121,13 @@ const CMD_MASSIVE_ATTACK: MenuItem = item(cmd::MASSIVE_ATTACK, 0x7317, |_, _, _|
 const CMD_FIGHT_FOR_A_WHOLE_DAY: MenuItem = item(cmd::FIGHT_FOR_A_WHOLE_DAY, 0x0fc5, |_, _, _| {
     println!("menu: FIGHT FOR A WHOLE DAY (seg000:0fc5) not ported")
 });
+
+pub(crate) const NPC_DETACH_ON_TRAVEL: u8 = 0x02;
+pub(crate) const NPC_LEFT_BEHIND: u8 = 0x04;
+pub(crate) const NPC_STORY_BIT: u8 = 0x10;
+pub(crate) const NPC_TALKED_TO: u8 = 0x20;
+pub(crate) const NPC_COMPANION: u8 = 0x40;
+pub(crate) const NPC_NO_COME_WITH_ME: u8 = 0x80;
 
 /// One entry of the seg001:0fd8 room-person table (= the chani `RoomPerson`
 /// struct). The DOS layout is 16 bytes; of the eight bytes between `handler`
@@ -458,10 +465,10 @@ impl GameState {
         if self.data_047a7 != 0 {
             return;
         }
-        // = seg000:2e62 data_04735 sign bit set -> run the auto-action handler.
-        if (self.data_04735 as i8) < 0 {
-            // = seg000:2e69 jmp loc_03723.
-            self.handle_pending_dialogue_action();
+        // = seg000:2e62 desert_step_counter sign bit set -> run the auto-action handler.
+        if self.desert_step_counter & 0x80 != 0 {
+            // = seg000:2e69 jmp desert_walk_exhaustion_check.
+            self.desert_walk_exhaustion_check();
             return;
         }
         // = seg000:2e6c.
@@ -723,7 +730,8 @@ impl GameState {
         //   97dd or [si+0fh],20h; 97e1 and [si+0fh],0fbh — mark the speaker
         //   talked-to (0x20) and drop bit 0x04 on the way out.
         let speaker = self.current_lip_sync_resource_id as usize;
-        self.room_persons[speaker].flags = (self.room_persons[speaker].flags | 0x20) & !0x04;
+        self.room_persons[speaker].flags =
+            (self.room_persons[speaker].flags | NPC_TALKED_TO) & !NPC_LEFT_BEHIND;
         // = seg000:97eb cmp game_screen_mode_flags,0; jnz — the flight branch:
         //   the fly-over cabin is up over a travel, not a room dialogue. Tear the
         //   head down, rebuild the flight nav panel and resume the flight instead
@@ -764,7 +772,7 @@ impl GameState {
             //   (npc_travel_detach_companion) or on eviction.
             self.ui_elements[20].flags = 0;
             // = seg000:984f test [si+0fh],40h; 9855 call npc_assign_companion_slot.
-            if self.room_persons[speaker].flags & 0x40 != 0 {
+            if self.room_persons[speaker].flags & NPC_COMPANION != 0 {
                 self.npc_assign_companion_slot(speaker);
             }
             // = seg000:9868 and room_render_flags,7fh — drop the redraw-for-zoom
@@ -780,7 +788,7 @@ impl GameState {
             //   overlay is torn down and the game area restored + presented from
             //   fb2 (no room re-render over the scripted attack scene).
             let night = self.night_attack_stage != 0;
-            if self.room_persons[speaker].flags & 0x40 != 0 {
+            if self.room_persons[speaker].flags & NPC_COMPANION != 0 {
                 // = seg000:982b jmp npc_assign_companion_slot — a still-travelling
                 //   speaker keeps its slot (tail jump; no room re-render, and —
                 //   outside the night attack — no head teardown either). The
@@ -928,7 +936,7 @@ impl GameState {
         // = seg000:0ef1 si=ui_nav_panel_blank; loc_0d72b — install the blank
         //   nav-panel template into HUD records 12..17, clearing the bottom-right
         //   compass (no sprites, no clickable records) for the mirror still.
-        self.ui_install_nav_panel(&NAV_PANEL_BLANK);
+        self.ui_install_nav_panel(self.nav_panel_blank);
         // = seg000:0ef7 call main_ui_elements_clear_flags_18_19_20.
         self.main_ui_elements_clear_flags_18_19_20();
         // = seg000:0efa ui_elements[20].flags = 0x80 — enable the full game-area
@@ -2424,7 +2432,7 @@ impl GameState {
         // = seg000:2ffb cmp byte ptr [night_attack_stage], 0; jnz loc_0301a —
         // the night attack clears the compass.
         if self.night_attack_stage != 0 {
-            self.ui_install_nav_panel(&NAV_PANEL_BLANK);
+            self.ui_install_nav_panel(self.nav_panel_blank);
             return;
         }
         // = seg000:3002 test game_screen_mode_flags,3; jz loc_03020 — a travel
@@ -2441,10 +2449,10 @@ impl GameState {
             //   panel.
             let steerable = self.data_011ca == 0 && self.travel_no_location_dest != 0;
             if steerable {
-                self.ui_install_nav_panel(&NAV_PANEL_FLIGHT);
+                self.ui_install_nav_panel(self.nav_panel_flight);
             } else {
                 // = seg000:301a si = ui_nav_panel_blank.
-                self.ui_install_nav_panel(&NAV_PANEL_BLANK);
+                self.ui_install_nav_panel(self.nav_panel_blank);
             }
             return;
         }
@@ -2492,6 +2500,8 @@ impl GameState {
         self.ui_elements[NAV_PANEL_RECORD_OFFSET].sprite_id = box_sprite_id;
         // = seg000:3053 mov [di+46h],al — the centre element [17]'s flags.
         self.ui_elements[NAV_PANEL_RECORD_OFFSET + 5].flags = centre_flags;
+        // = seg000:3056 mov [ui_nav_panel_room[5].flags],al
+        self.nav_panel_room[5].flags = centre_flags;
         // = seg000:305c the exit-classification loop: for each compass
         //   direction (i = 0..3 → UP / RIGHT / DOWN / LEFT), show the arrow
         //   (flags 0x80) only when the exit byte is in 0xFB..0xFF; otherwise
@@ -2794,7 +2804,9 @@ impl GameState {
         self.in_transition = 0;
     }
 
-    // = seg000:35ad loc_035ad — the post-present dispatch loc_02e52 opens with.
+    // = seg000:35ad finish_room_screen_setup — the post-present dispatch
+    // loc_02e52 opens with, and the one the desert-collapse tail (seg000:37a7)
+    // jumps to.
     // In a travel mode it is the fly-over companion dispatch (loc_035e9); in the
     // plain room mode (loc_035b4) it is the room-entry auto-dialogue scan: one
     // standing person whose topic-4 condition matches speaks as the player
@@ -2834,10 +2846,141 @@ impl GameState {
         self.scan_current_room_npcs(Self::npc_auto_dialogue);
     }
 
-    // = seg000:3723 loc_03723 — handle the pending dialogue / auto-action queued
-    // in data_04735.
-    // TODO: port; no-op stub.
-    fn handle_pending_dialogue_action(&mut self) {}
+    // = seg000:3723 desert_walk_exhaustion_check — the desert heat toll, run
+    // by the post-present dispatch (seg000:2e69) when desert_step_counter's
+    // arm bit is up. From 20 unrested steps on, every 16th step flashes the
+    // sun over the game area with a growing pause; from 55 steps the flash
+    // becomes the collapse: Paul is out for five time periods and wakes up
+    // carried into the last visited location.
+    fn desert_walk_exhaustion_check(&mut self) {
+        // = seg000:3728 the flash starts once 20 steps are taken without a rest.
+        const SUN_FLASH_FIRST_STEP: u8 = 20;
+        // = seg000:372c the flash repeats every 16th step past the first.
+        const SUN_FLASH_STEP_INTERVAL: u8 = 16;
+        // = seg000:3745 the flash pause clamps at 10 units.
+        const SUN_FLASH_MAX_PAUSE_UNITS: u64 = 10;
+        // = seg000:374b/374d the pause unit: the count is xchg'd into ah and
+        //   wait_a_bit takes ax, so each unit is 0x100 PIT ticks — 1.28 s at
+        //   the 200 Hz game PIT.
+        const SUN_FLASH_PAUSE_UNIT_TICKS: u64 = 256;
+        // = seg000:3750 from 55 steps the flash becomes the collapse.
+        const COLLAPSE_STEP_COUNT: u8 = 55;
+
+        // = seg000:3723 and [desert_step_counter],7fh — consume the arm bit.
+        self.desert_step_counter &= 0x7f;
+        let steps = self.desert_step_counter;
+        // = seg000:3728/372a sub al,94h; jb — no toll under 20 steps.
+        let Some(past) = steps.checked_sub(SUN_FLASH_FIRST_STEP) else {
+            return;
+        };
+        // = seg000:372c/372e test al,0fh — only every 16th step (20, 36, 52,
+        //   68, ...) flashes.
+        if past % SUN_FLASH_STEP_INTERVAL != 0 {
+            return;
+        }
+        // = seg000:3731..373a the sun flash: draw_sun_flash (seg000:37ad,
+        //   SUN.HSQ sprite 0) into fb1, presented over the game area.
+        self.call_restore_cursor();
+        self.set_fb1_as_active_framebuffer();
+        self.open_resource_and_draw_sprite0(sprite_bank::SUN);
+        self.present_game_area();
+        // = seg000:373d..374d wait_a_bit((steps-20)/16 + 1 units, at most 10)
+        //   — the flash holds 1.28 s at step 20, growing to 5.12 s at the
+        //   collapse step as the march wears on.
+        let units = ((past / SUN_FLASH_STEP_INTERVAL) as u64 + 1).min(SUN_FLASH_MAX_PAUSE_UNITS);
+        let start = self.game_ticks();
+        self.sleep_ticks(start, units * SUN_FLASH_PAUSE_UNIT_TICKS);
+        // = seg000:3750/3755 cmp [desert_step_counter],37h; jb loc_037aa —
+        //   below 55 steps the room redraw clears the flash and the walk
+        //   goes on (seg000:37aa jmp draw_room_game_screen).
+        if steps < COLLAPSE_STEP_COUNT {
+            self.draw_room_game_screen();
+            return;
+        }
+        // = seg000:3757 call desert_collapse_cutscene.
+        self.desert_collapse_cutscene();
+        // = seg000:375a/375d cx = 5; run_events_for_n_time_periods — Paul is
+        //   out for five time periods.
+        self.run_events_for_n_time_periods(5);
+        // = seg000:3760..3765 transition(0x34, gfx_clear_active_framebuffer)
+        //   — fade the game area to black.
+        self.transition(0x34, 0, |s| s.gfx_clear_active_framebuffer());
+        // = seg000:3768 call draw_game_ui.
+        self.draw_game_ui();
+        // = seg000:376b/376e gfx_call_bp_with_front_buffer_as_screen(loc_01a0f)
+        //   — the date/time indicator, offscreen.
+        self.gfx_call_bp_with_front_buffer_as_screen(|s| s.ui_redraw_date_and_time_indicator());
+        // = seg000:3771/3775/377a/377d si = [last_location_ptr]; data_047a6 =
+        //   0xff; gfx_call arrive_at_location — the rescue re-enters the last
+        //   visited location offscreen (arrive_at_location falls through into
+        //   the commit, whose room redraw the redirect keeps in fb1).
+        self.data_047a6 = 0xff;
+        self.gfx_call_bp_with_front_buffer_as_screen(|s| {
+            let loc_index = s.last_location_index;
+            let (new_room, new_appearance) = s.arrive_at_location(loc_index);
+            s.commit_room_move(new_room, new_appearance);
+        });
+        // = seg000:3780..3794 dx = the just-committed entry room, carried
+        //   indoors: a sietch/village (appearance < 0x21) beds Paul in room 2,
+        //   the Atreides palace (0x20) in room 10. (DOS computes dx/bx before
+        //   the transition call; the callback reads them as its arguments.)
+        // = seg000:3796..37a0 transition(0x34, callback_transition_04057) with
+        //   data_047a6 re-armed — the wipe into the indoor room.
+        self.data_047a6 = 0xff;
+        self.transition(0x34, 0, |s| {
+            let mut new_room = s.location_and_room;
+            if new_room >> 8 < 0x21 {
+                new_room = (new_room & 0xff00) | 2;
+                if new_room >> 8 == 0x20 {
+                    new_room = (new_room & 0xff00) | 0x0a;
+                }
+            }
+            let new_appearance = s.location_appearance;
+            s.commit_room_move(new_room, new_appearance);
+        });
+        // = seg000:37a3 inc [Paul_found_unconscious_in_desert_ds_e7] — the
+        //   CONDIT flag the wake-up dialogue reads.
+        self.paul_found_unconscious_ds_e7 = self.paul_found_unconscious_ds_e7.wrapping_add(1);
+        // = seg000:37a7 jmp finish_room_screen_setup (seg000:35ad) — the
+        //   dispatch entry, not its travel branch. The two redraws above each
+        //   armed data_047a6 and consumed it again, so the gate is clear and
+        //   the room-mode branch runs the entry dialogue scan here: Leto's
+        //   "you were found unconscious in the desert" line greets the player
+        //   as the wake-up room appears, rather than waiting for the next
+        //   scan a room move would bring.
+        self.finish_room_screen_setup();
+    }
+
+    // = seg000:0e77 desert_collapse_cutscene — Paul drops from exhaustion in
+    // the desert: the WORMSUIT score, then DEAD3.HNM plays into the game area.
+    fn desert_collapse_cutscene(&mut self) {
+        // = seg000:0e77 call play_music_WORMSUIT_HSQ — gated, so MUSIC OFF
+        //   keeps the collapse silent.
+        self.play_music_wormsuit_hsq();
+        // = seg000:0e7a/0e7d/0e80 fb1 active; ax = 0x0b; hnm_load_first_frame
+        //   — DEAD3.HNM's first frame into fb1.
+        self.set_fb1_as_active_framebuffer();
+        self.hnm_load_first_frame_by_id(crate::hnm::DEAD3_HNM as u16, 0);
+        // = seg000:0e83/0e86 present it and flush the palette.
+        self.present_game_area();
+        self.update_screen_palette();
+        // = seg000:0e89..0e9b five more frames: wait for each advance
+        //   (seg000:0e8d busy-loops hnm_do_frame_and_check_if_frame_advanced),
+        //   then reveal it with a 0x3c transition, the HUD head redrawn on top.
+        for _ in 0..5 {
+            while !self.hnm_do_frame() {
+                self.tick_one_frame();
+            }
+            // = seg000:0e92..0e97 transition(0x3c, ui_hud_head_draw).
+            self.transition(0x3c, 0, |s| s.ui_hud_head_draw());
+        }
+        // = seg000:0e9d hnm_close_resource.
+        self.hnm_close();
+        // = seg000:0ea0 snapshot fb1 into fb2 (the clean-scene backup).
+        self.copy_active_framebuffer_to_framebuffer_2();
+        // = seg000:0ea3 jmp ui_hud_head_animate_down.
+        self.ui_hud_head_animate_down();
+    }
 
     // = seg000:978e start_room_lip_sync — start the current speaker's lip-sync
     // (current_lip_sync_resource_id; 0xffff = none).
@@ -2856,9 +2999,7 @@ mod tests {
     use std::sync::mpsc;
 
     use super::NAV_PANEL_RECORD_OFFSET;
-    use crate::{
-        Equipment, GameState, dat_file::DatFile, game_ui::NAV_PANEL_ROOM, gfx, menu_defs::MenuRef,
-    };
+    use crate::{Equipment, GameState, dat_file::DatFile, gfx, menu_defs::MenuRef};
 
     // = seg000:7f27/7f2a — the location available-equipment computation: the
     // location's equipment row minus each stationed troop's held equipment, per
@@ -2951,6 +3092,68 @@ mod tests {
         game.screen
             .write_png_scaled(&game.palette, "travel_arrival_approach.png")
             .expect("write travel_arrival_approach.png");
+    }
+
+    // The desert exhaustion collapse (desert_walk_exhaustion_check,
+    // seg000:3723): a 68th unrested step is a sun-flash step past the
+    // 55-step collapse count, so the DEAD3.HNM cutscene runs, five time
+    // periods pass, and the rescue beds Paul in the last visited location
+    // with the found-unconscious CONDIT flag raised. Asset-gated and
+    // real-time paced; run with:
+    //   cargo test -p dune --bin dune -- --ignored desert_walk_exhaustion
+    #[test]
+    #[ignore = "needs assets/DUNE.DAT"]
+    fn desert_walk_exhaustion_collapse() {
+        let dat_path = concat!(env!("CARGO_MANIFEST_DIR"), "/../../assets/DUNE.DAT");
+        let Ok(dat_file) = DatFile::open(dat_path) else {
+            eprintln!("skipping: {dat_path} not found");
+            return;
+        };
+        let (tx, _rx) = mpsc::sync_channel(64);
+        let mut game = GameState::new(dat_file, tx);
+        game.set_headless();
+        game.start(true);
+
+        // The state a long desert march leaves: no current location, the
+        // desert scene up, and the step counter armed at a flash step past
+        // the collapse count (68 = 20 + 3*16).
+        let loc = game.last_location_index;
+        let appearance = game.locations[loc].appearance;
+        game.current_location_index = 0xffff;
+        game.data_00008 = 0xff;
+        game.data_00009 = 0xff;
+        game.desert_step_counter = 0x80 | 68;
+        let time_before = game.game_time;
+
+        game.desert_walk_exhaustion_check();
+
+        // The arrival reset the step counter (arm bit included).
+        assert_eq!(game.desert_step_counter, 0);
+        // Five time periods passed while Paul was out.
+        assert_eq!(game.game_time, time_before + 5);
+        // The rescue re-entered the last visited location and carried Paul
+        // indoors: room 2, or room 10 in the Atreides palace (0x20).
+        assert_eq!(game.current_location_index, loc as u16);
+        let expected_room = match appearance {
+            0x20 => 0x0a,
+            a if a < 0x21 => 2,
+            _ => 1,
+        };
+        assert_eq!(game.location_and_room & 0xff, expected_room);
+        // = seg000:37a7 the tail runs the room-entry dialogue scan, so the
+        // wake-up line greets the player as the room appears instead of
+        // waiting for whatever action would bring the next scan: Duke Leto
+        // (speaker 0) speaks phrase 0x81e, "You were found unconscious in the
+        // desert. Walking so far in the desert often means death."
+        assert_eq!(game.data_047a7, 1, "nobody spoke on waking up");
+        assert_eq!(game.current_lip_sync_resource_id, 0, "Leto speaks");
+        assert_eq!(game.current_subtitle_id, 0x81e);
+        // = seg000:37a3 armed the CONDIT flag the line's condition reads and
+        // seg000:354c cleared it again as the line was delivered.
+        assert_eq!(
+            game.paul_found_unconscious_ds_e7, 0,
+            "the delivered line leaves the flag armed"
+        );
     }
 
     // Bug 0001: a mouseover on the Duke Leto sprite in the starting throne room
@@ -4090,7 +4293,7 @@ mod tests {
         let blank = [0x0f66; 6];
 
         // Start from the room compass, as the room screen leaves it.
-        game.ui_install_nav_panel(&NAV_PANEL_ROOM);
+        game.ui_install_nav_panel(game.nav_panel_room);
 
         // A directional flight (no location target, nothing holding the screen)
         // is steerable: turn left / flight button / turn right.
@@ -5088,5 +5291,229 @@ we might make in the deep desert of Arrakis where the great worms roam";
             ran_calm_window,
             "settled idle never started a calm-animation window"
         );
+    }
+
+    // Export the desert_collapse_cutscene (= seg000:0e77) animation as a video
+    // file: Paul drops from exhaustion, DEAD3.HNM plays into the game area in
+    // five 0x3c transitions, and the HUD head slides down. Port-only dev
+    // tooling (no DOS routine behind the capture itself) — it swaps the frame
+    // sink for one that keeps every presented frame and writes them into an
+    // uncompressed AVI through the crate's own muxer (crate::avi), so the clip
+    // needs no ffmpeg and no window.
+    //
+    // The cutscene paces itself in real time (HNM frame ticks, the five ~2 s
+    // 0x3c dissolves, the head slide) and the dissolve presents a frame every
+    // PIT tick — some 200 a second. The capture therefore buckets frames onto
+    // the output grid as they arrive, keeping the last one presented in each
+    // 1/30 s slot, so a whole clip costs a few hundred frames of memory and
+    // plays back at the speed the game ran it.
+    //
+    // Asset-gated and real-time; run with:
+    //   cargo test -p dune --bin dune -- --ignored --nocapture desert_collapse_cutscene
+    // The file lands in $DUNE_VIDEO_OUT, or the temp dir when that is unset.
+    #[test]
+    #[ignore = "needs assets/DUNE.DAT; records in real time"]
+    fn desert_collapse_cutscene_exports_a_video() {
+        use std::{
+            path::PathBuf,
+            sync::{Arc, Mutex},
+            time::Instant,
+        };
+
+        use crate::{
+            FrameBuffer, Palette,
+            avi::AviWriter,
+            frame_slot::{Frame, FrameSink},
+        };
+
+        /// Output frame rate of the exported file.
+        const FPS: u32 = 30;
+        /// Sample rate written into the AVI's audio-stream header. The capture
+        /// is video-only (the audio backends are silenced below), so no `01wb`
+        /// chunk ever follows and the stream stays empty.
+        const AUDIO_RATE: u32 = 48_000;
+
+        struct Capture {
+            start: Instant,
+            /// One entry per output slot since `start`. A slot holds the last
+            /// frame presented within it; a slot nothing was presented in
+            /// stays `None` and repeats its predecessor on the way out.
+            slots: Vec<Option<Frame>>,
+            /// How many frames the game presented, kept for the report (the
+            /// dissolve presents far more of them than the grid stores).
+            presented: usize,
+        }
+
+        /// Presented frames, resampled onto the output grid as they arrive.
+        /// `FrameSlot` (the windowed sink) keeps only the latest frame and the
+        /// recorder samples it from its own thread; this one keeps a frame per
+        /// slot, in order, so nothing the grid can show is missed.
+        #[derive(Clone)]
+        struct TimedCapture(Arc<Mutex<Capture>>);
+
+        impl TimedCapture {
+            fn new() -> Self {
+                TimedCapture(Arc::new(Mutex::new(Capture {
+                    start: Instant::now(),
+                    slots: Vec::new(),
+                    presented: 0,
+                })))
+            }
+
+            /// Drop what was captured during setup and start the clock now.
+            fn restart(&self) {
+                let mut c = self.0.lock().unwrap();
+                c.slots.clear();
+                c.presented = 0;
+                c.start = Instant::now();
+            }
+
+            fn take(&self) -> (Vec<Option<Frame>>, usize) {
+                let mut c = self.0.lock().unwrap();
+                (std::mem::take(&mut c.slots), c.presented)
+            }
+        }
+
+        impl FrameSink for TimedCapture {
+            fn publish(&self, framebuffer: FrameBuffer, palette: Palette) {
+                let mut c = self.0.lock().unwrap();
+                let slot = (c.start.elapsed().as_secs_f64() * f64::from(FPS)) as usize;
+                if c.slots.len() <= slot {
+                    c.slots.resize_with(slot + 1, || None);
+                }
+                c.slots[slot] = Some((framebuffer, palette));
+                c.presented += 1;
+            }
+        }
+
+        let dat_path = concat!(env!("CARGO_MANIFEST_DIR"), "/../../assets/DUNE.DAT");
+        let Ok(dat_file) = DatFile::open(dat_path) else {
+            eprintln!("skipping: {dat_path} not found");
+            return;
+        };
+        let capture = TimedCapture::new();
+        let mut game = GameState::new(dat_file, capture.clone());
+        // The audio half of set_headless (game_state.rs): silence both backends
+        // and clear the music / digital-sound flags. The headless flag itself
+        // stays clear on purpose — send_frame_to_display drops every publish
+        // while it is set, and those publishes are the recording.
+        game.pcm_player.set_enabled(false);
+        game.midi.set_enabled(false);
+        game.cmd_args_memory |= 0x10;
+        game.settings_flags &= !0x1;
+        game.start(true);
+
+        // Put Paul where the collapse happens: out of the palace entry room
+        // (0x2001, the room with the DOWN compass arrow) and five steps south,
+        // past room1_backdrop_threshold onto the open-sand view.
+        game.location_and_room = 0x2001;
+        game.location_appearance = 0x180;
+        game.current_room = 1;
+        game.draw_room_game_screen();
+        for _ in 0..5 {
+            game.ui_click_move_down();
+        }
+        assert_eq!(game.data_00008, 0xff, "not standing in the desert");
+
+        // Record from the last pre-collapse frame on.
+        capture.restart();
+        game.send_frame_to_display();
+        game.desert_collapse_cutscene();
+
+        // The cutscene ran to its tail: DEAD3.HNM opened, played and closed
+        // (seg000:0e80/0e9d), and the head finished its slide.
+        assert_eq!(game.hnm_video_id, crate::hnm::DEAD3_HNM as u16);
+        assert!(!game.hnm_is_open(), "DEAD3.HNM was left open");
+
+        let (slots, presented) = capture.take();
+        assert!(slots.len() > 1, "the cutscene filled {} slots", slots.len());
+        // The five dissolves alone are 32767 pixels / 80 per PIT tick = 410
+        // ticks each, so the clip cannot be much under ten seconds.
+        let seconds = slots.len() as f64 / f64::from(FPS);
+        assert!(
+            seconds > 9.0,
+            "the cutscene ran {seconds:.2}s — too fast for five 0x3c dissolves"
+        );
+
+        let path = std::env::var_os("DUNE_VIDEO_OUT")
+            .map(PathBuf::from)
+            .unwrap_or_else(|| std::env::temp_dir().join("desert_collapse_cutscene.avi"));
+        let (w, h) = {
+            let (fb, _) = slots[0].as_ref().expect("the seeded first frame");
+            (fb.w, fb.h)
+        };
+        let mut avi = AviWriter::new(&path, w, h, FPS, AUDIO_RATE).expect("create the AVI");
+        // An empty slot repeats the frame that was still on screen through it.
+        let mut held = None;
+        for slot in &slots {
+            held = slot.as_ref().or(held);
+            let (fb, pal) = held.expect("a frame before the first slot");
+            avi.write_video(fb, pal).expect("write a video frame");
+        }
+        assert_eq!(avi.frame_count() as usize, slots.len());
+        avi.finalize().expect("finalize the AVI");
+
+        let written = std::fs::metadata(&path).expect("stat the AVI").len();
+        assert!(
+            written > (slots.len() * w as usize * h as usize * 3) as u64,
+            "the AVI is shorter than its {} raw frames",
+            slots.len()
+        );
+        eprintln!(
+            "wrote {} — {presented} presented frames, {seconds:.2}s, {} frames at {FPS} fps",
+            path.display(),
+            slots.len(),
+        );
+    }
+
+    // = seg000:3056 the compass rebuild stamps the centre palace-plan button's
+    // visibility into the nav-panel TEMPLATE as well as the live record, so a
+    // full redraw's template copy (ui_setup_and_draw_nav_panel, seg000:d71e)
+    // restores the same decision. Out in the desert the rebuild takes the alt
+    // branch (seg000:3073), which never touches record 17 — without the
+    // template write the sun flash's `jmp draw_room_game_screen`
+    // (seg000:37aa) would hand the centre dot back, live and clickable, with
+    // no palace to plan. Asset-gated:
+    //   cargo test -p dune --bin dune -- --ignored sun_flash_keeps
+    #[test]
+    #[ignore = "needs assets/DUNE.DAT"]
+    fn sun_flash_keeps_the_desert_compass_centre_hidden() {
+        const CENTRE: usize = NAV_PANEL_RECORD_OFFSET + 5;
+
+        let dat_path = concat!(env!("CARGO_MANIFEST_DIR"), "/../../assets/DUNE.DAT");
+        let Ok(dat_file) = DatFile::open(dat_path) else {
+            eprintln!("skipping: {dat_path} not found");
+            return;
+        };
+        let (tx, _rx) = mpsc::sync_channel(64);
+        let mut game = GameState::new(dat_file, tx);
+        game.set_headless();
+        game.start(true);
+
+        // Out of the palace entry room and five steps south, onto the sand.
+        game.location_and_room = 0x2001;
+        game.location_appearance = 0x180;
+        game.current_room = 1;
+        game.draw_room_game_screen();
+        for _ in 0..5 {
+            game.ui_click_move_down();
+        }
+        assert_eq!(game.data_00008, 0xff, "not standing in the desert");
+        assert_eq!(
+            game.ui_elements[CENTRE].flags, 0x20,
+            "the centre button should already be hidden in the desert"
+        );
+
+        // A flash step (20 unrested steps) redraws the whole room screen.
+        game.desert_step_counter = 0x80 | 20;
+        game.desert_walk_exhaustion_check();
+        assert_eq!(
+            game.ui_elements[CENTRE].flags, 0x20,
+            "the sun flash's redraw revived the centre palace-plan button"
+        );
+
+        // And a further desert step, which rebuilds the panel again, keeps it.
+        game.ui_click_move_down();
+        assert_eq!(game.ui_elements[CENTRE].flags, 0x20);
     }
 }

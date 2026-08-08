@@ -11,7 +11,7 @@
 //! effects (motivation, the phase-0x64 location scan), the palace-plan
 //! locked-door icon-list truncation, and the string substitution table.
 
-use crate::{GameState, cmd};
+use crate::{GameState, cmd, room_game_screen::NPC_DETACH_ON_TRAVEL};
 
 impl GameState {
     // = seg000:121f set_game_phase_and_trigger_callbacks — raise game_phase to
@@ -264,7 +264,7 @@ impl GameState {
     // = seg000:112d callback_game_phase_change_40 — room_persons[8] (Harah)
     // gains flags bit 2.
     fn phase_callback_40(&mut self) {
-        self.room_persons[8].flags |= 2;
+        self.room_persons[8].flags |= NPC_DETACH_ON_TRAVEL;
     }
 
     // = seg000:1133 callback_game_phase_change_44_mark_Oxtyn_Tabr_on_map —

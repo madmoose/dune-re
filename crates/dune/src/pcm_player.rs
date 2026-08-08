@@ -656,6 +656,30 @@ impl PcmPlayer {
     pub fn queue_slot_filled(&self) -> bool {
         self.shared.lock().unwrap().queued.is_some()
     }
+
+    /// Drop a stale queued job. = the game side zeroing both ping-pong job
+    /// state words before a new voice stream (open_pcm_voice_file,
+    /// seg000:a910..a916): the terminator's chain requires the queued job's
+    /// state byte +6 == 2 (voc_blk0_terminator, seg001:068c), and neither the
+    /// driver's stop (cmd_stop_playback, seg001:08ce) nor a new start clears
+    /// it — without this, a chunk left queued when the previous clip was cut
+    /// stays chain-eligible and plays as a snippet of the old line inside the
+    /// next one.
+    pub fn clear_queued(&self) {
+        self.shared.lock().unwrap().queued = None;
+    }
+
+    /// Test-only: drain `samples` output samples from the block engine
+    /// synchronously, standing in for the CPAL callback so tests can step
+    /// playback deterministically. With `output_rate` equal to the clip's own
+    /// rate, one call consumes one input sample.
+    #[cfg(test)]
+    pub(crate) fn drain_for_test(&self, samples: usize, output_rate: u32) {
+        let mut engine = self.shared.lock().unwrap();
+        for _ in 0..samples {
+            engine.next_sample(output_rate);
+        }
+    }
 }
 
 /// Pick the output rate for `device`: `preferred` when the device supports it,

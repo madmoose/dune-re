@@ -384,11 +384,11 @@ impl GameState {
             // = seg000:3f49..3f56 data_04735 = ((data_04735 & 0x7f) + 1,
             //   saturated at 0x7f) | 0x80 — the high bit arms the auto-action
             //   dispatch in the game loop, the low bits count steps.
-            let steps = ((self.data_04735 & 0x7f) + 1).min(0x7f);
-            self.data_04735 = steps | 0x80;
-            // = seg000:3f59..3f60 cap desert_walk_counter at 20.
-            if self.desert_walk_counter < 20 {
-                self.desert_walk_counter += 1;
+            let steps = ((self.desert_step_counter & 0x7f) + 1).min(0x7f);
+            self.desert_step_counter = steps | 0x80;
+            // = seg000:3f59..3f60 cap desert_exhaustion_counter at 20.
+            if self.desert_exhaustion_counter < crate::game_state::DESERT_EXHAUSTION_MAX {
+                self.desert_exhaustion_counter += 1;
             }
             // = seg000:3f64 jmp loc_03ff5 — the desert-position dispatch, with
             //   bp = the compass direction and the current desert position in
@@ -585,10 +585,9 @@ impl GameState {
     // = seg000:401f arrive_at_location — walk-in arrival at a location from
     // the desert. Returns the (location_and_room, location_appearance) pair
     // for its entry room, which DOS falls through into loc_04057 to commit.
-    fn arrive_at_location(&mut self, loc_index: usize) -> (u16, u16) {
-        // = seg000:401f mov [data_04735],0 — reset the desert step counter
-        //   (and disarm the auto-action dispatch its high bit requests).
-        self.data_04735 = 0;
+    pub(crate) fn arrive_at_location(&mut self, loc_index: usize) -> (u16, u16) {
+        // = seg000:401f mov [data_04735],0 — reset the desert step counter.
+        self.desert_step_counter = 0;
         // = seg000:4024/4028 current_location_ptr / last_location_ptr = si — the
         //   arrived-at location is the current location record again.
         self.current_location_index = loc_index as u16;

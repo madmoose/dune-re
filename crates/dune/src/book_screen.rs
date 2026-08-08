@@ -86,7 +86,7 @@ impl GameState {
         self.ui_set_and_draw_frieze_sides_open_book();
         // = seg000:af29 si = ui_globe_rotation_controls[6]; call loc_0d72b —
         // install the six book controls over the nav-panel records 12..17.
-        self.ui_install_nav_panel(&crate::game_ui::NAV_PANEL_BOOK);
+        self.ui_install_nav_panel(self.nav_panel_book);
         // = seg000:af2f call book_menu_update_topic_availability.
         self.book_menu_update_topic_availability();
         // = seg000:af32 book_topic_filter = 0 — all topics.
@@ -324,7 +324,7 @@ impl GameState {
     // page-turn fold direction (>= 0 forward, < 0 backward).
     fn book_page_turn_present(&mut self, dx: i16, render: fn(&mut GameState)) {
         // = seg000:b02c call pcm_stop_voc.
-        self.pcm_player.stop();
+        self.pcm_stop_voc();
         // = seg000:b02f..b031 al = 2; audio_start_voc — SN2, papers ruffle.
         self.audio_start_voc("SN2.HSQ");
         // = seg000:b034..b036 al = 0x0e; jmp transition.
@@ -523,7 +523,7 @@ impl GameState {
         // = seg000:09fb..0a09 WORMSUIT unless the day sky is up and the CD
         // playlist mode owns the music.
         if self.data_0227d != 0 || self.music_playlist_flags & 1 == 0 {
-            self.midi.play_music_wormsuit_hsq(&mut self.dat_file);
+            self.play_music_wormsuit_hsq();
         }
         // = seg000:0a0c..0a11 add frame_task_callback_00a16 (bp = 0: every
         // tick).
@@ -596,7 +596,7 @@ impl GameState {
         self.pause_enabled = self.pause_enabled.wrapping_add(1);
         // = seg000:b21e call pcm_stop_voc; b221 set_fb1; b224 the palette
         // swap back to the book's.
-        self.pcm_player.stop();
+        self.pcm_stop_voc();
         self.set_fb1_as_active_framebuffer();
         gfx::vga_swap_palettes(self);
         // = seg000:b228..b22d transition 0x34 back into the redrawn page.

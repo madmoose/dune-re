@@ -643,16 +643,42 @@ impl GameState {
         self.midi.set_enabled(enabled);
     }
 
-    // Port-only (no DOS equivalent): apply a startup music-playlist mode (the
-    // non-off --music selections), leaving the same music_playlist_flags the
-    // mixer panel's MUSIC verbs do, without their UI side effects (panel pop,
-    // submenu push, update_room_music). Applied AFTER start(), which resets
-    // music_playlist_flags at seg000:0019. The on/off decision is
-    // set_music_enabled's job; Off is a no-op here.
+    // Port-only (no DOS equivalent): choose the startup music mode (the
+    // `--music` selections). Two halves, applied at different times:
+    //
+    // * the card-presence half runs now, because it has to be in place before
+    //   the intro, which drives the MIDI output directly (`Disabled` = no MIDI
+    //   card);
+    // * the mode itself is held pending, because `start()` resets
+    //   music_playlist_flags at seg000:0019 and would wipe it. `start()`
+    //   applies it through apply_pending_music_mode straight after that reset.
     pub fn set_music_mode(&mut self, mode: crate::MusicMode) {
+        self.set_music_enabled(mode != crate::MusicMode::Disabled);
+        self.pending_music_mode = Some(mode);
+    }
+
+    // Port-only: land the mode set_music_mode held, leaving the same
+    // cmd_args_memory / music_playlist_flags state the mixer panel's MUSIC
+    // verbs do, without their UI side effects (panel pop, submenu push,
+    // update_room_music). Called by start() after the seg000:0019 reset; with
+    // no `--music` selection (every non-CLI caller, tests included) there is
+    // nothing pending and the startup state stands as it is.
+    pub(crate) fn apply_pending_music_mode(&mut self) {
+        let Some(mode) = self.pending_music_mode else {
+            return;
+        };
+        // = seg000:aeaf MUSIC OFF sets cmd_args_memory bit 4; the MUSIC ON
+        //   verbs clear it. Disabled leaves it alone: with no card,
+        //   settings_flags bit 0x100 keeps everything silent on its own, and
+        //   an in-game MUSIC ON must not be able to talk a card into existence.
+        if mode == crate::MusicMode::Off {
+            self.cmd_args_memory |= 0x10;
+        } else if mode != crate::MusicMode::Disabled {
+            self.cmd_args_memory &= !0x10;
+        }
         match mode {
-            // Music is already disabled by set_music_enabled(false).
-            crate::MusicMode::Off => {}
+            // Nothing plays either way; the playlist mode is moot.
+            crate::MusicMode::Disabled | crate::MusicMode::Off => {}
             // = seg000:ac6e GAME RELATIVE — playlist = 0.
             crate::MusicMode::GameRelative => self.music_playlist_flags = 0,
             // = seg000:ac97 STANDARD ORDER — CD-style (bit 0), no shuffle, with
@@ -755,11 +781,17 @@ impl GameState {
         let Ok(data) = self.dat_file.read(&name) else {
             return;
         };
+        if crate::voc::parse(&data).is_none() {
+            return;
+        }
         // = a564 midi_duck_music_volume
         self.midi_duck_music_volume();
-        // = a567 is_voc_pcm_playing=1; a56c si=3811h; a56f [pcm_vtable_start_playback]
-        self.pcm_player.stop();
-        self.pcm_player.start_playback(&data, 0);
+        // = a567 is_voc_pcm_playing=1; a56c si=3811h; a56f
+        // [pcm_vtable_start_playback] — voc_get_lipsync_data ran pcm_stop_voc
+        // (a84a) and set up the stream, so the clip plays chunked like any
+        // other voice.
+        self.pcm_stop_voc();
+        self.pcm_voice_stream_start(data);
         // = a573 jmp wait_for_narration_voice_clip (seg000:aba9) — DOS blocks,
         // pumping frame_task_callback_0ab92 until the clip drains and it
         // restores the music. The port's mixer
@@ -941,7 +973,7 @@ mod tests {
     use std::sync::mpsc;
 
     use crate::{
-        GameState,
+        GameState, MusicMode,
         dat_file::DatFile,
         menu_defs::{CMD_HIGHLIGHT, MenuRef},
         music::MUSIC_CD_STANDARD_ORDER,
@@ -1056,5 +1088,113 @@ mod tests {
         assert_eq!(game.music_playlist_flags, flags);
         assert_eq!(game.midi.current_song(), song);
         assert_eq!(game.get_active_menu_ref(), MenuRef::CommandMenuBuf);
+    }
+
+    // = seg000:ad50 play_music_WORMSUIT_HSQ — the cutscene score reaches the
+    // driver through the same gated midi_play_song (seg000:ad55 jmp, whose
+    // ad97 check_music_enabled is the gate) as every other song start, so
+    // MUSIC OFF keeps it silent. Its in-game callers are the desert collapse
+    // (seg000:0e77) and the book's credits page (loc_00a09). Asset-gated:
+    //   cargo test -p dune --bin dune -- --ignored music_off_silences
+    #[test]
+    #[ignore = "needs assets/DUNE.DAT"]
+    fn music_off_silences_the_wormsuit_cutscene_score() {
+        let dat_path = concat!(env!("CARGO_MANIFEST_DIR"), "/../../assets/DUNE.DAT");
+        let Ok(dat_file) = DatFile::open(dat_path) else {
+            eprintln!("skipping: {dat_path} not found");
+            return;
+        };
+        let (tx, _rx) = mpsc::sync_channel(64);
+        let mut game = GameState::new(dat_file, tx);
+        game.set_headless(); // music off, the same bit MUSIC OFF sets
+        game.start(true);
+
+        game.play_music_wormsuit_hsq();
+        assert_eq!(
+            game.midi.current_song(),
+            None,
+            "the cutscene score started with music off"
+        );
+
+        // MUSIC ON (GAME RELATIVE) and it plays: WORMSUIT is song 3.
+        game.open_mixer_panel();
+        game.menu_callback_choice_music_on_game_relative(0, 0);
+        game.play_music_wormsuit_hsq();
+        assert_eq!(game.midi.current_song(), Some(3));
+
+        // MUSIC OFF again silences the next cutscene.
+        game.open_mixer_panel();
+        game.menu_callback_choice_music_off(0, 0);
+        game.play_music_wormsuit_hsq();
+        assert_eq!(game.midi.current_song(), None);
+    }
+
+    // The `--music` startup modes (set_music_mode + apply_pending_music_mode):
+    // `Disabled` is no MIDI card, `Off` is the MUSIC OFF verb with a card
+    // present, and a playlist mode survives start()'s seg000:0019 reset of
+    // music_playlist_flags — which is why the mode is held pending rather than
+    // written when it is chosen. Asset-gated:
+    //   cargo test -p dune --bin dune -- --ignored music_startup_modes
+    #[test]
+    #[ignore = "needs assets/DUNE.DAT"]
+    fn music_startup_modes_survive_start() {
+        let dat_path = concat!(env!("CARGO_MANIFEST_DIR"), "/../../assets/DUNE.DAT");
+        if DatFile::open(dat_path).is_err() {
+            eprintln!("skipping: {dat_path} not found");
+            return;
+        }
+        // A game launched with `--music <mode>`: the mode is chosen before
+        // start(), as main.rs does.
+        let started = |mode: MusicMode| {
+            let dat_file = DatFile::open(dat_path).expect("open DUNE.DAT");
+            let (tx, _rx) = mpsc::sync_channel(64);
+            let mut game = GameState::new(dat_file, tx);
+            game.set_headless();
+            game.set_music_mode(mode);
+            // A card-present mode just re-enabled the MIDI output; this test is
+            // about the flags, so keep the run itself silent.
+            game.midi.set_enabled(false);
+            game.start(true);
+            game
+        };
+
+        // Disabled — no card. Nothing plays, and no mixer verb can conjure one.
+        let mut game = started(MusicMode::Disabled);
+        assert_eq!(game.settings_flags & 0x100, 0, "a card is present");
+        game.play_music_wormsuit_hsq();
+        assert_eq!(game.midi.current_song(), None);
+        game.open_mixer_panel();
+        game.menu_callback_choice_music_on_game_relative(0, 0);
+        game.play_music_wormsuit_hsq();
+        assert_eq!(
+            game.midi.current_song(),
+            None,
+            "MUSIC ON started a song with no MIDI card"
+        );
+
+        // Off — the card is there, the MUSIC OFF bit is armed. Silent in game,
+        // and MUSIC ON in the mixer brings the music back.
+        let mut game = started(MusicMode::Off);
+        assert_eq!(game.settings_flags & 0x100, 0x100, "no card present");
+        assert_eq!(game.cmd_args_memory & 0x10, 0x10, "MUSIC OFF not armed");
+        game.play_music_wormsuit_hsq();
+        assert_eq!(game.midi.current_song(), None);
+        game.open_mixer_panel();
+        game.menu_callback_choice_music_on_game_relative(0, 0);
+        game.play_music_wormsuit_hsq();
+        assert_eq!(
+            game.midi.current_song(),
+            Some(3),
+            "MUSIC ON left the music off with a card present"
+        );
+
+        // A playlist mode reaches gameplay intact, past the seg000:0019 reset.
+        let game = started(MusicMode::CdStandard);
+        assert_eq!(
+            game.music_playlist_flags, 1,
+            "start() wiped the startup playlist mode"
+        );
+        assert_eq!(game.cmd_args_memory & 0x10, 0, "the music is off");
+        assert_eq!(game.music_cd_playlist, MUSIC_CD_STANDARD_ORDER);
     }
 }

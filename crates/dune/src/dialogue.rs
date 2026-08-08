@@ -31,7 +31,7 @@ use std::io::Cursor;
 
 use bytes_ext::ReadBytesExt;
 
-use crate::{GameState, Rect, container, gfx};
+use crate::{GameState, Rect, container, gfx, room_game_screen::NPC_COMPANION};
 
 impl GameState {
     // = seg000:cfb9 build_per_person_voc_base_table .
@@ -609,7 +609,7 @@ impl GameState {
         }
         // = seg000:9608 or byte [si+0fh], 40h — the travelling flag
         //   setup_npc_dialogue_menu tests to offer STAY HERE.
-        self.room_persons[speaker].flags |= 0x40;
+        self.room_persons[speaker].flags |= NPC_COMPANION;
         // = seg000:960c xor bx,bx; call npc_refresh_travel_timestamp.
         self.npc_refresh_travel_timestamp(speaker, 0);
         // = seg000:9611..9616 persons_travelling_with |= 1 << cl.
@@ -1226,9 +1226,26 @@ impl GameState {
             //   (sequence.rs). Below phase 0x14 this is the prospector's
             //   spice-map scene.
             3 => self.dialogue_event_trigger_cutscene(),
+            // = seg000:a172 callback_event_dialogue_line_0f_speaker_dependent_
+            //   effect_3 — keyed on the speaker (current_lip_sync_resource_id).
+            0x0f => match self.current_lip_sync_resource_id {
+                // = seg000:a175..a17a — Jessica (speaker 1): mark
+                //   desert-exhaustion remark for the CONDIT gate at ds:f5;
+                //   the hour tick clears it again when Paul recovers
+                //   (seg000:1b3a).
+                1 => {
+                    self.for_condit_jessica_commented_on_exhaustion_ds_f5 = self
+                        .for_condit_jessica_commented_on_exhaustion_ds_f5
+                        .wrapping_add(1);
+                }
+                // = seg000:a17e/a183 jmp callback_event_dialogue_line_0f_
+                //   Duncan_Idaho (seg000:24a3).
+                3 => self.dialogue_event_0f_duncan_idaho(),
+                _ => {}
+            },
             // = a244/a248 (0x04/0x05) the accept/refuse/argue menu, a1ed
-            //   (0x0e) increase_final_attack_stage, a125/a157/a172
-            //   (0x08/0x09/0x0f) the speaker-dependent effects, a28e (0x0d)
+            //   (0x0e) increase_final_attack_stage, a125/a157
+            //   (0x08/0x09) the speaker-dependent effects, a28e (0x0d)
             //   the command-menu/PALPLAN redraw — all unported.
             _ => println!("dispatch_dialogue_line_event: unported event 0x{event:02x}"),
         }
@@ -1242,6 +1259,39 @@ impl GameState {
     fn make_duncan_idaho_visible(&mut self) {
         let entry = &mut self.room_persons[3];
         entry.location_appearance = (entry.location_appearance & 0x00ff) | 0x0100;
+    }
+
+    // = seg000:24a3 callback_event_dialogue_line_0f_Duncan_Idaho — Duncan's
+    // line about negotiating the spice shipment. Before phase 0x10 it only
+    // marks the story bit on room_persons[1]; from phase 0x10 Duncan leaves
+    // on the mission: end the dialogue, reset his report state, arm the
+    // shipment flag and post the COMM sighting placing him at the location
+    // keyed by the fulfilment class.
+    fn dialogue_event_0f_duncan_idaho(&mut self) {
+        // = seg000:24a3/24a8 cmp game_phase,10h; jnb loc_024b0.
+        if self.game_phase < 0x10 {
+            // = seg000:24aa or room_persons[1].flags, 10h.
+            self.room_persons[1].flags |= crate::room_game_screen::NPC_STORY_BIT;
+            return;
+        }
+        // = seg000:24b0 call callback_event_dialogue_line_06_end_dialogue —
+        //   request the end of the talk walk (as the event-6 arm above).
+        self.dialogue_end_request = self.dialogue_end_request.wrapping_add(1);
+        // = seg000:24b3 ds:c0 = 0 — clear the dining-hall shipment-report
+        //   state until he returns (seg000:250d re-arms it).
+        self.for_condit_spice_shipment_ds_c0 = 0;
+        // = seg000:24b9 or ds:bf, 1 — Duncan is out on the mission.
+        self.spice_shipment_flags |= 1;
+        // = seg000:24be call loc_024d2 (shipment_fulfilment_class); 24c1
+        //   add ah,7 — the sighting location from the fulfilment class.
+        let location = self.shipment_fulfilment_class() + 7;
+        // = seg000:24c6/24cb — class 5 (no shipment ever paid, sighting
+        //   location 0x0c) also counts an unpaid shipment.
+        if location == 0x0c {
+            self.spice_shipment_unpaid = self.spice_shipment_unpaid.wrapping_add(1);
+        }
+        // = seg000:24cf jmp comm_add_person_sighting((location << 8) | 0x0b).
+        self.comm_add_person_sighting(((location as u16) << 8) | 0x0b);
     }
 
     // = seg000:98b2 tear_down_prior_talking_head_overlay — before a new dialogue
@@ -1679,5 +1729,77 @@ mod tests {
                 "the per-speaker index {stale:#x} for head {d} should NOT resolve",
             );
         }
+    }
+
+    // Line event 0x0f is speaker-keyed (seg000:a172): Jessica's exhaustion
+    // remark counts into the ds:f5 CONDIT byte; Duncan's line either marks
+    // the story bit (before phase 0x10) or sends him off on the shipment
+    // mission (seg000:24a3): the dialogue ends, the ds:c0 report state
+    // clears, ds:bf bit 0 arms, and a COMM sighting places him at the
+    // location keyed by the fulfilment class. Asset-gated:
+    //   cargo test -p dune -- --ignored line_event_0f
+    #[test]
+    #[ignore = "needs assets/DUNE.DAT"]
+    fn line_event_0f_jessica_counts_and_duncan_leaves_on_the_mission() {
+        let dat_path = concat!(env!("CARGO_MANIFEST_DIR"), "/../../assets/DUNE.DAT");
+        let Ok(dat_file) = DatFile::open(dat_path) else {
+            eprintln!("skipping: {dat_path} not found");
+            return;
+        };
+        let (tx, _rx) = mpsc::sync_channel(64);
+        let mut game = GameState::new(dat_file, tx);
+        game.set_headless();
+
+        // Jessica (speaker 1): the remark counter.
+        game.current_lip_sync_resource_id = 1;
+        game.dispatch_dialogue_line_event(0x0f, 0);
+        assert_eq!(
+            game.for_condit_jessica_commented_on_exhaustion_ds_f5, 1,
+            "= seg000:a17a"
+        );
+
+        // Duncan (speaker 3) before phase 0x10: only the story bit.
+        game.current_lip_sync_resource_id = 3;
+        game.game_phase = 0x0f;
+        game.dispatch_dialogue_line_event(0x0f, 0);
+        assert_ne!(
+            game.room_persons[1].flags & crate::room_game_screen::NPC_STORY_BIT,
+            0,
+            "= seg000:24aa"
+        );
+        assert_eq!(
+            game.spice_shipment_flags & 1,
+            0,
+            "the mission is not armed yet"
+        );
+
+        // Duncan from phase 0x10 with nothing ever paid (ds:be = 0, class
+        // 5): the mission arms, he is sighted at location 0x0c and the
+        // unpaid-shipment count bumps.
+        game.game_phase = 0x10;
+        game.for_condit_spice_shipment_ds_c0 = 0x1234;
+        game.spice_shipment_fulfilment = 0;
+        let ends = game.dialogue_end_request;
+        game.dispatch_dialogue_line_event(0x0f, 0);
+        assert_eq!(
+            game.dialogue_end_request,
+            ends.wrapping_add(1),
+            "= seg000:24b0"
+        );
+        assert_eq!(game.for_condit_spice_shipment_ds_c0, 0, "= seg000:24b3");
+        assert_eq!(game.spice_shipment_flags & 1, 1, "= seg000:24b9");
+        assert_eq!(game.spice_shipment_unpaid, 1, "= seg000:24cb");
+        assert_eq!(
+            game.comm_sightings.last().copied(),
+            Some(0x0c0b),
+            "= seg000:24cf"
+        );
+
+        // A mostly-paid history (ds:be = 0x90, class 1) sights him at
+        // location 8 and leaves the unpaid count alone.
+        game.spice_shipment_fulfilment = 0x90;
+        game.dispatch_dialogue_line_event(0x0f, 0);
+        assert_eq!(game.comm_sightings.last().copied(), Some(0x080b));
+        assert_eq!(game.spice_shipment_unpaid, 1);
     }
 }

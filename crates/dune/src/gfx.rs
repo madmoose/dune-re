@@ -52,6 +52,7 @@ pub fn vga_transition(state: &mut GameState, code: u16, dx: i16) {
         0x00 => transition_vertical_curtain(state, dx as u8),
         0x02 => transition_expanding_box(state),
         0x04 => transition_vertical_fold(state, dx as u8),
+        0x08 => transition_dissolve_lfsr_fast(state),
         0x0c | 0x0e => transition_page_turn(state, dx),
         0x10 => transition_dotted_columns(state),
         0x2a => transition_spiral(state),
@@ -59,6 +60,7 @@ pub fn vga_transition(state: &mut GameState, code: u16, dx: i16) {
         0x30 => transition_instant_swap(state),
         0x36 => transition_fade_in_from_black(state),
         0x3a => transition_fade_through_black(state),
+        0x3c => transition_dissolve_lfsr_slow(state),
         other => {
             println!("gfx: vga_transition unimpl code 0x{other:02x}");
         }
@@ -843,6 +845,84 @@ fn transition_dotted_columns_tall(state: &mut GameState) {
     }
     // = segvga:2dc0 cx = 0xc8 — the full 200-row screen.
     dotted_columns_reveal(state, DOTTED_ROWS_TALL >> 2);
+}
+
+// = segvga:2a10 transition_dissolve_lfsr_slow (transition_dispatch_table entry
+// 30) — code 0x3c: the pseudo-random pixel dissolve, 80 pixels per PIT tick.
+// The whole game area is 32767 LFSR steps, so the wipe runs ~410 ticks (~2.05 s)
+// — a slow speckled fade of the new image over the old. The desert collapse
+// (desert_collapse_cutscene, seg000:0e77) reveals each of DEAD3.HNM's frames
+// with it.
+fn transition_dissolve_lfsr_slow(state: &mut GameState) {
+    // = segvga:2a10 dx = 0x50 — 80 pixels per tick.
+    dissolve_lfsr_body(state, 0x50);
+}
+
+// = segvga:2a15 transition_dissolve_lfsr_fast (entry 4) — code 0x08: the same
+// dissolve at 150 pixels per tick, ~219 ticks (~1.09 s).
+fn transition_dissolve_lfsr_fast(state: &mut GameState) {
+    // = segvga:2a15 dx = 0x96 — 150 pixels per tick.
+    dissolve_lfsr_body(state, 0x96);
+}
+
+// = segvga:2a18 dissolve_lfsr_body — the body both dissolve entries share.
+// `batch` is their pixels-per-tick count (DOS dx).
+//
+// A 15-bit LFSR walks the game area in pseudo-random order, copying pixels from
+// `framebuffer` (ds, the new image) to `screen` (es, the visible one) as it
+// goes. Each step copies two: the offset the LFSR names, and that offset plus
+// 0x7fff — the walk only reaches 1..0x7fff, so the companion covers the rest of
+// the 48640 bytes. Offset 0, the one byte neither pass reaches, is copied at the
+// end.
+fn dissolve_lfsr_body(state: &mut GameState, batch: u16) {
+    // = segvga:2a18/2a1c ax = 0x140 * cx with cx = 152 (set at segvga:2604) —
+    //   the 320×152 game area.
+    const AREA: usize = 320 * 152;
+    let fb_base = state.y_offset as usize * state.screen.w() as usize;
+    // = segvga:2a1f cx = 1 — the LFSR seed.
+    let mut lfsr: u16 = 1;
+    let mut left = batch;
+    loop {
+        // = segvga:2a26..2a2f si = di = cx + fb_base_ofs; movsb.
+        let ofs = fb_base + lfsr as usize;
+        let px = state.framebuffer.pixels()[ofs];
+        state.screen.pixels_mut()[ofs] = px;
+        // = segvga:2a35..2a45 add si,7ffeh (si is one past the copy) and repeat
+        //   for that offset while it stays below ax. The compare is on the
+        //   un-based offset, as in DOS.
+        let far = lfsr as usize + 0x7fff;
+        if far < AREA {
+            let ofs = fb_base + far;
+            let px = state.framebuffer.pixels()[ofs];
+            state.screen.pixels_mut()[ofs] = px;
+        }
+        // = segvga:2a4a..2a4e shr cx,1; on the shifted-out bit xor ch,44h.
+        let carry = lfsr & 1 != 0;
+        lfsr >>= 1;
+        if carry {
+            lfsr ^= 0x4400;
+        }
+        // = segvga:2a51/2a54 the walk ends the step the LFSR returns to its
+        //   seed — 32767 steps, every offset in 1..0x7fff visited once.
+        if lfsr == 1 {
+            break;
+        }
+        // = segvga:2a56/2a57 dec dx; jnz — otherwise carry on filling the batch.
+        left -= 1;
+        if left == 0 {
+            left = batch;
+            // = segvga:2a5a..2a5f `cmp bx,[bp]; jz` — spin until the PIT
+            //   counter changes, i.e. one tick per batch (not the three of
+            //   loc_segvga_02572).
+            state.present_transition_frame_ticks(1);
+        }
+    }
+    // = dissolve_lfsr_tail (segvga:2a61) `xor si,si; mov di,si; movsb` — the
+    //   byte the walk never reaches. DOS zeroes si/di WITHOUT fb_base_ofs, so
+    //   at a nonzero fb_base_ofs it copies byte 0 of the buffer and the first
+    //   visible pixel keeps its old value; mirrored here.
+    let px = state.framebuffer.pixels()[0];
+    state.screen.pixels_mut()[0] = px;
 }
 
 // The shared transition_dotted_columns body (= loc_segvga_02dc3): dissolve the

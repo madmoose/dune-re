@@ -4,7 +4,7 @@ use crate::{
     attack::AttackState,
     blit, cmd,
     frame_slot::FrameSink,
-    game_ui::{MouseHandlers, ROOM_MOUSE_HANDLERS, UI_ELEMENTS_INIT, UiElement},
+    game_ui::{self, MouseHandlers, NavPanel, ROOM_MOUSE_HANDLERS, UI_ELEMENTS_INIT, UiElement},
     gfx::{self, palette_flush},
     globe_renderer::GlobeRenderer,
     hnm::hnm_id_by_name,
@@ -42,9 +42,18 @@ pub enum FbId {
     Back,
 }
 
+const GAME_CLOCK_TICKS_PER_HOUR: i32 = 12000;
+
 /// = (loc_0e85c - travel_trail_ring) / 4 — the travel-trail ring capacity in
 /// (longitude, latitude) pairs.
 pub(crate) const TRAVEL_TRAIL_LEN: usize = (0xe85c - 0xe40c) / 4;
+
+/// = seg000:3f59 — desert_exhaustion_counter saturates at this many steps.
+pub(crate) const DESERT_EXHAUSTION_MAX: u8 = 20;
+
+/// = seg000:918a / seg000:1b34 — counts at or above this select Paul's gaunt
+/// talking-head portrait; the hourly decrement snaps anything below it to 0.
+pub(crate) const DESERT_EXHAUSTION_GAUNT_THRESHOLD: u8 = 16;
 
 pub const PCM_OUTPUT_RATE: u32 = 49716;
 pub const MIDI_SAMPLE_RATE: u32 = 49716;
@@ -68,11 +77,10 @@ pub(crate) enum TaskId {
     SkyFade,
     // = seg000:0c0b6 room_frame_task - general room frame task
     Room,
-    // = seg000:0ab92 frame_task_callback_0ab92 — after a ducked voice clip
-    // starts, poll PCM playback each frame and release the music ducking once
-    // it ends, then self-remove. In DOS this task also refilled the streaming
-    // VOC (loc_0a9b9); the consolidated dnsdb driver owns the whole clip in the
-    // port, so only the music-restore half remains.
+    // = seg000:0ab92 frame_task_callback_0ab92 — the narration clip's
+    // per-tick monitor: pump the streaming refill (pcm_voice_stream_refill,
+    // seg000:a9b9), then, once PCM playback ends, release the music ducking
+    // and self-remove.
     PcmVoiceMusicRestore,
     // = seg000:046b5 map_caption_frame_task — the map screen's "SELECT
     // DESTINATION ON MAP" typewriter: one glyph per firing (interval 0x18).
@@ -128,6 +136,38 @@ impl Default for NearestLocation {
             octant: 0,
         }
     }
+}
+
+/// = read_audio_file's chunk size (seg000:a950, `mov cx, 2000h`): a streamed
+/// voice reaches the dnsdb driver 0x2000 file bytes at a time.
+pub(crate) const PCM_VOICE_CHUNK: usize = 0x2000;
+
+// = the seg000 streaming-voice state: the open file handle
+// (_word_22CD1_pcm_voice_file_handle) with its cursor/remaining pair
+// (data_0dbc0/data_0dbc4) and the ping-pong job buffers at 3811h/3819h.
+// `Some` = the handle is open and pcm_voice_stream_refill keeps feeding the
+// driver; dropping it to `None` (= close_pcm_voice_file_handle, seg000:a9a1)
+// starves the stream, so the driver drains its queued chunks and goes idle.
+pub(crate) struct PcmVoiceStream {
+    /// The .VOC file bytes DOS reads from the handle.
+    data: Box<[u8]>,
+    /// = data_0dbc0 — file offset of the next unread byte.
+    offset: usize,
+}
+
+/// Build a header-less Creative Voice File holding a single Type-2
+/// continuation block: raw samples that reuse the playing block's time
+/// constant and codec. = the prefab header dnsdb_queue_next_impl writes over
+/// a queued refill buffer (seg001:01db..01e9: type byte at ptr+2, its 24-bit
+/// length = the job's byte count, data at ptr+6).
+fn build_pcm_voc_continuation(samples: &[u8]) -> Vec<u8> {
+    let mut voc = Vec::with_capacity(4 + samples.len());
+    voc.push(2); // Type-2 continuation block
+    voc.push((samples.len() & 0xff) as u8);
+    voc.push(((samples.len() >> 8) & 0xff) as u8);
+    voc.push(((samples.len() >> 16) & 0xff) as u8);
+    voc.extend_from_slice(samples);
+    voc
 }
 
 /// Build a header-less Creative Voice File holding a single Type-1 data block.
@@ -274,6 +314,10 @@ pub struct GameState {
 
     pub(crate) audio_current_sfx: Option<String>,
     pub(crate) audio_current_sfx_data: Vec<u8>,
+
+    // The streamed voice clip being fed to the driver in PCM_VOICE_CHUNK
+    // pieces; see [`PcmVoiceStream`].
+    pub(crate) pcm_voice_stream: Option<PcmVoiceStream>,
 
     // The clip recorder, kept here so the in-game EXIT GAME path (`exit_to_dos`)
     // can finalise a recording before `std::process::exit` skips all destructors.
@@ -513,6 +557,14 @@ pub struct GameState {
     pub(crate) spice_shipment_fulfilment: u8,
     pub(crate) spice_shipment_flags: u8,
 
+    // = seg001:00c0 for_condit_spice_shipment_related_ds_c0 — Duncan's
+    // shipment-mission report state: zeroed when his dialogue-line event
+    // 0x0f sends him off (seg000:24b3), set from the ds:b4 table when he
+    // returns (seg000:250d). The room-entry scan tests it (masked by
+    // data_01158) to run the dining-hall shipment-report scene
+    // (seg000:35cf); that scene is unported.
+    pub(crate) for_condit_spice_shipment_ds_c0: u16,
+
     // = seg001:00c2 final_attack_stage_ds_c2 — the endgame attack-on-the-
     // Harkonnen staging counter; from stage 7 the per-period troop and
     // location event walks stop (seg000:1b5e). The endgame that advances it
@@ -641,14 +693,18 @@ pub struct GameState {
     pub(crate) data_000ed: u8,
     pub(crate) data_000ee: u16,
 
-    // = seg001:00f4 desert_walk_counter — counts compass moves taken in the
-    // desert.
-    pub(crate) desert_walk_counter: u8,
+    // = seg001:00f4 desert_exhaustion_counter — Paul's desert-exhaustion
+    // latch: +1 per compass step outdoors, saturating at
+    // DESERT_EXHAUSTION_MAX; the hourly decrement (run_events_for_current_
+    // time_period) snaps any value below DESERT_EXHAUSTION_GAUNT_THRESHOLD
+    // to 0, so it holds either "recently marched hard" (16..=20) or 0.
+    pub(crate) desert_exhaustion_counter: u8,
 
     // = seg001:00f5 for_condit_desert_walk_related_ds_f5 — cleared with the
-    // counter when the per-period countdown drops below 0x10 (seg000:1b36);
-    // Jessica's desert dialogue reads it.
-    pub(crate) for_condit_desert_walk_ds_f5: u8,
+    // counter when the per-period countdown drops below
+    // DESERT_EXHAUSTION_GAUNT_THRESHOLD (seg000:1b36); Jessica's desert
+    // dialogue reads it.
+    pub(crate) for_condit_jessica_commented_on_exhaustion_ds_f5: u8,
 
     // = seg001:00f8 number_of_locations_with_illness / seg001:00f9
     // Chani_troop_illness_cure_progress / seg001:11db PTR_Location_latest_
@@ -972,6 +1028,27 @@ pub struct GameState {
     // = seg001:1ae4 _word_20F94_ui_elements — the in-game HUD element table.
     pub(crate) ui_elements: [UiElement; 24],
 
+    // = the seg001 nav-panel templates, the six-record blocks
+    // ui_install_nav_panel copies into HUD records 12..17. They are ordinary
+    // writable seg001 data in DOS, which edits them in place — the compass
+    // rebuild stamps the centre palace-plan button's visibility into the room
+    // template (seg000:3056) as well as into the live record — so the port
+    // owns mutable copies. The game_ui NAV_PANEL_* consts hold the compiled-in
+    // contents and are read only here, at startup.
+    //
+    // = seg001:1c76 ui_nav_panel_room.
+    pub(crate) nav_panel_room: NavPanel,
+    // = seg001:1cca ui_nav_panel_map_scroll.
+    pub(crate) nav_panel_alt: NavPanel,
+    // = seg001:1d1e ui_nav_panel_blank.
+    pub(crate) nav_panel_blank: NavPanel,
+    // = seg001:1d72 ui_nav_panel_flight.
+    pub(crate) nav_panel_flight: NavPanel,
+    // = seg001:1dc6 ui_globe_rotation_controls[0..6].
+    pub(crate) nav_panel_globe: NavPanel,
+    // = seg001:1e1a ui_globe_rotation_controls[6..12].
+    pub(crate) nav_panel_book: NavPanel,
+
     // = the seg001 command-menu record buffers, one owned mutable Menu per
     // menu exactly as DOS compiles them in and patches them in place. The
     // MenuRef identity on the menu_stack is the port's `bp`;
@@ -1239,6 +1316,14 @@ pub struct GameState {
     // (the song follows the on-screen situation, the default set at game init);
     // bit 0 = CD-style playlist, bit 1 = shuffle.
     pub(crate) music_playlist_flags: u8,
+
+    // Port-only (no DOS equivalent, which has no music command line): the
+    // `--music` selection, held from set_music_mode until start() lands it
+    // through apply_pending_music_mode. It has to wait: start() zeroes
+    // music_playlist_flags at seg000:0019, between the intro and the in-game
+    // setup, so a mode set before start() would be wiped. `None` = no
+    // selection made, and start() leaves the music state alone.
+    pub(crate) pending_music_mode: Option<crate::MusicMode>,
 
     // = seg001:37fa music_cd_playlist — the working CD-playlist order: 9 song
     // numbers + the 0xff terminator. STANDARD ORDER recopies music_cd_standard_
@@ -1669,9 +1754,11 @@ pub struct GameState {
     // location overlay SAL (loc_0488a) on the normal draw_room_game_screen path.
     pub(crate) data_04732: u8,
 
-    // = seg001:4735 data_04735 — pending-dialogue/auto-action byte; its high bit
-    // (sign) makes draw_room_game_screen run the loc_03723 auto-action handler.
-    pub(crate) data_04735: u8,
+    // = seg001:4735 desert_step_counter — low 7 bits count the desert-walk
+    // steps since the last room-entry; msb is set by ui_click_move_room when the counter is updated,
+    // and reset by draw_room_game_screen (loc_03a3e) after it consumes the
+    // change.
+    pub(crate) desert_step_counter: u8,
 
     // = seg001:0fd8 room_persons — the 16-entry room-person table walked by
     // scan_current_room_npcs. Mutable copy of ROOM_PERSON_TABLE_INIT;
@@ -2176,6 +2263,7 @@ impl GameState {
             let_voices_finish: false,
             audio_current_sfx: None,
             audio_current_sfx_data: Vec::new(),
+            pcm_voice_stream: None,
 
             recorder,
 
@@ -2230,6 +2318,7 @@ impl GameState {
             spice_shipment_quantity: 0,
             spice_shipment_fulfilment: 0,
             spice_shipment_flags: 0,
+            for_condit_spice_shipment_ds_c0: 0,
             final_attack_stage: 0,
             spice_shipment_sequence_number: 0,
             number_of_sietches_attacked_by_harkonnen: 0,
@@ -2253,7 +2342,7 @@ impl GameState {
             harkonnen_raid_suppress_once: 0,
             ecology_lfsr_state: 1,
             smugglers: crate::smugglers::SMUGGLERS,
-            for_condit_desert_walk_ds_f5: 0,
+            for_condit_jessica_commented_on_exhaustion_ds_f5: 0,
             number_of_locations_with_illness: 0,
             chani_troop_illness_cure_progress: 0,
             latest_location_with_illness: 0,
@@ -2298,7 +2387,7 @@ impl GameState {
             ui_hud_head_index: 0,
             data_000ea: 0,
             data_000e1: 0,
-            desert_walk_counter: 0,
+            desert_exhaustion_counter: 0,
             room_view_toggle: 0xff,
             data_000fc: 1,
             locations: LOCATIONS,
@@ -2384,6 +2473,14 @@ impl GameState {
             results_prev_values: [0; 6],
             results_trend_glyphs: [0; 6],
             ui_elements: UI_ELEMENTS_INIT,
+            // The only reads of the NAV_PANEL_* consts: the templates are
+            // mutable state from here on.
+            nav_panel_room: game_ui::NAV_PANEL_ROOM,
+            nav_panel_alt: game_ui::NAV_PANEL_ALT,
+            nav_panel_blank: game_ui::NAV_PANEL_BLANK,
+            nav_panel_flight: game_ui::NAV_PANEL_FLIGHT,
+            nav_panel_globe: game_ui::NAV_PANEL_GLOBE,
+            nav_panel_book: game_ui::NAV_PANEL_BOOK,
             // = the static seg001 menu buffers, initialized to their compiled-in
             // contents (priority byte + records; command_menu_buf and
             // menu_multiple_cancel start empty and are filled by their builders).
@@ -2454,6 +2551,7 @@ impl GameState {
             hnm_lop_cursor: 0,
             hnm_lop_remaining: 0,
             music_playlist_flags: 0,
+            pending_music_mode: None,
             music_cd_playlist: crate::music::MUSIC_CD_STANDARD_ORDER,
             music_cd_playlist_cursor: 0,
             music_song_end_tick_stamp: 0,
@@ -2498,7 +2596,7 @@ impl GameState {
             travel_vehicle_mode: 0,
             orni_anim_frame: 0,
             data_04732: 0,
-            data_04735: 0,
+            desert_step_counter: 0,
             room_persons: ROOM_PERSON_TABLE_INIT,
             data_0476a: 0,
             data_0476b: 0,
@@ -2679,6 +2777,10 @@ impl GameState {
 
         // = seg000:0019 mov [music_playlist_flags], 0
         self.music_playlist_flags = 0;
+        // Port-only: the `--music` selection set_music_mode held back, landed
+        // now that the reset above is out of the way. Nothing pending (every
+        // caller but the CLI) leaves the music state untouched.
+        self.apply_pending_music_mode();
 
         // = seg000:001e mov [game_time], 2 — start the in-game clock at 2 (the
         // PIT game-clock ISR that advances it is not ported yet).
@@ -3089,14 +3191,12 @@ impl GameState {
         if self.game_suspend_count != 0 {
             return;
         }
-        // = seg000:ef91 data_0146e — the divider reload value.
-        const GAME_CLOCK_DIVIDER: i32 = 12000;
         // = seg000:ef8b dec word ptr [46dbh]; jns (skip while still >= 0).
         self.data_046db -= elapsed_ticks as i32;
         // = seg000:ef91..ef9b reload, inc game_time, and set
         // new_time_period_pending on each underflow.
         while self.data_046db < 0 {
-            self.data_046db += GAME_CLOCK_DIVIDER + 1;
+            self.data_046db += GAME_CLOCK_TICKS_PER_HOUR + 1;
             self.game_time = self.game_time.wrapping_add(1);
             // = seg000:ef9b inc byte ptr [46ddh] — flag a new time period.
             self.new_time_period_pending = 1;
@@ -3122,8 +3222,8 @@ impl GameState {
         }
         for _ in 0..count {
             // = seg000:0fe6 reload the clock divider so the free-running PIT
-            //   clock does not also bump game_time mid-pump (data_0146e = 12000).
-            self.data_046db = 12000;
+            //   clock does not also bump game_time mid-pump.
+            self.data_046db = GAME_CLOCK_TICKS_PER_HOUR;
             // = seg000:0fec cmp [new_hour_flag],0; jz — a period was already
             //   pending from the live clock, so run its events before the next.
             if self.new_time_period_pending != 0 {
@@ -3152,11 +3252,13 @@ impl GameState {
         }
     }
 
+    /// One game tick: the 200Hz PIT the game clock and every wait loop run on.
+    const TICK_NANOS: u64 = 4_992_530; // 4.99253ms
+
     /// Returns the number of game ticks since game start (200Hz, 4.99253ms per tick)
     pub fn game_ticks(&self) -> u64 {
-        const TICK_NANOS: u64 = 4_992_530; // 4.99253ms
         let elapsed_nanos = self.game_start.elapsed().as_nanos() as u64;
-        elapsed_nanos / TICK_NANOS
+        elapsed_nanos / Self::TICK_NANOS
     }
 
     /// Sleeps until at least `ticks` have elapsed since `start`
@@ -3172,21 +3274,16 @@ impl GameState {
     /// game_state.sleep_ticks(start, 4); // Sleep until 4 ticks have passed since start
     /// ```
     pub fn sleep_ticks(&self, start: u64, ticks: u64) {
-        // println!("Sleeping {ticks} ticks from {start}");
-        const TICK_NANOS: u64 = 4_992_530; // 4.99253ms
-
-        let target_tick = start + ticks;
-        let current_tick = self.game_ticks();
-
-        if current_tick >= target_tick {
-            // Already past target time, no need to sleep
-            return;
+        // The DOS wait loops spin on the PIT counter, so they resume on the
+        // tick edge. Sleep to that absolute deadline rather than for a whole
+        // tick span measured from now: `start` is read mid-tick, so a relative
+        // sleep overshoots by the part of the tick already gone, and in a long
+        // wait loop the error compounds (the 410-batch LFSR dissolve ran a
+        // quarter longer than the original before this).
+        let deadline = std::time::Duration::from_nanos((start + ticks) * Self::TICK_NANOS);
+        if let Some(remaining) = deadline.checked_sub(self.game_start.elapsed()) {
+            std::thread::sleep(remaining);
         }
-
-        let ticks_remaining = target_tick - current_tick;
-        let sleep_duration = std::time::Duration::from_nanos(ticks_remaining * TICK_NANOS);
-
-        std::thread::sleep(sleep_duration);
     }
 
     // = seg000:da25 add_frame_task — append a per-frame callback.
@@ -3359,10 +3456,18 @@ impl GameState {
     // CRT retrace) spins until `[bp] - bx >= 3`, i.e. 3 PIT ticks per step. The
     // PIT runs at the same ~200Hz the port models, so this is 3 game ticks.
     pub fn present_transition_frame(&mut self) {
+        // = loc_segvga_02572 `sub ax,bx; cmp ax,3; jb` — 3 ticks (~15ms).
+        self.present_transition_frame_ticks(3);
+    }
+
+    // The `ticks`-per-step form of `present_transition_frame`. Not every effect
+    // paces on loc_segvga_02572: the LFSR dissolve (dissolve_lfsr_body,
+    // segvga:2a5a) has its own `cmp bx,[bp]; jz` spin, which waits only for the
+    // PIT counter to change — one tick per batch, not three.
+    pub fn present_transition_frame_ticks(&mut self, ticks: u64) {
         let start = self.game_ticks();
         self.send_frame_to_display();
-        // = loc_segvga_02572 `sub ax,bx; cmp ax,3; jb` — 3 ticks (~15ms).
-        self.sleep_ticks(start, 3);
+        self.sleep_ticks(start, ticks);
     }
 
     // = seg000:e387 wait_a_bit — run the driver for a fixed number of PIT
@@ -3449,6 +3554,94 @@ impl GameState {
         self.pcm_player.set_volume(volume);
     }
 
+    // = open_pcm_voice_file (seg000:a90b) + voc_get_lipsync_data's stream
+    // setup — begin streaming a voice .VOC to the driver in PCM_VOICE_CHUNK
+    // pieces. The first chunk is the file's own first 0x2000 bytes (the VOC
+    // header and the type-5/type-1 blocks sit inside it; the block engine
+    // walks past them), started as job A; the second chunk is queued right
+    // away (= the pcm_voice_stream_refill call at seg000:a879 / ab7a). Later
+    // chunks arrive through the per-tick pumps: lip_sync_frame_task's tail
+    // (seg000:a811) for a talking head, the ab92 monitor for narration.
+    //
+    // A clip that fits inside the first chunk starts with the stop-at-end
+    // flag and leaves no stream behind (= read_audio_file going negative on
+    // the first read: seg000:a99d ORs 80h into +7 and falls into
+    // close_pcm_voice_file_handle).
+    //
+    // The caller runs pcm_stop_voc first, exactly as DOS does (seg000:a84a /
+    // ab6d), so start_playback is only ever refused when no PCM card is
+    // modelled — in which case nothing is left to starve.
+    pub(crate) fn pcm_voice_stream_start(&mut self, data: Box<[u8]>) {
+        // = seg000:a910..a916 — open_pcm_voice_file zeroes both ping-pong job
+        // state words before the new stream. A chunk left queued when the
+        // previous clip was cut is still chain-eligible (voc_blk0_terminator
+        // checks the queued state, seg001:068c) and would play as a snippet
+        // of the old line right after this clip's first chunk.
+        self.pcm_player.clear_queued();
+        let first = data.len().min(PCM_VOICE_CHUNK);
+        let last = first >= data.len();
+        let flags = if last { pcm_player::VOC_STOP_AT_END } else { 0 };
+        if !self.pcm_player.start_playback(&data[..first], flags) {
+            return;
+        }
+        if !last {
+            self.pcm_voice_stream = Some(PcmVoiceStream {
+                data,
+                offset: first,
+            });
+            self.pcm_voice_stream_refill();
+        }
+    }
+
+    // = seg000:a9b9 pcm_voice_stream_refill — feed the driver the next
+    // PCM_VOICE_CHUNK file bytes. Returns if the handle is closed
+    // (check_pcm_voice_file_open == 0) or both ping-pong jobs are still
+    // queued (seg000:a9c1/a9c8; the port's single queued slot is the free
+    // buffer). The chunk reaches the driver as a type-2 continuation block
+    // (= the header dnsdb_queue_next_impl writes, seg001:01db..01e9), so the
+    // driver chains to it at the current chunk's end — or auto-starts it
+    // from ENDED after an underrun. The chunk that exhausts the file gets
+    // the stop-at-end flag and closes the handle (= seg000:a99d falling into
+    // close_pcm_voice_file_handle).
+    pub(crate) fn pcm_voice_stream_refill(&mut self) {
+        let Some(stream) = self.pcm_voice_stream.as_mut() else {
+            return;
+        };
+        if self.pcm_player.queue_slot_filled() {
+            return;
+        }
+        let end = (stream.offset + PCM_VOICE_CHUNK).min(stream.data.len());
+        let last = end >= stream.data.len();
+        // = seg001:01d0..01da — the driver shortens a stop-at-end job by one
+        // byte: the file's last byte is the VOC terminator, which must not
+        // reach the DAC as a sample (0x00 is a full-scale negative click).
+        let data_end = if last {
+            end.saturating_sub(1).max(stream.offset)
+        } else {
+            end
+        };
+        let chunk = build_pcm_voc_continuation(&stream.data[stream.offset..data_end]);
+        stream.offset = end;
+        let flags = if last { pcm_player::VOC_STOP_AT_END } else { 0 };
+        self.pcm_player.queue_next(&chunk, flags);
+        if last {
+            self.pcm_voice_stream = None;
+        }
+    }
+
+    // = seg000:ac14 pcm_stop_voc — the one routine that cuts a clip
+    // instantly: remove the ab92 refill/music-restore monitor, close the
+    // streaming handle (so nothing re-feeds the driver) and stop the driver
+    // itself.
+    pub(crate) fn pcm_stop_voc(&mut self) {
+        // = seg000:ac1b/ac1e remove_frame_task(frame_task_callback_0ab92).
+        self.remove_frame_task(TaskId::PcmVoiceMusicRestore);
+        // = seg000:ac21 call close_pcm_voice_file_handle.
+        self.pcm_voice_stream = None;
+        // = seg000:ac24 call [pcm_vtable_stop].
+        self.pcm_player.stop();
+    }
+
     // = seg000:aa0f decode_sd_block — kick off PCM playback from the first
     // SD chunk of an HNM clip. The chunk's payload is a complete Creative
     // Voice File: a 0x1a-byte VOC header followed by a 6-byte Type-1 data
@@ -3469,8 +3662,9 @@ impl GameState {
         };
 
         // = seg000:aa1a call pcm_stop_voc — drop any audio left over from a
-        // previous clip before queueing this clip's first buffer.
-        self.pcm_player.stop();
+        // previous clip (a still-streaming voice included) before queueing
+        // this clip's first buffer.
+        self.pcm_stop_voc();
 
         if sd_block.len() < 0x20 || &sd_block[..19] != b"Creative Voice File" {
             // Not a VOC payload — bail rather than feed garbage to the driver.
@@ -3916,7 +4110,7 @@ impl GameState {
         // (label, value) rows. The value column is placed at a fixed pixel x
         // past the widest label, so the values line up even though the glyph
         // font is proportional (space-padding would not align them).
-        let rows: [(&str, String); 4] = [
+        let rows: [(&str, String); 5] = [
             (
                 "PHASE",
                 // format!("{:#04x} ({})", self.game_phase, self.game_phase),
@@ -3934,7 +4128,8 @@ impl GameState {
             // ("MET", format!("{:#06x}", self.persons_met)),
             // ("TRAVEL", format!("{:#06x}", self.persons_travelling_with)),
             // ("IN ROOM", format!("{:#06x}", self.persons_in_room)),
-            ("DESERT WALK", format!("{}", self.desert_walk_counter)),
+            ("EXHAUSTION", format!("{}", self.desert_exhaustion_counter)),
+            ("DESERT STEPS", format!("{}", self.desert_step_counter)),
         ];
 
         let pad = 2u16;

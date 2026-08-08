@@ -608,7 +608,7 @@ impl GameState {
         // is done. Each HNM SD buffer was queued with the loop-whole flag
         // (copy_sd_chunk_to_pcm_buf, seg000:aa91), so without this the final
         // chunk loops forever.
-        self.pcm_player.stop();
+        self.pcm_stop_voc();
         // = seg000:cf42 call play_music_MORNING_HSQ.
         self.midi.play_music_morning_hsq(&mut self.dat_file);
 
@@ -1198,7 +1198,7 @@ impl GameState {
     // once and never updates it again, so the fade owns the faded span outright.
     fn stage_29_init(&mut self) {
         // = seg000:06d8 call pcm_stop_voc.
-        self.pcm_player.stop();
+        self.pcm_stop_voc();
         // = seg000:06dd mov [46dfh], 1 — arm the sky-fade task (loc_03916 stops
         // itself if this is cleared).
         self.sky_fade_active = true;

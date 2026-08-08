@@ -1,5 +1,6 @@
 //! The per-time-period event scheduler — the DOS engine at seg000:1b23..2164
-//! that fires the game's clock-driven events: the desert-walk countdown, the
+//! that fires the game's clock-driven events: the desert-exhaustion countdown,
+//! the
 //! new-day bookkeeping (phase-change day counter, NPC relocation, the
 //! phase-5c illness plot, the spice-production stats, smuggler restocks),
 //! one period of troop occupation events, the location/ecology walk, the
@@ -36,6 +37,10 @@ impl GameState {
     // then refresh whichever main view is up. See the module header for the
     // full breakdown.
     pub(crate) fn run_events_for_current_time_period(&mut self) {
+        println!(
+            "run_events_for_current_time_period: new_time_period_pending = {}",
+            self.new_time_period_pending
+        );
         // = seg000:1b23 cmp [new_hour_flag],0; jz loc_01b0c — only a newly-
         //   entered time period runs events.
         if self.new_time_period_pending == 0 {
@@ -43,15 +48,17 @@ impl GameState {
         }
         // = seg000:1b2a new_hour_flag = 0 — consume the flag.
         self.new_time_period_pending = 0;
-        // = seg000:1b2f..1b3d the desert-walk countdown: decrement; a result
-        //   below 0x10 (signed) zeroes the counter and the ds:f5 CONDIT byte.
-        let c = self.desert_walk_counter.wrapping_sub(1) as i8;
-        self.desert_walk_counter = if c >= 0x10 {
-            c as u8
-        } else {
-            self.for_condit_desert_walk_ds_f5 = 0;
-            0
-        };
+        // = seg000:1b2f..1b3d the desert-exhaustion countdown: decrement; a
+        //   result below the gaunt threshold (signed) zeroes the counter and
+        //   the ds:f5 CONDIT byte.
+        let c = self.desert_exhaustion_counter.wrapping_sub(1) as i8;
+        self.desert_exhaustion_counter =
+            if c >= crate::game_state::DESERT_EXHAUSTION_GAUNT_THRESHOLD as i8 {
+                c as u8
+            } else {
+                self.for_condit_jessica_commented_on_exhaustion_ds_f5 = 0;
+                0
+            };
         // = seg000:1b40 call loc_01a0f — repaint the date/time indicator.
         self.ui_redraw_date_and_time_indicator();
         // = seg000:1b43 call loc_038e1 — cross-fade the sky to the new
@@ -618,7 +625,7 @@ impl GameState {
     // = seg000:24d2 loc_024d2 — the shipment-fulfilment class: how many of
     // the thresholds {1, 0x40, 0x80, 0x90, 0xff} ds:be sits below (0 = fully
     // paid 0xff .. 5 = nothing paid).
-    fn shipment_fulfilment_class(&self) -> u8 {
+    pub(crate) fn shipment_fulfilment_class(&self) -> u8 {
         let v = self.spice_shipment_fulfilment;
         [1u8, 0x40, 0x80, 0x90, 0xff]
             .iter()
@@ -884,10 +891,11 @@ mod tests {
         game.start(true);
         while rx.try_recv().is_ok() {}
 
-        // The desert-walk countdown: 0x15 decrements past the 0x10 floor and
-        // zeroes itself and the ds:f5 CONDIT byte within the day.
-        game.desert_walk_counter = 0x15;
-        game.for_condit_desert_walk_ds_f5 = 7;
+        // The desert-exhaustion countdown: one past the step cap decrements
+        // down to the gaunt-threshold floor and then zeroes itself and the
+        // ds:f5 CONDIT byte within the day.
+        game.desert_exhaustion_counter = crate::game_state::DESERT_EXHAUSTION_MAX + 1;
+        game.for_condit_jessica_commented_on_exhaustion_ds_f5 = 1;
         // The production diff inputs: 100 in stock, 60 at the last new day,
         // 5 spent -> production 45.
         game.spice_in_stock = 100;
@@ -930,8 +938,14 @@ mod tests {
         game.run_events_for_n_time_periods(18);
         while rx.try_recv().is_ok() {}
 
-        assert_eq!(game.desert_walk_counter, 0, "the walk countdown drained");
-        assert_eq!(game.for_condit_desert_walk_ds_f5, 0, "ds:f5 cleared");
+        assert_eq!(
+            game.desert_exhaustion_counter, 0,
+            "the exhaustion countdown drained"
+        );
+        assert_eq!(
+            game.for_condit_jessica_commented_on_exhaustion_ds_f5, 0,
+            "ds:f5 cleared"
+        );
         assert_eq!(game.days_since_last_game_phase_change, 1, "one new day");
         assert_eq!(game.todays_spice_production, 45, "stock 100 - 60 + spent 5");
         assert_eq!(

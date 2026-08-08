@@ -310,7 +310,7 @@ impl GameState {
     // DOS also passes music_playlist_flags & 1 to MIDI_Open as its al flag
     // (seg000:adac); the port's driver always plays once and both modes
     // reschedule externally (service_midi_music / the CD service).
-    fn midi_play_song_gated(&mut self, song: u8) {
+    pub(crate) fn midi_play_song_gated(&mut self, song: u8) {
         if !self.music_service_enabled() {
             return;
         }
@@ -319,5 +319,22 @@ impl GameState {
         }
         self.midi.midi_play_song(song, &mut self.dat_file);
         self.music_song_end_tick_stamp = 0;
+    }
+
+    // = seg000:ad50 play_music_WORMSUIT_HSQ — reset the driver (ad50) and start
+    // song 3 through the gated midi_play_song (ad55 jmp), so the MUSIC OFF verb
+    // and a missing MIDI card silence the score exactly like every other song
+    // start. The in-game callers — the book's credits page (loc_00a09) and the
+    // desert collapse (loc_00e77) — come through here.
+    //
+    // The intro's two calls (seg000:0228 / 0321) drive `Midi` directly instead:
+    // the port models "no MIDI card" by muting the output while the song keeps
+    // running, so the intro's music-synced waits still pace, and the MUSIC OFF
+    // verb they would otherwise read cannot be set before the game starts.
+    pub(crate) fn play_music_wormsuit_hsq(&mut self) {
+        // = seg000:ad50 call midi_reset — ungated in DOS.
+        self.midi.midi_reset();
+        // = seg000:ad53/ad55 al = 3; jmp midi_play_song.
+        self.midi_play_song_gated(3);
     }
 }

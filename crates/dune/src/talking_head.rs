@@ -597,13 +597,15 @@ impl GameState {
             // = char_to_sprite_player (loc_0917a): the player's idle expression
             // (talking_head_idle_expr / data_047d0) tracks the in-game clock so
             // Paul visibly ages across the game. ah = min((game_time*4)>>8, 8) ==
-            // min(game_time>>6, 8), doubled, + (desert_walk_counter >= 16), + 1.
+            // min(game_time>>6, 8), doubled, + (desert_exhaustion_counter >= 16), + 1.
             // Higher game_time selects the later (blue-eyed) idle animations; at
             // game start game_time is small so facing == 1 -> the youngest idle
             // animation 0.
             let mut anim = (self.game_time >> 6).min(8) as u8;
             anim <<= 1;
-            if self.desert_walk_counter >= 16 {
+            if self.desert_exhaustion_counter
+                >= crate::game_state::DESERT_EXHAUSTION_GAUNT_THRESHOLD
+            {
                 anim += 1;
             }
             anim += 1;
@@ -1024,14 +1026,20 @@ impl GameState {
         self.set_talk_to_me_verb_text(0x90);
 
         // = loc_0a75c: start the Sound Blaster voice and seed the lip-sync
-        // timing. pcm_stop_voc first, then start this clip on the dnsdb driver.
-        self.pcm_player.stop();
+        // timing. pcm_stop_voc first (= seg000:a84a, inside
+        // voc_get_lipsync_data), then stream this clip to the dnsdb driver in
+        // PCM_VOICE_CHUNK pieces: the first chunk starts now, the second is
+        // queued (= the pcm_voice_stream_refill call at seg000:a879), and
+        // tick_talking_head_voc pumps the rest (= the a811 task tail). A
+        // teardown that runs lip_sync_stop closes the stream, so only the
+        // queued chunks play out.
+        self.pcm_stop_voc();
         let baseline = self.pcm_player.samples_played();
         let total = voc.pcm.len() as u64;
         // = seg000:a768 mov [is_voc_pcm_playing], 1 — declared playing, and it
         //   stays declared until a teardown says otherwise.
         self.voc_pcm_playing = true;
-        self.pcm_player.start_playback(&data, 0);
+        self.pcm_voice_stream_start(data);
 
         // = seg000:a774/a77a — DOS seeds the next mouth-frame time from the
         //   PIT counter; the port keeps the tick the line started at for the
@@ -1080,7 +1088,7 @@ impl GameState {
         //   only a different one pays for the stop and the reload.
         if self.audio_current_sfx.as_deref() != Some(name) {
             // = seg000:ab29 call pcm_stop_voc.
-            self.pcm_player.stop();
+            self.pcm_stop_voc();
             // = seg000:ab30 call open_voc_resource. A missing resource leaves
             //   nothing resident (DOS's al == 0 exit at seg000:ab2e).
             let Ok(data) = self.dat_file.read(name) else {
@@ -1239,6 +1247,9 @@ impl GameState {
                 self.restore_mouse_if_rect_intersects(published);
                 self.send_frame_to_display();
                 self.draw_mouse_cursor_if_needed_then_present();
+                // = seg000:a811 jmp pcm_voice_stream_refill — the task tail
+                // pumps the stream on every exit of the live-voice path.
+                self.pcm_voice_stream_refill();
                 return;
             }
             // = seg000:9e33..9e45 — stamp the lip-id frame's sprite list over
@@ -1258,24 +1269,27 @@ impl GameState {
             // chain as the idle animator's.
             self.present_head_dirty_rect(rect);
         }
+        // = seg000:a811 jmp pcm_voice_stream_refill — every pass of the task
+        // that leaves the voice live feeds the driver the next chunk; only
+        // the drained path above (lip_sync_stop) skips the pump.
+        self.pcm_voice_stream_refill();
     }
 
-    // = seg000:a7a5 lip_sync_stop — stop any active voice LIP-SYNC: remove the
-    // voc frame task, drop the mouth stream and flip the TALK TO ME verb to its
-    // idle text. While a voice is marked playing (is_voc_pcm_playing), clear
-    // that flag and swell the score back to its normal level.
+    // = seg000:a7a5 lip_sync_stop — stop any active voice LIP-SYNC and starve
+    // the voice stream: remove the voc frame task, drop the mouth stream and
+    // flip the TALK TO ME verb to its idle text. While a voice is marked
+    // playing (is_voc_pcm_playing), clear that flag, close the streaming
+    // handle and swell the score back to its normal level.
     //
-    // It does NOT silence the voice. The tail is `set_voc_pcm_is_not_playing`
-    // (seg000:abc6, one flag byte), `close_pcm_voice_file_handle` (seg000:a9a1,
-    // an INT 21h/3Eh on the streaming handle — it never touches the PCM driver
-    // vtable) and `midi_restore_music_volume`. Whatever the Sound Blaster has
-    // already been handed plays out; only pcm_stop_voc (seg000:ac14) actually
-    // cuts a clip. That is why a companion who refuses to board is still heard
-    // over the room re-render and the takeoff: every teardown between her line
-    // and seg000:478c runs through here.
-    //
-    // The port has no streaming file handle to close — whole .voc resources are
-    // handed to the mixer — so the a7bc call has no equivalent here.
+    // It does NOT stop the driver — no PCM vtable call; only pcm_stop_voc
+    // (seg000:ac14) cuts a clip instantly. But closing the handle
+    // (close_pcm_voice_file_handle, seg000:a9a1) starves the refill pump
+    // (pcm_voice_stream_refill, seg000:a9b9 — fed per tick from the removed
+    // task's a811 tail), so the driver drains at most the two queued
+    // PCM_VOICE_CHUNK buffers (~1s at 11 kHz) and goes idle. A short line
+    // that fits those buffers — a companion's orni-refusal — is still heard
+    // through every teardown between her line and seg000:478c; a long line
+    // dies about a second after STOP TALKING.
     pub(crate) fn lip_sync_stop(&mut self) {
         // = seg000:a7a5 mov si, lip_sync_frame_task; a7a8 call remove_frame_task.
         self.remove_frame_task(crate::TaskId::TalkingHeadVoc);
@@ -1301,8 +1315,10 @@ impl GameState {
         // ornithopter engine loop cuts a departing companion's line exactly
         // this way (seg000:47f6 -> ab18 -> ab29).
         self.voc_pcm_playing = false;
-        // = seg000:a7bc close_pcm_voice_file_handle — no port equivalent; the
-        // clip itself keeps playing either way.
+        // = seg000:a7bc close_pcm_voice_file_handle — starve the stream: with
+        // the handle closed no pump re-feeds the driver, so it drains its
+        // queued chunks and goes idle.
+        self.pcm_voice_stream = None;
         // = seg000:a7bf jmp midi_restore_music_volume — swell the score back to
         // its normal level now the voice line is over.
         self.midi_restore_music_volume();
@@ -1790,6 +1806,169 @@ mod tests {
         game.let_voices_finish = false;
         game.audio_start_voc("SN7.VOC");
         assert_eq!(game.audio_current_sfx.as_deref(), Some("SN7.VOC"));
+        game.pcm_player.set_enabled(false);
+    }
+
+    // A synthetic Creative Voice File: 0x1a-byte header, one type-1 block of
+    // `samples` 8-bit samples at time constant `tc`, and the terminator byte.
+    fn synth_voc(samples: usize, tc: u8) -> Vec<u8> {
+        let mut voc = b"Creative Voice File\x1a".to_vec();
+        voc.resize(0x1a, 0);
+        let body_len = samples + 2;
+        voc.push(1);
+        voc.push((body_len & 0xff) as u8);
+        voc.push(((body_len >> 8) & 0xff) as u8);
+        voc.push(((body_len >> 16) & 0xff) as u8);
+        voc.push(tc);
+        voc.push(0);
+        voc.extend(std::iter::repeat_n(0x80u8, samples));
+        voc.push(0);
+        voc
+    }
+
+    // A voice streams to the driver in PCM_VOICE_CHUNK pieces (= the
+    // open_pcm_voice_file / pcm_voice_stream_refill machinery, seg000:a90b /
+    // a9b9): while the pump runs, the whole clip plays; a teardown that runs
+    // lip_sync_stop closes the stream (= close_pcm_voice_file_handle at
+    // seg000:a7bc), and the driver drains at most the two queued chunks —
+    // which is why STOP TALKING audibly stops a long line about a second in.
+    // Asset-gated:
+    //   cargo test -p dune -- --ignored streamed_voice
+    #[test]
+    #[ignore = "needs assets/DUNE.DAT"]
+    fn streamed_voice_plays_out_pumped_and_starves_on_lip_sync_stop() {
+        use crate::game_state::PCM_VOICE_CHUNK;
+
+        let dat_path = concat!(env!("CARGO_MANIFEST_DIR"), "/../../assets/DUNE.DAT");
+        let Ok(dat_file) = DatFile::open(dat_path) else {
+            eprintln!("skipping: {dat_path} not found");
+            return;
+        };
+        let (tx, _rx) = mpsc::sync_channel(64);
+        let mut game = GameState::new(dat_file, tx);
+        game.set_headless();
+        game.settings_flags |= 0x1;
+        game.pcm_player.set_volume(0);
+        game.pcm_player.set_enabled(true);
+
+        // A five-chunk clip stands in for a long line; draining at the clip's
+        // own rate consumes one input sample per output sample.
+        const TC: u8 = 0xa5;
+        let rate = 1_000_000 / (256 - TC as u32);
+        let clip = synth_voc(5 * PCM_VOICE_CHUNK, TC);
+        let total = 5 * PCM_VOICE_CHUNK as u64;
+
+        // Pumped stream: refilled each tick (= the seg000:a811 task tail /
+        // ab92 monitor), the clip plays to its end.
+        game.pcm_voice_stream_start(clip.clone().into_boxed_slice());
+        assert!(game.pcm_player.is_playing());
+        assert!(
+            game.pcm_player.queue_slot_filled(),
+            "chunk 2 is queued at start (= seg000:a879)"
+        );
+        let mut guard = 0;
+        while game.pcm_player.is_playing() {
+            game.pcm_player.drain_for_test(0x800, rate);
+            game.pcm_voice_stream_refill();
+            guard += 1;
+            assert!(guard < 100, "the pumped clip must drain");
+        }
+        // Exactly the clip's samples and nothing more: the trailing VOC
+        // terminator byte is dropped from the last chunk (= the stop-at-end
+        // `dec bx` in dnsdb_queue_next_impl, seg001:01da) — played as a
+        // sample, 0x00 is a full-scale negative click at the end of every
+        // line.
+        assert_eq!(
+            game.pcm_player.samples_played(),
+            total,
+            "the pumped stream feeds the whole clip and never the terminator byte"
+        );
+        assert!(game.pcm_voice_stream.is_none());
+
+        // Starved stream: the STOP TALKING teardown (menu_npc_actions_cleanup,
+        // seg000:97cf) runs lip_sync_stop mid-clip. The stream closes, and
+        // only the queued chunks play out.
+        let baseline = game.pcm_player.samples_played();
+        game.voc_pcm_playing = true;
+        game.pcm_voice_stream_start(clip.into_boxed_slice());
+        assert!(game.pcm_voice_stream.is_some());
+
+        game.lip_sync_stop();
+        assert!(
+            game.pcm_voice_stream.is_none(),
+            "= seg000:a7bc close_pcm_voice_file_handle"
+        );
+
+        // Drain past the two buffered chunks: the driver goes idle with most
+        // of the clip unheard.
+        game.pcm_player.drain_for_test(3 * PCM_VOICE_CHUNK, rate);
+        assert!(
+            !game.pcm_player.is_playing(),
+            "the starved stream dies once the queued chunks drain"
+        );
+        let heard = game.pcm_player.samples_played() - baseline;
+        assert!(
+            heard <= 2 * PCM_VOICE_CHUNK as u64,
+            "at most the two queued chunks play out, heard {heard:#x}"
+        );
+        game.pcm_player.set_enabled(false);
+    }
+
+    // A line cut mid-stream leaves a chunk in the driver's queued slot — the
+    // driver's stop touches no job state (cmd_stop_playback, seg001:08ce), so
+    // the chunk stays chain-eligible. Starting the next voice must drop it
+    // (= open_pcm_voice_file zeroing the ping-pong job states,
+    // seg000:a910..a916), or the new line's first terminator chains into the
+    // old line: a snippet of the previous speaker inside the new one.
+    // Asset-gated:
+    //   cargo test -p dune -- --ignored stale_queued
+    #[test]
+    #[ignore = "needs assets/DUNE.DAT"]
+    fn a_new_voice_drops_the_previous_lines_stale_queued_chunk() {
+        use crate::game_state::PCM_VOICE_CHUNK;
+
+        let dat_path = concat!(env!("CARGO_MANIFEST_DIR"), "/../../assets/DUNE.DAT");
+        let Ok(dat_file) = DatFile::open(dat_path) else {
+            eprintln!("skipping: {dat_path} not found");
+            return;
+        };
+        let (tx, _rx) = mpsc::sync_channel(64);
+        let mut game = GameState::new(dat_file, tx);
+        game.set_headless();
+        game.settings_flags |= 0x1;
+        game.pcm_player.set_volume(0);
+        game.pcm_player.set_enabled(true);
+
+        const TC: u8 = 0xa5;
+        let rate = 1_000_000 / (256 - TC as u32);
+        let clip = synth_voc(3 * PCM_VOICE_CHUNK, TC);
+
+        // The first speaker's line, cut while its second chunk is queued.
+        game.pcm_voice_stream_start(clip.clone().into_boxed_slice());
+        assert!(game.pcm_player.queue_slot_filled());
+        game.pcm_stop_voc();
+        assert!(
+            game.pcm_player.queue_slot_filled(),
+            "= seg001:08ce — the driver's stop leaves the queued job in place"
+        );
+
+        // The next speaker's line: it must play exactly its own samples, with
+        // the stale chunk dropped at stream open rather than chained after
+        // this line's first chunk.
+        let baseline = game.pcm_player.samples_played();
+        game.pcm_voice_stream_start(clip.into_boxed_slice());
+        let mut guard = 0;
+        while game.pcm_player.is_playing() {
+            game.pcm_player.drain_for_test(0x800, rate);
+            game.pcm_voice_stream_refill();
+            guard += 1;
+            assert!(guard < 100, "the pumped clip must drain");
+        }
+        assert_eq!(
+            game.pcm_player.samples_played() - baseline,
+            3 * PCM_VOICE_CHUNK as u64,
+            "only the new line's own samples play"
+        );
         game.pcm_player.set_enabled(false);
     }
 
