@@ -1251,16 +1251,6 @@ impl GameState {
         }
     }
 
-    // = seg000:100b callback_event_dialogue_line_0b_game_phase_01_make_Duncan_
-    // Idaho_visible — mov byte [ds:100b], 1: write 1 into the high byte of
-    // room_persons[3].location_slot, flipping Duncan Idaho's 0xff80
-    // (never-matching, hidden) to 0x0180 so his entry matches the palace room
-    // (location_and_room 0x2004) from now on.
-    fn make_duncan_idaho_visible(&mut self) {
-        let entry = &mut self.room_persons[3];
-        entry.location_appearance = (entry.location_appearance & 0x00ff) | 0x0100;
-    }
-
     // = seg000:24a3 callback_event_dialogue_line_0f_Duncan_Idaho — Duncan's
     // line about negotiating the spice shipment. Before phase 0x10 it only
     // marks the story bit on room_persons[1]; from phase 0x10 Duncan leaves

@@ -2952,7 +2952,7 @@ impl GameState {
         }
     }
 
-    // = seg000:0600e loc_0600e — draw the location info popup: place the
+    // = seg000:600e loc_0600e — draw the location info popup: place the
     // panel next to the marker (location_05ee4), the location type + name,
     // then the class-specific extras and the equipment/battle section.
     pub(crate) fn map_draw_location_popup(&mut self, li: usize) {

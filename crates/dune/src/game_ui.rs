@@ -988,6 +988,11 @@ impl GameState {
         (self.game_time + 3) >> 4
     }
 
+    // = seg000:1ae0 get_ingame_time_of_day — the time-of-day phase, game_time & 0xf.
+    pub(crate) fn get_ingame_time_of_day(&self) -> u8 {
+        (self.game_time & 0xf) as u8
+    }
+
     // = seg000:18ba ui_teardown_room_view — tear down the in-game room view
     // (the counterpart of ui_toggle_room_view's enter-room path; called from
     // ui_show_globe_map_view and the message viewer at loc_0aede).

@@ -294,7 +294,7 @@ fn ripple_plot(
     ripple_edge_op(screen, fb1, fb_base, op, col, row);
 }
 
-// = segvga:02823 (draw) / segvga:02887 (erase) — the per-point pixel operation.
+// = segvga:2823 (draw) / segvga:2887 (erase) — the per-point pixel operation.
 // `row` is squashed toward the center line (water seen at an angle) and clipped
 // to [0x47, 0x95); `col` is clipped to [0, 320). The 4x4 block at the
 // resulting framebuffer offset is then drawn or erased.

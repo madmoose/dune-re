@@ -1428,11 +1428,6 @@ impl GameState {
         self.command_menu_buf.records = recs;
     }
 
-    // = seg000:1ae0 get_ingame_time_of_day — the time-of-day phase, game_time & 0xf.
-    pub(crate) fn get_ingame_time_of_day(&self) -> u8 {
-        (self.game_time & 0xf) as u8
-    }
-
     // = seg000:7f27 compute_location_available_equipment — recompute location
     // `li`'s per-type available equipment into the global buffer (DOS
     // seg001:46fe, location_available_equipment); the ornithopters slot is

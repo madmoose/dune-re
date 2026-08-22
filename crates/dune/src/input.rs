@@ -288,6 +288,71 @@ impl GameState {
         newly_pressed != 0
     }
 
+    // = seg000:ddb0 wait_interruptable. Clear the pending scancode, then run the
+    // frame-task driver for `ticks` PIT ticks, breaking early on ANY user input.
+    // Returns true only when that input was the ESC key — DOS's ZF return, which
+    // it preserves across the dde7 cleanup via pushf/popf and play_intro2's
+    // `seg000:025c jz loc_00292` reads to abort the whole act. A non-ESC key, a
+    // mouse/joystick button, or a full timeout returns false.
+    //
+    // Note: when _byte_227D_suppress_sky_240_255 == 0 DOS also writes the
+    // secondary sky-colour span here (= seg000:ddc0 loc_0d64e); that sky-palette
+    // step is not ported yet.
+    pub(crate) fn wait_interruptable(&mut self, ticks: u64) -> bool {
+        // = seg000:ddb4 [key_hit_scancode] = 0.
+        self.kb_clear_scancode();
+        // = seg000:ddca loop for `ticks` PIT ticks, polling any_key_pressed.
+        let deadline = self.game_ticks() + ticks;
+        while self.game_ticks() < deadline {
+            // = seg000:ddcf any_key_pressed; jb loc_0dde7 — break out on ANY
+            // input. The break's ZF distinguishes the cause: any_key_pressed
+            // routes ESC through kb_check_for_esc_key_hit (seg000:dd66) and
+            // reaches its `stc` return with ZF=1, while a non-ESC key/mouse/
+            // joystick leaves ZF=0. kb_esc_was_hit holds that same bit here.
+            if self.any_key_pressed() {
+                return self.input.lock().unwrap().kb_esc_was_hit != 0;
+            }
+            self.tick_one_frame();
+        }
+        // = seg000:dde5 or al,1 — the timeout path clears ZF (not ESC).
+        false
+    }
+
+    // = seg000:ddf0 wait_for_pcm_voice_interruptable. When a talking-head voice
+    // is playing, block until it finishes (DOS loops on
+    // check_pcm_voice_file_open, ignoring the tick count) so the head talks to
+    // the end. Otherwise fall back to the fixed timed wait — the frame-task
+    // list keeps ticking either way (e.g. stage 11's sky palette cycler).
+    //
+    // Returns true if a keypress interrupted the wait (= seg000:de01
+    // any_key_pressed; CF=1), which play_intro treats as a request to abort the
+    // whole intro (05fb jnb -> exit tail).
+    pub(crate) fn wait_for_pcm_voice_interruptable(&mut self, wait: u64) -> bool {
+        if self.talking_head.as_ref().is_some_and(|h| h.speaking) {
+            // = seg000:ddfc voice-playing loop.
+            while self.talking_head.as_ref().is_some_and(|h| h.speaking) {
+                if self.intro_input_pressed() {
+                    return true;
+                }
+                self.tick_one_frame();
+            }
+            false
+        } else if wait != 0 {
+            // The timed-wait branch, interruptable by a keypress (mirrors
+            // wait_frame_tasks_for_ticks but reports whether it was interrupted).
+            let deadline = self.game_ticks() + wait;
+            while self.game_ticks() < deadline {
+                if self.intro_input_pressed() {
+                    return true;
+                }
+                self.tick_one_frame();
+            }
+            false
+        } else {
+            false
+        }
+    }
+
     // = seg000:de4e kb_clear_scancode — drop the buffered scancode.
     pub fn kb_clear_scancode(&mut self) {
         self.input.lock().unwrap().key_hit_scancode = 0;

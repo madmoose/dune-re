@@ -54,7 +54,44 @@ impl GameState {
         }
     }
 
-    // ---- The vision-message queue helpers ---------------------------------
+    // = seg000:29ee queue_vision_message_without_location — di = 0.
+    pub(crate) fn queue_vision_message_without_location(&mut self, message_id: u16) {
+        self.queue_vision_message(message_id, 0);
+    }
+
+    // = seg000:29f0 queue_vision_message_with_location — queue a vision
+    // message (shown when Paul next sleeps): only once Paul has had his first
+    // vision (bitfield_Paul_events bit 0); duplicates (same id + location)
+    // are dropped; at 10 messages the oldest is dequeued first.
+    pub(crate) fn queue_vision_message(&mut self, message_id: u16, location: u16) {
+        // = seg000:29f0 test [bitfield_Paul_events],1; jz ret.
+        if self.bitfield_paul_events & 1 == 0 {
+            return;
+        }
+        // = seg000:2a01..2a0d the dedup scan.
+        if self
+            .vision_messages
+            .iter()
+            .any(|&(m, l)| m == message_id && l == location)
+        {
+            return;
+        }
+        // = seg000:2a14..2a22 at 10 messages dequeue the oldest.
+        if self.vision_messages.len() >= 10 {
+            self.dequeue_vision_message();
+        }
+        // = seg000:2a25..2a30 append + count.
+        self.vision_messages.push((message_id, location));
+    }
+
+    // = seg000:2a34 dequeue_vision_message — drop the oldest queued message.
+    // (DOS also clears the byte at seg001:118f when the queue drains; nothing
+    // reads it, so the port does not carry it.)
+    pub(crate) fn dequeue_vision_message(&mut self) {
+        if !self.vision_messages.is_empty() {
+            self.vision_messages.remove(0);
+        }
+    }
 
     // = seg000:2a51 purge_vision_messages_of_class — remove queued vision
     // messages whose sender class (id high byte) is `class`, compacting the

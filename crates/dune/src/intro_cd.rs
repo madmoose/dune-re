@@ -398,43 +398,6 @@ impl GameState {
         self.clear_global_y_offset();
     }
 
-    // = seg000:021c play_intro2 lives in intro2.rs (the WORMSUIT second-intro act).
-
-    // = seg000:ddf0 wait_for_pcm_voice_interruptable. When a talking-head voice
-    // is playing, block until it finishes (DOS loops on
-    // check_pcm_voice_file_open, ignoring the tick count) so the head talks to
-    // the end. Otherwise fall back to the fixed timed wait — the frame-task
-    // list keeps ticking either way (e.g. stage 11's sky palette cycler).
-    //
-    // Returns true if a keypress interrupted the wait (= seg000:de01
-    // any_key_pressed; CF=1), which play_intro treats as a request to abort the
-    // whole intro (05fb jnb -> exit tail).
-    fn wait_for_pcm_voice_interruptable(&mut self, wait: u64) -> bool {
-        if self.talking_head.as_ref().is_some_and(|h| h.speaking) {
-            // = seg000:ddfc voice-playing loop.
-            while self.talking_head.as_ref().is_some_and(|h| h.speaking) {
-                if self.intro_input_pressed() {
-                    return true;
-                }
-                self.tick_one_frame();
-            }
-            false
-        } else if wait != 0 {
-            // The timed-wait branch, interruptable by a keypress (mirrors
-            // wait_frame_tasks_for_ticks but reports whether it was interrupted).
-            let deadline = self.game_ticks() + wait;
-            while self.game_ticks() < deadline {
-                if self.intro_input_pressed() {
-                    return true;
-                }
-                self.tick_one_frame();
-            }
-            false
-        } else {
-            false
-        }
-    }
-
     // = seg000:061c load_VIRGIN_HNM. play_music_MORNING_HSQ + open VIRGIN.HNM
     // (resource 0x15) via hnm_load_first_frame. Matches DOS exactly: no
     // y-offset reset — VIRGIN decodes into framebuffer rows 24-199 via
@@ -1524,7 +1487,7 @@ impl GameState {
     // press. ESC additionally latches intro_skip_to_game (kb_esc_was_hit, set by
     // any_key_pressed's kb_check_for_esc_key_hit) so the whole sequence skips
     // into the game; a non-ESC key or the mouse only ends the current phase.
-    fn intro_input_pressed(&mut self) -> bool {
+    pub(crate) fn intro_input_pressed(&mut self) -> bool {
         if self.any_key_pressed() {
             // = seg000:de54 kb_check_for_esc_key_hit (run inside any_key_pressed):
             // ESC is scancode 1, which sets kb_esc_was_hit.

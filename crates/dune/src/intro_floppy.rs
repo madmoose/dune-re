@@ -20,10 +20,22 @@ use crate::{
 };
 
 impl GameState {
-    // = seg000:021c play_intro2. DOS skips the cutscenes when entered with ZF set
-    // (the intro aborted with ESC); the port passes `skip` (= start's skip_intro),
-    // and when set only the game-setup tail runs.
-    pub fn play_intro2(&mut self, skip: bool) {
+    // = seg000:020c
+    const SCENES: [fn(&mut GameState); 8] = [
+        GameState::intro_floppy_scene_stars,
+        GameState::intro_floppy_scene_globe,
+        GameState::intro_floppy_scene_sky,
+        GameState::intro_floppy_scene_paul,
+        GameState::intro_floppy_scene_baron,
+        GameState::intro_floppy_scene_globe,
+        GameState::intro_floppy_scene_paul,
+        GameState::intro_floppy_scene_back,
+    ];
+
+    // = seg000:021c DOS skips the cutscenes when entered with ZF set (the intro
+    // aborted with ESC); the port passes `skip` (= start's skip_intro), and
+    // when set only the game-setup tail runs.
+    pub fn intro_floppy_play(&mut self, skip: bool) {
         // = seg000:021c data_0289e = 0x8c (the music-ducking level
         // midi_duck_music_volume reads; no dedicated port field yet).
         self.settings_records[SETTINGS_RECORD_VOLUME_MUSIC_DURING_VOICES].value = 0x8c;
@@ -33,15 +45,15 @@ impl GameState {
 
         // = seg000:0226 jz loc_00292 — skip the cutscene act on the abort path.
         if !skip {
-            self.play_intro2_cutscenes();
+            self.intro_floppy_play_cutscenes();
         }
 
         // = seg000:0292 loc_00292 — game setup after intro2.
-        self.play_intro2_game_setup();
+        self.intro_floppy_post_setup();
     }
 
     // = seg000:0228..028f the WORMSUIT cutscene loop and the night->day sky fade.
-    fn play_intro2_cutscenes(&mut self) {
+    fn intro_floppy_play_cutscenes(&mut self) {
         // = seg000:0228 play_music_WORMSUIT_HSQ (midi_reset + play song 3).
         self.midi.play_music_wormsuit_hsq(&mut self.dat_file);
 
@@ -49,7 +61,7 @@ impl GameState {
         for scene in 1..9 {
             // = seg000:0232 bp = loc_002c1; seg000:0235 copy_pal_and_transition —
             // render scene `si` offscreen, then fade the visible screen to it.
-            self.intro2_render_and_transition_to_scene(scene);
+            self.intro_floppy_render_and_transition_to_scene(scene);
             // = seg000:0238 midi_duck_music_volume — drop the MIDI score to its
             // narration "duck" level for the voice line.
             self.midi_duck_music_volume();
@@ -88,15 +100,150 @@ impl GameState {
         self.remove_all_frame_tasks();
 
         // = seg000:0264..028f the night->day sky fade once all scenes have played.
-        self.intro2_night_to_day_sky_fade();
+        self.intro_floppy_night_to_day_sky_fade();
     }
 
-    // = seg000:c102 copy_pal_and_transition (bp = loc_002c1). Snapshot the visible
-    // palette as the fade-from target, render scene `scene` into fb1 offscreen, then
-    // fade OLD->black->NEW (transition type 0x3a). Same idiom as play_credits, but
-    // the bp callback dispatches on the scene index so the front-buffer redirect
-    // (= seg000:c097 gfx_call_bp_with_front_buffer_as_screen) is inlined here.
-    fn intro2_render_and_transition_to_scene(&mut self, scene: u16) {
+    // = seg000:0264..028f the night->day sky fade after the cutscenes.
+    // Reveal the XPLAIN9 night sky via a dotted-columns transition, hold it for
+    // 0xc8 ticks, then arm a sky-palette cross-fade from the night palette
+    // toward SKY/SKYDN sub-palette 0xc (the day palette) over 0x40 fade steps
+    // driven by the loc_03916 frame task while wait_interruptable(0x4b0) runs.
+    // Finally a second dotted-columns transition dissolves the lit sky away.
+    fn intro_floppy_night_to_day_sky_fade(&mut self) {
+        // = seg000:0264 bp = draw_xplain9_night_sky_frame; al = 0x10;
+        // seg000:0269 call transition. The transition's bp-callback idiom
+        // (gfx_call_bp_with_front_buffer_as_screen) redirects the front buffer
+        // to fb1 so the callback's draws land in fb1; vga_transition(0x10) then
+        // dissolves the visible screen and reveals fb1 in the new palette.
+        self.transition(0x10, 0, Self::intro_floppy_draw_xplain9);
+
+        // = seg000:026c wait_interruptable(0xc8) — hold the night scene.
+        self.wait_interruptable(0xc8);
+
+        // = seg000:0272 bl = 0x0c; seg000:0274 call loc_038f1 — arm the sky
+        // cross-fade: load SKY/SKYDN sub-palette 0xc into palette_fade_target
+        // (the day target), set sky_fade_countdown = 0x40, and install the
+        // loc_03916 frame task. The fade step in tick_sky_fade lerps the live
+        // (XPLAIN9 night) palette toward palette_fade_target one step per tick.
+        self.arm_sky_palette_fade(0x0c);
+        // = seg000:0277 sky_fade_active = 1 — armed by the caller, not loc_038f1.
+        self.sky_fade_active = true;
+
+        // = seg000:027c wait_interruptable(0x4b0) — drive the sky-fade task for
+        // 0x40 steps × 0x10 ticks = 0x400 ticks, plus a tail hold.
+        self.wait_interruptable(0x4b0);
+
+        // = seg000:0282 call loc_03950 — disarm: countdown = 0,
+        // remove_frame_task(loc_03916). seg000:0285 sky_fade_active = 0.
+        self.sky_fade_countdown = 0;
+        self.remove_frame_task(crate::TaskId::SkyFade);
+        self.sky_fade_active = false;
+
+        // = seg000:028a bp = gfx_clear_active_framebuffer (0xc0ad); al = 0x10;
+        // seg000:028f call transition. Dissolve the now-daylit sky to black for
+        // the post-intro2 game-setup tail.
+        self.transition(0x10, 0, Self::gfx_clear_active_framebuffer);
+    }
+
+    // = seg000:0292 loc_00292 — game setup after intro2.
+    fn intro_floppy_post_setup(&mut self) {
+        // = seg000:0292 es=screen_buffer_seg; vga_clear_screen — clear the visible
+        // screen buffer so no intro frame shows through before the room is drawn.
+        self.screen.pixels_mut().fill(0);
+        // = seg000:029a call pcm_stop_voc — drain any queued voice audio.
+        self.pcm_stop_voc();
+        // = seg000:029d _byte_227D_suppress_sky_240_255 = 0 (in-game uses the full
+        // sky palette span).
+        self.data_0227d = 0;
+        // = seg000:02a2 person_marker_base = 0 — sal_position_markers reads it
+        // as the room-person arrangement base on the next room draw.
+        self.person_marker_base = 0;
+        // = seg000:02a7 remove_all_frame_tasks — also resets sky_skydn_selector
+        // to 1 (= seg000:0920) so the in-game sky load goes through SKYDN.HSQ.
+        self.remove_all_frame_tasks();
+        // = seg000:02aa voice_subtitle_mode = 0.
+        self.voice_subtitle_mode = 0;
+        // = seg000:02af data_0dbe6 = 6 (zoom-step tick delay) — no port field yet.
+        // = seg000:02b4 inc locations[0].nbr_orni
+        self.locations[0].equipment.ornithopters += 1;
+        // = seg000:02b8 dx=0x200a, bx=0x180, jmp loc_008f0 (open_SAL_resource
+        // wrapper): record the scene block (seg000:08f8..090b) — location/room,
+        // slot, current_scene, and the current-location record for the slot.
+        // The nav-panel rebuild reads current_location_index before the first
+        // draw_location_room re-records it, so it must be set here. The actual
+        // SAL open happens later via draw_location_room.
+        self.location_and_room = 0x200a;
+        self.location_appearance = 0x180;
+        self.data_00008 = 0x20;
+        self.current_location_index = 0;
+        // Port-ism: reset fb_base_ofs to 0 for the in-game screen (the in-game HUD
+        // + room scene draw there). DOS relies on the intro2 scenes having left it
+        // at its segvga:01a3 static-init 0; the port stubs those scenes.
+        self.clear_global_y_offset();
+    }
+
+    // = seg000:02c1 loc_002c1 — the per-scene render callback. Clear the active
+    // framebuffer, draw the scene from the script_2 table (seg000:020c) selected
+    // by `scene`, then request the matching narration subtitle (string si + 0x117).
+    fn intro_floppy_render_scene(&mut self, scene: u16) {
+        // = seg000:02c2 gfx_clear_active_framebuffer.
+        self.gfx_clear_active_framebuffer();
+
+        // = seg000:02c7 mov bp, cs:[si*2 + 0x20a]; call bp — dispatch from script_2.
+        Self::SCENES[(scene - 1) as usize](self);
+
+        // = seg000:02cf add ax,0x117; seg000:02d2 font_select_tall_font.
+        self.font_select_tall_font();
+
+        // = seg000:02d5 loc_09901 — clears data_0479e (the "subtitle changed"
+        // flag the room-screen path uses to repaint the bubble). Port has no
+        // equivalent yet because the room-screen subtitle restore path isn't
+        // wired up; intro2 redraws the scene every frame anyway.
+
+        // self.loc_09901();
+
+        // = seg000:02d8
+        self.intro_floppy_draw_subtitle(scene + 0x117);
+
+        // = seg000:02db loc_09901 (same as above).
+        // self.loc_09901();
+    }
+
+    // = seg000:02de intro2_scene_stars — scene 1: the plain starfield (cx = 0).
+    fn intro_floppy_scene_stars(&mut self) {
+        // = seg000:02de xor cx,cx; jmp draw_stars.
+        self.intro_floppy_draw_stars(0);
+    }
+
+    // = seg000:02e3 intro2_scene_globe — scenes 2 & 6: a scrolled starfield
+    // (cx = 0x20) behind the rotating globe with atmosphere, plus a STARS.HSQ
+    // overlay (= the 0x3a transition's palette target).
+    fn intro_floppy_scene_globe(&mut self) {
+        // = seg000:02e6 mov cx,0x20; call draw_stars — the parallax-panned stars.
+        self.intro_floppy_draw_stars(0x20);
+        // = seg000:02e9 setup_globe_draw — load GLOBDATA, seed the globe
+        // rotation/tilt from the zoomed-globe centre statics, open FRESK.
+        self.setup_globe_draw();
+        // = seg000:02ec draw_globe_with_atmosphere — the FRESK atmosphere ring
+        // with the globe pixels rendered inside it.
+        self.draw_globe_with_atmosphere();
+        // = seg000:02ef ax=0x2c; open_spritesheet — re-applies STARS.HSQ
+        // (and its palette), so the 0x3a transition fades to it.
+        self.open_sprite_bank(sprite_bank::STARS);
+        // = seg000:02f5 jmp add_globe_rotation_frame_task — the interval-1
+        // task that keeps the globe creeping (one 1/398-revolution step per
+        // redraw pass) through the scene hold. The seg000:0251
+        // remove_all_frame_tasks after each scene's wait tears it down.
+        self.add_globe_rotation_frame_task();
+    }
+
+    // = seg000:c102 (bp = loc_002c1). Snapshot the visible palette as the
+    // fade-from target, render scene `scene` into fb1 offscreen, then fade
+    // OLD->black->NEW (transition type 0x3a). Same idiom as play_credits, but
+    // the bp callback dispatches on the scene index so the front-buffer
+    // redirect (= seg000:c097 gfx_call_bp_with_front_buffer_as_screen) is
+    // inlined here.
+    fn intro_floppy_render_and_transition_to_scene(&mut self, scene: u16) {
         // = seg000:c102 j_vga_save_palette_to_fade_target.
         self.palette_fade_target = self.palette.clone();
 
@@ -106,7 +253,7 @@ impl GameState {
         self.set_fb1_as_active_framebuffer();
         let saved_front = self.screen_buffer;
         self.screen_buffer = FbId::Fb1;
-        self.intro2_render_scene(scene);
+        self.intro_floppy_render_scene(scene);
         self.screen_buffer = saved_front;
 
         // = seg000:c106 al = 0x3a; fall into transition (seg000:c108) — reveal fb1.
@@ -116,24 +263,9 @@ impl GameState {
         self.update_screen_palette();
     }
 
-    // = seg000:020c script_2 — the per-scene draw-function table. DOS dispatches
-    // it as `mov bp, cs:[si*2 + 0x20a]; call bp` (seg000:02c7), so SCENE_DRAWS[si - 1]
-    // is the draw function for scene si (1..8). intro_paul_on_red_background and
-    // intro_26_baron appear via the j_* jump trampolines at seg000:02f8 / 02fb.
-    const SCENES: [fn(&mut GameState); 8] = [
-        GameState::intro2_scene_stars, // si=1: intro2_scene_stars -> draw_stars(0)
-        GameState::intro2_scene_globe, // si=2: intro2_scene_globe (draw_stars(0x20) + globe)
-        GameState::intro2_scene_sky,   // si=3: intro2_scene_sky (sky + INTDS sprite)
-        GameState::intro2_scene_paul,  // si=4: intro2_scene_paul -> intro_paul_on_red_background
-        GameState::intro2_scene_baron, // si=5: intro2_scene_baron -> intro_26_baron
-        GameState::intro2_scene_globe, // si=6: intro2_scene_globe (recap of si=2)
-        GameState::intro2_scene_paul,  // si=7: intro2_scene_paul (recap of si=4)
-        GameState::intro2_scene_back,  // si=8: intro2_scene_back -> loc_0076a
-    ];
-
     #[doc(hidden)]
     pub fn intro2_render_scene_for_test(&mut self, scene: u16) {
-        self.intro2_render_scene(scene);
+        self.intro_floppy_render_scene(scene);
     }
 
     #[doc(hidden)]
@@ -149,56 +281,18 @@ impl GameState {
         self.draw_sky();
     }
 
-    // = seg000:02c1 loc_002c1 — the per-scene render callback. Clear the active
-    // framebuffer, draw the scene from the script_2 table (seg000:020c) selected
-    // by `scene`, then request the matching narration subtitle (string si + 0x117).
-    fn intro2_render_scene(&mut self, scene: u16) {
-        // = seg000:02c2 gfx_clear_active_framebuffer.
-        self.gfx_clear_active_framebuffer();
-        // = seg000:02c7 mov bp, cs:[si*2 + 0x20a]; call bp — dispatch from script_2.
-        Self::SCENES[(scene - 1) as usize](self);
-        // = seg000:02cf add ax,0x117; seg000:02d2 font_select_tall_font.
-        self.font_select_tall_font();
-        // = seg000:02d5 loc_09901 — clears data_0479e (the "subtitle changed"
-        // flag the room-screen path uses to repaint the bubble). Port has no
-        // equivalent yet because the room-screen subtitle restore path isn't
-        // wired up; intro2 redraws the scene every frame anyway.
-
-        // self.loc_09901();
-
-        // = seg000:02d8 loc_088af — request the narration subtitle
-        self.draw_subtitle(scene + 0x117);
-
-        // = seg000:02db loc_09901 (same as above).
-        // self.loc_09901();
-    }
-
-    // = seg000:88af loc_088af — request voice subtitle `id` (= si + 0x117 here)
-    // and, when voice_subtitle_mode < 2, lay it out and render it. DOS routes
-    // through loc_088f1 (phrase-token expansion → 0xa840), then format_
-    // interpolated_string (0xa840 → 0xa6b0), then loc_08b11 → loc_08c8a /
-    // loc_08ccd / draw_speech_bubble / loc_08e16 / per-line render. The
-    // WORMSUIT narration strings have neither phrase tokens nor %s placeholders
-    // (no `data_046eb & 0x40` quick path either, since data_046eb == 0 here),
-    // so the port collapses the expand/format steps into the COMMAND.BIN
-    // lookup and runs the layout directly on the resulting bytes.
-    //
-    // Layout matches the suppress_sky_240_255 branch of loc_08ccd
-    // (seg000:8d43): font_draw_fg_color = 6, padding zeroed, layout rect from
-    // seg001:2275 = (x=0, y=153, w=320, h=47), data_04799 = 9 (vertical
-    // centre, horizontal centre per line, interword padding 6 px). DOS's
-    // draw_speech_bubble does not paint a bubble background on this path
-    // (seg000:8f8d: suppress_sky != 0 → ret at loc_08fd0), so we skip it too.
-    fn draw_subtitle(&mut self, id: u16) {
+    // = seg000:88af
+    fn intro_floppy_draw_subtitle(&mut self, id: u16) {
         // = seg000:88af or ax,ax / jz — bail on id 0.
         if id == 0 {
             return;
         }
-        // = seg000:88ca get_phrase_or_command_string_si — COMMAND.BIN lookup.
-        // The 0xff terminator is excluded from the returned slice.
+
+        // = seg000:88ca
         let text = self.get_phrase_or_command_string(id).to_vec();
-        // = seg000:88e1 lodsb / js loc_088f0 — bail when the first byte has
-        // its high bit set (a pure phrase-token entry with nothing to render).
+
+        // = seg000:88e1 lodsb / js loc_088f0 — bail if the first byte has its
+        // high bit set.
         if text.is_empty() || text[0] & 0x80 != 0 {
             return;
         }
@@ -210,7 +304,7 @@ impl GameState {
         self.font_state.color = 6;
 
         // = seg000:8e16 loc_08e16 — word-wrap into <= w pixel lines.
-        let lines = intro2_wrap_subtitle(&self.font, &text, 320);
+        let lines = intro_floppy_wrap_subtitle(&self.font, &text, 320);
         if lines.is_empty() {
             return;
         }
@@ -221,7 +315,7 @@ impl GameState {
         const RECT_Y: u16 = 153;
         const RECT_H: u16 = 47;
         const RECT_W: u16 = 320;
-        const LINE_H: u16 = 0x0a;
+        const LINE_H: u16 = 10;
         let total_h = lines.len() as u16 * LINE_H;
         let pad_y = if total_h <= RECT_H {
             (RECT_H - total_h) / 2
@@ -247,37 +341,9 @@ impl GameState {
         }
     }
 
-    // = seg000:02de intro2_scene_stars — scene 1: the plain starfield (cx = 0).
-    fn intro2_scene_stars(&mut self) {
-        // = seg000:02de xor cx,cx; jmp draw_stars.
-        self.draw_stars(0);
-    }
-
-    // = seg000:02e3 intro2_scene_globe — scenes 2 & 6: a scrolled starfield
-    // (cx = 0x20) behind the rotating globe with atmosphere, plus a STARS.HSQ
-    // overlay (= the 0x3a transition's palette target).
-    fn intro2_scene_globe(&mut self) {
-        // = seg000:02e6 mov cx,0x20; call draw_stars — the parallax-panned stars.
-        self.draw_stars(0x20);
-        // = seg000:02e9 setup_globe_draw — load GLOBDATA, seed the globe
-        // rotation/tilt from the zoomed-globe centre statics, open FRESK.
-        self.setup_globe_draw();
-        // = seg000:02ec draw_globe_with_atmosphere — the FRESK atmosphere ring
-        // with the globe pixels rendered inside it.
-        self.draw_globe_with_atmosphere();
-        // = seg000:02ef ax=0x2c; open_spritesheet — re-applies STARS.HSQ
-        // (and its palette), so the 0x3a transition fades to it.
-        self.open_sprite_bank(sprite_bank::STARS);
-        // = seg000:02f5 jmp add_globe_rotation_frame_task — the interval-1
-        // task that keeps the globe creeping (one 1/398-revolution step per
-        // redraw pass) through the scene hold. The seg000:0251
-        // remove_all_frame_tasks after each scene's wait tears it down.
-        self.add_globe_rotation_frame_task();
-    }
-
     // = seg000:094a intro2_scene_sky — scene 3: the desert sky behind a low
     // INTDS.HSQ sprite (the desert/wormsuit horizon strip).
-    fn intro2_scene_sky(&mut self) {
+    fn intro_floppy_scene_sky(&mut self) {
         // = seg000:094a draw_sky.
         self.draw_sky();
         // = seg000:094d ax=0x2d (INTDS); open_spritesheet — also applies
@@ -303,7 +369,7 @@ impl GameState {
     // head on the layered red BACK.HSQ panels. Same setup as stage_17_init in
     // intro.rs (= the same DOS routine); intro2 reaches it via the
     // intro2_scene_paul trampoline at seg000:02f8.
-    fn intro2_scene_paul(&mut self) {
+    fn intro_floppy_scene_paul(&mut self) {
         // = seg000:07ee ax=0x30 (BACK); open_spritesheet + palette.
         self.open_sprite_bank(sprite_bank::BACK);
         // = seg001:1526 icon list: full red backdrop + two inner vignette panels.
@@ -322,7 +388,7 @@ impl GameState {
 
     // = seg000:09ad intro_26_baron — scene 5: the Baron on the red BACK.HSQ
     // background. Same setup as stage_26_init in intro.rs.
-    fn intro2_scene_baron(&mut self) {
+    fn intro_floppy_scene_baron(&mut self) {
         // = seg000:09ad ax=0x30 (BACK); open_spritesheet + palette.
         self.open_sprite_bank(sprite_bank::BACK);
         // = seg001:153a icon list: mirrored side panels + a centre overlay.
@@ -339,7 +405,7 @@ impl GameState {
     // = seg000:076a loc_0076a — scene 8: full-screen INT15.HSQ image.
     // Reached via the intro2_scene_back -> loc_00739 -> loc_0c2f2 trampoline
     // (seg000:02fe).
-    fn intro2_scene_back(&mut self) {
+    fn intro_floppy_scene_back(&mut self) {
         // = seg000:076a gfx_clear_active_framebuffer (redundant after
         // intro2_render_scene's clear, but faithful to the DOS sequence).
         self.gfx_clear_active_framebuffer();
@@ -355,7 +421,7 @@ impl GameState {
     // three moon sprites (loc_0c343, centered). `count` (DOS cx) is 0 for the
     // plain starfield and 0x20 for the globe scenes' parallax pan. DOS register
     // convention here: dx = X, bx = Y (see seg000:d230).
-    fn draw_stars(&mut self, count: u16) {
+    fn intro_floppy_draw_stars(&mut self, count: u16) {
         const BG_SPRITE_WIDTH: i16 = 304;
         // = seg000:0a44 ax=0x2c; open_spritesheet — STARS.HSQ. This also
         // applies STARS.HSQ's embedded palette (= seg000:c172 apply_sprite_sheet_
@@ -418,70 +484,11 @@ impl GameState {
         // is revealed by the following 0x3a transition, so that copy is superseded.
     }
 
-    // = seg000:0264..028f the night->day sky fade after the cutscenes.
-    // Reveal the XPLAIN9 night sky via a dotted-columns transition, hold it for
-    // 0xc8 ticks, then arm a sky-palette cross-fade from the night palette
-    // toward SKY/SKYDN sub-palette 0xc (the day palette) over 0x40 fade steps
-    // driven by the loc_03916 frame task while wait_interruptable(0x4b0) runs.
-    // Finally a second dotted-columns transition dissolves the lit sky away.
-    fn intro2_night_to_day_sky_fade(&mut self) {
-        // = seg000:0264 bp = draw_xplain9_night_sky_frame; al = 0x10;
-        // seg000:0269 call transition. The transition's bp-callback idiom
-        // (gfx_call_bp_with_front_buffer_as_screen) redirects the front buffer
-        // to fb1 so the callback's draws land in fb1; vga_transition(0x10) then
-        // dissolves the visible screen and reveals fb1 in the new palette.
-        self.intro2_run_transition_with_callback(0x10, Self::draw_xplain9_night_sky_frame);
-
-        // = seg000:026c wait_interruptable(0xc8) — hold the night scene.
-        self.wait_interruptable(0xc8);
-
-        // = seg000:0272 bl = 0x0c; seg000:0274 call loc_038f1 — arm the sky
-        // cross-fade: load SKY/SKYDN sub-palette 0xc into palette_fade_target
-        // (the day target), set sky_fade_countdown = 0x40, and install the
-        // loc_03916 frame task. The fade step in tick_sky_fade lerps the live
-        // (XPLAIN9 night) palette toward palette_fade_target one step per tick.
-        self.arm_sky_palette_fade(0x0c);
-        // = seg000:0277 sky_fade_active = 1 — armed by the caller, not loc_038f1.
-        self.sky_fade_active = true;
-
-        // = seg000:027c wait_interruptable(0x4b0) — drive the sky-fade task for
-        // 0x40 steps × 0x10 ticks = 0x400 ticks, plus a tail hold.
-        self.wait_interruptable(0x4b0);
-
-        // = seg000:0282 call loc_03950 — disarm: countdown = 0,
-        // remove_frame_task(loc_03916). seg000:0285 sky_fade_active = 0.
-        self.sky_fade_countdown = 0;
-        self.remove_frame_task(crate::TaskId::SkyFade);
-        self.sky_fade_active = false;
-
-        // = seg000:028a bp = gfx_clear_active_framebuffer (0xc0ad); al = 0x10;
-        // seg000:028f call transition. Dissolve the now-daylit sky to black for
-        // the post-intro2 game-setup tail.
-        self.intro2_run_transition_with_callback(0x10, Self::gfx_clear_active_framebuffer);
-    }
-
-    // = seg000:c108 transition driver. Redirect the front buffer to fb1, invoke
-    // the bp callback (which renders the destination frame into fb1), then run
-    // vga_transition(`code`) to dissolve from the current screen to fb1. Mirrors
-    // the gfx_call_bp_with_front_buffer_as_screen idiom in
-    // intro2_render_and_transition_to_scene, but factored out so the night-sky
-    // fade can reuse it with a non-scene callback.
-    fn intro2_run_transition_with_callback(&mut self, code: u16, cb: fn(&mut GameState)) {
-        self.set_fb1_as_active_framebuffer();
-        let saved_front = self.screen_buffer;
-        self.screen_buffer = FbId::Fb1;
-        cb(self);
-        self.screen_buffer = saved_front;
-        gfx::vga_transition(self, code, 0);
-        self.gfx_copy_whole_framebuf_to_screen();
-        self.update_screen_palette();
-    }
-
-    // = seg000:0301 draw_xplain9_night_sky_frame (renamed from loc_00301) — the
-    // bp callback for the night-sky reveal transition. Clears the active
-    // framebuffer, then `mov al,0x1b; jmp loc_0c2f2` opens XPLAIN9.HSQ (the
-    // night-sky still, applying its palette) and blits sprite 0 at (0, 0).
-    fn draw_xplain9_night_sky_frame(&mut self) {
+    // = seg000:0301 — the bp callback for the night-sky reveal transition.
+    // Clears the active framebuffer, then `mov al,0x1b; jmp loc_0c2f2` opens
+    // XPLAIN9.HSQ (the night-sky still, applying its palette) and blits sprite
+    // 0 at (0, 0).
+    fn intro_floppy_draw_xplain9(&mut self) {
         // = seg000:0301 call gfx_clear_active_framebuffer.
         self.gfx_clear_active_framebuffer();
         // = seg000:0304 mov al,0x1b; seg000:0306 jmp loc_0c2f2 — open
@@ -645,73 +652,6 @@ impl GameState {
         //   that restore half here (cf. tick_pcm_voice_music_restore).
         self.midi_restore_music_volume();
     }
-
-    // = seg000:ddb0 wait_interruptable. Clear the pending scancode, then run the
-    // frame-task driver for `ticks` PIT ticks, breaking early on ANY user input.
-    // Returns true only when that input was the ESC key — DOS's ZF return, which
-    // it preserves across the dde7 cleanup via pushf/popf and play_intro2's
-    // `seg000:025c jz loc_00292` reads to abort the whole act. A non-ESC key, a
-    // mouse/joystick button, or a full timeout returns false.
-    //
-    // Note: when _byte_227D_suppress_sky_240_255 == 0 DOS also writes the
-    // secondary sky-colour span here (= seg000:ddc0 loc_0d64e); that sky-palette
-    // step is not ported yet.
-    pub(crate) fn wait_interruptable(&mut self, ticks: u64) -> bool {
-        // = seg000:ddb4 [key_hit_scancode] = 0.
-        self.kb_clear_scancode();
-        // = seg000:ddca loop for `ticks` PIT ticks, polling any_key_pressed.
-        let deadline = self.game_ticks() + ticks;
-        while self.game_ticks() < deadline {
-            // = seg000:ddcf any_key_pressed; jb loc_0dde7 — break out on ANY
-            // input. The break's ZF distinguishes the cause: any_key_pressed
-            // routes ESC through kb_check_for_esc_key_hit (seg000:dd66) and
-            // reaches its `stc` return with ZF=1, while a non-ESC key/mouse/
-            // joystick leaves ZF=0. kb_esc_was_hit holds that same bit here.
-            if self.any_key_pressed() {
-                return self.input.lock().unwrap().kb_esc_was_hit != 0;
-            }
-            self.tick_one_frame();
-        }
-        // = seg000:dde5 or al,1 — the timeout path clears ZF (not ESC).
-        false
-    }
-
-    // = seg000:0292 loc_00292 — game setup after intro2.
-    fn play_intro2_game_setup(&mut self) {
-        // = seg000:0292 es=screen_buffer_seg; vga_clear_screen — clear the visible
-        // screen buffer so no intro frame shows through before the room is drawn.
-        self.screen.pixels_mut().fill(0);
-        // = seg000:029a call pcm_stop_voc — drain any queued voice audio.
-        self.pcm_stop_voc();
-        // = seg000:029d _byte_227D_suppress_sky_240_255 = 0 (in-game uses the full
-        // sky palette span).
-        self.data_0227d = 0;
-        // = seg000:02a2 person_marker_base = 0 — sal_position_markers reads it
-        // as the room-person arrangement base on the next room draw.
-        self.person_marker_base = 0;
-        // = seg000:02a7 remove_all_frame_tasks — also resets sky_skydn_selector
-        // to 1 (= seg000:0920) so the in-game sky load goes through SKYDN.HSQ.
-        self.remove_all_frame_tasks();
-        // = seg000:02aa voice_subtitle_mode = 0.
-        self.voice_subtitle_mode = 0;
-        // = seg000:02af data_0dbe6 = 6 (zoom-step tick delay) — no port field yet.
-        // = seg000:02b4 inc locations[0].nbr_orni
-        self.locations[0].equipment.ornithopters += 1;
-        // = seg000:02b8 dx=0x200a, bx=0x180, jmp loc_008f0 (open_SAL_resource
-        // wrapper): record the scene block (seg000:08f8..090b) — location/room,
-        // slot, current_scene, and the current-location record for the slot.
-        // The nav-panel rebuild reads current_location_index before the first
-        // draw_location_room re-records it, so it must be set here. The actual
-        // SAL open happens later via draw_location_room.
-        self.location_and_room = 0x200a;
-        self.location_appearance = 0x180;
-        self.data_00008 = 0x20;
-        self.current_location_index = 0;
-        // Port-ism: reset fb_base_ofs to 0 for the in-game screen (the in-game HUD
-        // + room scene draw there). DOS relies on the intro2 scenes having left it
-        // at its segvga:01a3 static-init 0; the port stubs those scenes.
-        self.clear_global_y_offset();
-    }
 }
 
 // = seg000:8eda loc_08eda inner glyph-width loop. Sum tall-font glyph widths
@@ -737,7 +677,7 @@ fn measure_line(font: &crate::Font, line: &[u8]) -> u16 {
 // remaining budget it starts a new line (= seg000:8e57 jb loc_08e5d). The
 // port mirrors that idiom while emitting owned line bytes (with single spaces
 // between words) ready for measure_line / font_draw_glyph.
-fn intro2_wrap_subtitle(font: &crate::Font, text: &[u8], max_w: u16) -> Vec<Vec<u8>> {
+fn intro_floppy_wrap_subtitle(font: &crate::Font, text: &[u8], max_w: u16) -> Vec<Vec<u8>> {
     const INTERWORD_PAD: u16 = 6;
     let mut lines: Vec<Vec<u8>> = Vec::new();
     let mut cur: Vec<u8> = Vec::new();

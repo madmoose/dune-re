@@ -2800,12 +2800,12 @@ impl GameState {
         // with ESC (seg000:0309 jz loc_00331).
         self.play_credits(skip_intro || self.intro_skip_to_game);
 
-        // = seg000:0013 call play_intro2. It self-skips its WORMSUIT cutscenes
-        // when `skip_intro` is set (or ESC ended an earlier phase, seg000:0226 jz);
-        // its tail sets the game up at the palace throne room (location_and_room
-        // 0x200a / location_appearance 0x180) and resets fb_base_ofs to 0 for the
-        // in-game screen.
-        self.play_intro2(skip_intro || self.intro_skip_to_game);
+        // = seg000:0013 call play_intro_floppy. It self-skips its WORMSUIT
+        // cutscenes when `skip_intro` is set (or ESC ended an earlier phase,
+        // seg000:0226 jz); its tail sets the game up at the palace throne room
+        // (location_and_room 0x200a / location_appearance 0x180) and resets
+        // fb_base_ofs to 0 for the in-game screen.
+        self.intro_floppy_play(skip_intro || self.intro_skip_to_game);
 
         // = seg000:0016
         self.midi.midi_reset();

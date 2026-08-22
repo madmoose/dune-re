@@ -652,7 +652,7 @@ impl GameState {
     }
 }
 
-// = seg001:33a3 RESOURCE_LIST_HNM lookup by file name — resolve a clip name to
+// RESOURCE_LIST_HNM lookup by file name — resolve a clip name to
 // its HNM video id (the 1-based index into HNM_RESOURCES).
 pub(crate) fn hnm_id_by_name(name: &str) -> u16 {
     HNM_RESOURCES
