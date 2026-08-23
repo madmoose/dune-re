@@ -808,19 +808,8 @@ impl GameState {
         // = seg000:a710..a726 — the dir_id == 0x0e troop special (voc index
         //   0x2c/0x2d retargets the lip-sync id to 0x0c) is not modelled.
 
-        // = create_voc_file_name_from_bx suffix (a8e1..a8fa): 'I' in the early-game
-        // special-room context, else 'O'.
-        let suffix = if self.data_000ea <= 0
-            && (self.location_appearance & 0xff) == 0x80
-            && (self.location_and_room & 0xff) != 1
-        {
-            'I'
-        } else {
-            'O'
-        };
-
         // = loc_0a0c9 -> loc_09efd: load and play the voice .voc + lip-sync.
-        self.play_talking_head_voc(voc_index, suffix);
+        self.play_talking_head_voc(voc_index);
     }
 
     // = seg000:96f1 present_room_person_dialogue -> loc_09702 -> loc_0970b ->

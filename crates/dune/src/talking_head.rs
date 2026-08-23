@@ -907,15 +907,53 @@ impl GameState {
         self.draw_mouse_cursor_if_needed_then_present();
     }
 
+    // = seg000:a8bc create_voc_file_name_from_bx — build the voice .voc
+    // filename "P<L>\P<L><idx><X>[V].VOC" into voc_filename (seg001:37da).
+    pub(crate) fn create_voc_file_name(&mut self, voc_index: u16, dir_id: u8) {
+        // = seg000:a8c2..a8c9 — the directory and name letter.
+        let letter = b'A' + dir_id;
+        self.voc_filename[1] = letter;
+        self.voc_filename[4] = letter;
+        // = loc_0a8b1 — one uppercase hex digit from the low nibble.
+        let hex_digit = |v: u16| b"0123456789ABCDEF"[(v & 0xf) as usize];
+        // = seg000:a8cb..a8e0 — bits 8..11, 4..7, 0..3 of the voc index.
+        self.voc_filename[5] = hex_digit(voc_index >> 8);
+        self.voc_filename[6] = hex_digit(voc_index >> 4);
+        self.voc_filename[7] = hex_digit(voc_index);
+        // = seg000:a8e1..a8fa — the room-acoustics suffix.
+        self.voc_filename[8] = if self.data_000ea <= 0
+            && (self.location_appearance & 0xff) == 0x80
+            && (self.location_and_room & 0xff) != 1
+        {
+            b'I'
+        } else {
+            b'O'
+        };
+        // = seg000:a8fb..a909 — the variant letter.
+        let variant = ((voc_index >> 12) as u8) | self.data_047e0;
+        self.voc_filename[9] = if variant != 0 { b'A' + variant } else { b' ' };
+    }
+
+    // The built voc_filename as a DAT path. DOS hands the buffer to the file
+    // open as an ASCIIZ path and its filename parser drops blanks, so the
+    // blank variant byte vanishes ("PA\PA190I .VOC" opens PA\PA190I.VOC);
+    // mirror that here.
+    fn voc_filename_str(&self) -> String {
+        self.voc_filename
+            .iter()
+            .filter(|&&b| b != b' ')
+            .map(|&b| b as char)
+            .collect()
+    }
+
     // = seg000:9efd loc_09efd + load_voc_and_lipsync_data (a6e6) + loc_0a75c —
     // load the current head's voice .voc for `voc_index` and, on success, start
-    // PCM playback and install the lip-sync frame task. On failure (file absent /
-    // no lip-sync stream) the head just keeps idling (the carry-clear ret path).
+    // PCM playback and install the lip-sync frame task. On failure (file absent
+    // under both suffixes) the head just keeps idling (the carry-clear ret path).
     //
     // `voc_index` is the post-transform index (the caller applies the a6ee
-    // `ah &= 0xf3` strip + the data_0d7f4 per-person base subtraction). `suffix`
-    // is the create_voc_file_name_from_bx 'I'/'O' name letter (a8e1..a8fa).
-    pub(crate) fn play_talking_head_voc(&mut self, voc_index: u16, suffix: char) {
+    // `ah &= 0xf3` strip + the data_0d7f4 per-person base subtraction).
+    pub(crate) fn play_talking_head_voc(&mut self, voc_index: u16) {
         let Some(head) = self.talking_head.as_ref() else {
             return;
         };
@@ -925,31 +963,27 @@ impl GameState {
         // through unchanged (Leto id 0 → 'A' → the "PA" dir).
         let dir_id = head.lip_sync_resource_id.min(0x0e) as u8;
 
-        // = create_voc_file_name_from_bx (seg000:a8bc): "P<L>\P<L><idx><X>[V].VOC",
-        // where the directory/name letter L = 'A' + dir_id, <idx> is the 3-hex-
-        // digit voc index (bx bits 0..11), and <X> is the 'I'/'O' suffix. The
-        // trailing variant letter V (a8fd..a907) is (bx bits 12..15) OR
-        // data_047e0, rendered as 'A'+v when non-zero: a multi-part line's
-        // continuations step the high nibble (seg000:94e8 += 0x1000) giving
-        // O -> OB -> OC parts, and an altvoc line's random data_047e0 picks
-        // O/OB/OC/OD alternates.
-        let letter = (b'A' + dir_id) as char;
-        let variant = ((voc_index >> 12) as u8) | self.data_047e0;
-        let idx = voc_index & 0xfff;
-        let mut name = format!("P{letter}\\P{letter}{idx:03X}{suffix}");
-        if variant != 0 {
-            name.push((b'A' + variant) as char);
-        }
-        name.push_str(".VOC");
+        // = loc_0a727 call create_voc_file_name_from_bx — build the name into
+        // voc_filename.
+        self.create_voc_file_name(voc_index, dir_id);
 
         // = load_voc_and_lipsync_data -> voc_get_lipsync_data: read the .voc,
         // pull the type-5 comment-block mouth stream and the type-1 PCM block.
-        let Ok(data) = self.dat_file.read(&name) else {
-            return; // no voice file in this DAT — keep idling.
+        let data = match self.dat_file.read(&self.voc_filename_str()) {
+            Ok(data) => data,
+            Err(_) => {
+                // = seg000:a745..a752 — a failed open flips the room-acoustics suffix
+                // letter in the name buffer in place (xor [voc_filename+8], 6:
+                // 'I' <-> 'O') and retries once.
+                self.voc_filename[8] ^= 6;
+                let Ok(data) = self.dat_file.read(&self.voc_filename_str()) else {
+                    return; // no voice file in this DAT — keep idling.
+                };
+                data
+            }
         };
-        // A talking head needs the lip-sync mouth stream; without it keep idling
-        // rather than play a mute voice.
-        let Some(voc) = crate::voc::parse(&data).filter(|v| !v.lipsync.is_empty()) else {
+        // = voc_get_lipsync_data seg000:a85a
+        let Some(voc) = crate::voc::parse(&data) else {
             return;
         };
 
@@ -1087,13 +1121,15 @@ impl GameState {
                 return;
             };
             let played = played.saturating_sub(head.voc_baseline);
-            // = is_voc_pcm_playing / pcm_test_audio_done: no lip-sync stream, no
-            // audio, or the clip has drained → over.
-            if head.voc_lipsync.is_empty()
-                || head.voc_total_samples == 0
-                || played >= head.voc_total_samples
-            {
+            // = is_voc_pcm_playing / pcm_test_audio_done: no audio, or the
+            // clip has drained → over.
+            if head.voc_total_samples == 0 || played >= head.voc_total_samples {
                 (0usize, 0usize, 0u8, true)
+            } else if head.voc_lipsync.is_empty() {
+                // = seg000:a7c7 cmp pcm_voc_lipsync_data,0 — a voice without
+                // a mouth stream keeps playing: the task skips the mouth
+                // stepping and only pumps the stream until the audio drains.
+                (0usize, 0usize, 0u8, false)
             } else {
                 // = lip_sync_frame_task timing: the mouth advances one stream
                 // value per fixed SAMPLES_PER_LIP_FRAME of audio, slaved to the

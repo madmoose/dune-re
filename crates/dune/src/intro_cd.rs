@@ -794,10 +794,8 @@ impl GameState {
     // and run loc_09efd: try to load the character's voice .voc and, on
     // success, start PCM playback and install the lip-sync frame task.
     pub fn intro_talking_head_play(&mut self) {
-        // = seg000:0798 current_subtitle_id = 0x190. load_voc_and_lipsync_data's
-        // index transform leaves it 0x190 (base table 0), and the special-room
-        // suffix condition gives 'I' for the intro's scene.
-        self.play_talking_head_voc(0x190, 'I');
+        // = seg000:0798 current_subtitle_id = 0x190.
+        self.play_talking_head_voc(0x190);
     }
 
     // = seg000:0771 intro_lady_jessica_2. Draw the empty palace room

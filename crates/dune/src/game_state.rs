@@ -1288,6 +1288,13 @@ pub struct GameState {
     // Bridge chunks still to decode (= the DOS cx = 4 splice, seg000:cbcc).
     pub(crate) hnm_lop_remaining: u8,
 
+    // = seg001:37da voc_filename — the 14-byte voice filename buffer,
+    // template "PF\PF001I .VOC". create_voc_file_name (seg000:a8bc) writes
+    // bytes 1/4 (speaker letter), 5..7 (hex voc index), 8 (I/O acoustics
+    // suffix, the a74a retry-flip target) and 9 (variant letter or blank);
+    // bytes 0, 2..3 and 10..13 stay fixed.
+    pub(crate) voc_filename: [u8; 14],
+
     // = seg001:37fa music_cd_playlist — the working CD-playlist order: 9 song
     // numbers + the 0xff terminator. STANDARD ORDER recopies music_cd_standard_
     // order over it; SHUFFLE permutes it in place (music_cd_playlist_shuffle).
@@ -2548,6 +2555,7 @@ impl GameState {
             hnm_lop_video_id: 0,
             hnm_lop_cursor: 0,
             hnm_lop_remaining: 0,
+            voc_filename: *b"PF\\PF001I .VOC",
             music_cd_playlist: crate::music::MUSIC_CD_STANDARD_ORDER,
             music_cd_playlist_cursor: 0,
             music_playlist_flags: 0,
