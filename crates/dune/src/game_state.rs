@@ -1464,7 +1464,9 @@ pub struct GameState {
     pub(crate) map_info_popup_troop: Option<usize>,
 
     // = seg001:46fc data_046fc — the map screen's hover state, maintained by
-    // map_mouse_hover_tracker (seg000:4586) and consumed by the LMB
+    // map_mouse_hover_tracker (seg000:4586) — and, with the spice-density
+    // overlay open, by map_main_mouse_idle (seg000:5c4d) over the overlay's
+    // own markers — and consumed by the LMB
     // destination click: 0 = pointer outside the map window; a location ptr
     // (see locations::location_ptr) = hovering that location's marker;
     // 0xfff0+n = aligned on desert compass ray n (0 N .. 7 NW) from the
@@ -1498,10 +1500,25 @@ pub struct GameState {
     // point of the effect-6 XOR-outline scale-in to the panel rect.
     pub(crate) map_overlay_anim_src: Option<(i16, i16)>,
 
-    // = seg001:4722 data_04722 — which layer the overlay renders: 0 = the
-    // spice-density colours, nonzero = the alternate (ecology) table at
-    // seg000:583f, which no ported caller selects.
+    // = seg001:4722 map_overlay_mode — which layer the overlay renders: 0 =
+    // the spice-density colours (ramp legend), 0xff = the troop-occupation
+    // class-mix colours (seg000:583f). Toggled by a click on the overlay
+    // footer (seg000:5970); reset to 0 by the SEE SPICE DENSITY verb and the
+    // contact-scene entry.
     pub(crate) map_overlay_mode: u8,
+
+    // = seg001:4724 map_overlay_hover_tick — the density-ramp tick the
+    // overlay hover readout has XOR-drawn on the legend: the hovered region
+    // shade - 0x50 (0..15), or 0xff for none. Reset to 0xff whenever the
+    // footer strip repaints (seg000:5630).
+    pub(crate) map_overlay_hover_tick: u8,
+
+    // = seg001:4725 map_overlay_footer_label_color — change detector for the
+    // overlay footer label colour: the fg byte last drawn (0xfe normal, 0xf5
+    // inverted while the cursor is over the footer). Seeded by
+    // map_overlay_draw_legend (seg000:5647), swapped by the seg000:57b5
+    // redraw.
+    pub(crate) map_overlay_footer_label_color: u8,
 
     // = seg001:4726 data_04726 — the map verbs' manual heading-adjust
     // accumulator, stepped in 0x20 (one compass point) units by TOWARDS
@@ -2597,6 +2614,8 @@ impl GameState {
             prospector_pick_count: 0,
             map_overlay_anim_src: None,
             map_overlay_mode: 0,
+            map_overlay_hover_tick: 0,
+            map_overlay_footer_label_color: 0,
             data_04726: 0,
             travel_active: 0,
             travel_minimap_state: 0,

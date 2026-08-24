@@ -138,6 +138,50 @@ pub(crate) static MOVE_TROOP_MOUSE_HANDLERS: MouseHandlers = MouseHandlers {
     rmb_drag: GameState::dune_map_mouse_drag_noop,
 };
 
+// = seg000:586e troop_occupation_class_color — pick the troop-occupation
+// overlay colour from the class counts, via the data_0588b jump table on the
+// presence bits (spice = 1, military = 2, ecology = 4); the mixed cases
+// shade by which class dominates.
+fn troop_occupation_class_color(spice: u8, military: u8, ecology: u8) -> u8 {
+    // = seg000:586e..5884 the presence bits.
+    let bits = (spice != 0) as u8 | (((military != 0) as u8) << 1) | (((ecology != 0) as u8) << 2);
+    match bits {
+        // = seg000:589b..58b3 the pure cases.
+        0 => 0x00,
+        1 => 0x55,
+        2 => 0xaa,
+        4 => 0xff,
+        // = seg000:58a4..58b0 spice + military (the `not bh` = 0x65).
+        3 => match spice.cmp(&military) {
+            std::cmp::Ordering::Equal => 0x66,
+            std::cmp::Ordering::Less => 0x9a,
+            std::cmp::Ordering::Greater => 0x65,
+        },
+        // = seg000:58b4..58c0 spice + ecology.
+        5 => match spice.cmp(&ecology) {
+            std::cmp::Ordering::Equal => 0x77,
+            std::cmp::Ordering::Less => 0xdf,
+            std::cmp::Ordering::Greater => 0x75,
+        },
+        // = seg000:58c1..58cd military + ecology.
+        6 => match military.cmp(&ecology) {
+            std::cmp::Ordering::Equal => 0xbb,
+            std::cmp::Ordering::Less => 0xef,
+            std::cmp::Ordering::Greater => 0xba,
+        },
+        // = seg000:58ce..58e3 all three.
+        _ => {
+            if spice < military {
+                if military < ecology { 0xde } else { 0x9b }
+            } else if spice < ecology {
+                0x7b
+            } else {
+                0x67
+            }
+        }
+    }
+}
+
 impl GameState {
     // = seg000:5a1a ui_show_globe_map_view — leave the room view and bring up
     // the full DUNE MAP view (the else-branch of ui_toggle_room_view).
@@ -265,8 +309,8 @@ impl GameState {
         _text_id: u16,
         _index: usize,
     ) {
-        // = seg000:53f1 data_04722 = 0 — the spice-density mode (not the
-        //   ecology one).
+        // = seg000:53f1 map_overlay_mode = 0 — the spice-density layer
+        //   (not the troop-occupation one).
         self.map_overlay_mode = 0;
         // = seg000:53f6..53fd test data_046eb,40h; jnz loc_058fa.
         if self.data_046eb & 0x40 != 0 {
@@ -357,7 +401,8 @@ impl GameState {
         //   ONMAP for its ramp bars.
         self.open_icones_spritesheet();
         // = seg000:54a4..54aa the location markers and the overlay's legend
-        //   strip and content (loc_05605/loc_0563e).
+        //   strip and content (map_overlay_draw_legend_strip /
+        //   map_overlay_draw_legend).
         self.map_build_and_draw_location_markers();
         self.map_overlay_draw_legend_strip();
         self.map_overlay_draw_legend();
@@ -400,11 +445,16 @@ impl GameState {
             let panel = self.map_overlay_panel_rect;
             gfx::xor_rect_outline_anim(self, src, panel, false);
         }
-        // = seg000:554e..5558 the primary-slot case draws the overlay's own
-        //   decorations (loc_062f2 + loc_0813e: the spice-field legend and
-        //   the equipment row — unported); the secondary-slot case draws the
-        //   player-position sprite.
+        // = seg000:554e..5558 the secondary-slot case (the overlay beside
+        //   the contact popup — the ZF the 5537 compare pushed) draws the
+        //   contact decorations: the contacted troop's position cross
+        //   (map_overlay_draw_contact_troop_marker) and the move-route
+        //   dotted line (map_overlay_draw_move_route); the primary
+        //   (standalone) case draws the player-position sprite.
         if secondary {
+            self.map_overlay_draw_contact_troop_marker();
+            self.map_overlay_draw_move_route();
+        } else {
             self.map_draw_player_position_sprite();
         }
         // = seg000:555b/555e present the panel rect.
@@ -420,12 +470,10 @@ impl GameState {
         self.set_mouse_nav_rect(panel);
     }
 
-    // = seg000:5605 loc_05605 — the legend strip background: fill the panel
-    // band below the map window ((px+6, py+0x62)-(x1-6, y1-2)) with 0xf5 and
-    // select the small font for the label. DOS also resets the legend hover
-    // cache here (data_04724 = 0xff); the hover highlighter it serves
-    // (seg000:5744..57e0, the density-tick XOR box and label recolour under
-    // the mouse) is not ported.
+    // = seg000:5605 map_overlay_draw_legend_strip — the legend strip
+    // background: fill the panel band below the map window
+    // ((px+6, py+0x62)-(x1-6, y1-2)) with 0xf5 and select the small font for
+    // the label.
     fn map_overlay_draw_legend_strip(&mut self) {
         let (px, py) = self.map_overlay_panel_pos;
         let r = self.map_overlay_panel_rect;
@@ -441,19 +489,34 @@ impl GameState {
             (r.y1 - 2) as u16,
             0xf5,
         );
+        // = seg000:5630 the legend hover tick cache resets with the strip.
+        self.map_overlay_hover_tick = 0xff;
         // = seg000:5635 call font_select_small_font.
         self.font_select_small_font();
     }
 
-    // = seg000:563e loc_0563e — the legend content on the strip: the
-    // "  SPICE DENSITY  " label (phrase 0x65, colour word 0xf5fe) at
-    // (px+6, py+0x62), the '-' glyph at x = px+6+0x53 with the '+' 0x41
-    // past it, then the two ONMAP density-ramp bar sprites 0x80/0x81 at
-    // (px+0x5f, py+0x63) and 0x3c further right. The data_04722 != 0
-    // ecology variant ("  TROOP OCCUPATION  ", seg000:568c) is not
-    // reachable from the ported callers. TODO.
+    // = seg000:563e map_overlay_draw_legend — the legend content on the
+    // strip. Spice mode: the "  SPICE DENSITY  " label (phrase 0x65, colour
+    // word 0xf5fe) at (px+6, py+0x62), the '-' glyph at x = px+6+0x53 with
+    // the '+' 0x41 past it, then the two ONMAP density-ramp bar sprites
+    // 0x80/0x81 at (px+0x5f, py+0x63) and 0x3c further right. The
+    // map_overlay_mode != 0 layer titles the strip "  TROOP OCCUPATION  "
+    // (phrase 0x68, seg000:568c) with no ramp.
     fn map_overlay_draw_legend(&mut self) {
         let (px, py) = self.map_overlay_panel_pos;
+        // = seg000:5644/5647 the label colour word 0xf5fe; its fg byte seeds
+        //   the footer hover cache.
+        self.map_overlay_footer_label_color = 0xfe;
+        // = seg000:564b..5650 the troop-occupation layer's footer (568c).
+        if self.map_overlay_mode != 0 {
+            self.font_draw_phrase_or_command_string_with_color_at_pos(
+                0x68,
+                0xf5fe,
+                (px + 6) as u16,
+                (py + 0x62) as u16,
+            );
+            return;
+        }
         // = seg000:5652..5656 the label.
         self.font_draw_phrase_or_command_string_with_color_at_pos(
             0x65,
@@ -489,16 +552,35 @@ impl GameState {
 
     // = seg000:57e5 build_spice_density_xlat — build the overlay's 256-entry
     // palette-remap table: every MAP2 spice-field id maps to a colour,
-    // defaulting to the backdrop 0x70. With data_04722 == 0 (the spice-
-    // density mode) each visible location paints its own field: status bit 6
-    // clear takes the flat marker colour (0x75, or 0x78 in monotone mode),
-    // bit 6 set the density-ramp shade 0x50 + (spice_density >> 4).
+    // defaulting to the backdrop 0x70. With map_overlay_mode == 0 (the
+    // spice-density layer) each visible location paints its own field: status
+    // bit 6 clear takes the flat marker colour (0x75, or 0x78 in monotone
+    // mode), bit 6 set the density-ramp shade 0x50 + (spice_density >> 4).
+    // The troop-occupation layer paints each field with the class-mix colour
+    // of the troops at (or traveling to) the location instead.
     fn build_spice_density_xlat(&mut self) -> [u8; 256] {
         // = seg000:57f1..57f8 fill with 0x70.
         let mut xlat = [0x70u8; 256];
-        // = seg000:57fa cmp data_04722,0; jnz loc_0583f — the other mode (the
-        //   ecology/vegetation view) is not reachable from the ported
-        //   callers. TODO.
+        // = seg000:57fa cmp map_overlay_mode,0; jnz loc_0583f — the
+        //   troop-occupation layer.
+        if self.map_overlay_mode != 0 {
+            // = seg000:583f..5867 the location walk.
+            for li in 0..self.locations.len() {
+                // = seg000:5842..5847 test status,80h — a hidden location
+                //   paints nothing.
+                if self.locations[li].status & 0x80 != 0 {
+                    continue;
+                }
+                // = seg000:5849..5855 count the troops by occupation class
+                //   and pick the colour (troop_occupation_class_color).
+                let (spice, military, ecology) = self.count_troops_by_occupation_class(li);
+                let colour = troop_occupation_class_color(spice, military, ecology);
+                // = seg000:5858..585f the location's MAP2 field id indexes
+                //   the table.
+                xlat[self.locations[li].spice_field_id as usize] = colour;
+            }
+            return xlat;
+        }
         for loc in self.locations.iter() {
             // = seg000:5808..580d test status,80h — a hidden location paints
             //   nothing.
@@ -525,6 +607,327 @@ impl GameState {
             xlat[field] = colour;
         }
         xlat
+    }
+
+    // = seg000:6639 call_callback_on_all_troops_in_or_traveling_to_location_
+    // 06639 with the seg000:5728 callback_count_troop_occupation_class —
+    // count the troops at (or traveling to) the location by occupation
+    // class: bits 2-3 of the occupation low nibble pick spice (0), military
+    // (1) or ecology (2/3); class 2 (waiting orders) and an unrallied troop
+    // (occupation >= 0x80, the CF the walkers hand the callback) are skipped.
+    fn count_troops_by_occupation_class(&mut self, li: usize) -> (u8, u8, u8) {
+        // = seg000:5728 the callback's tally, shared by both walk phases.
+        fn tally(counts: &mut (u8, u8, u8), occupation: u8) {
+            // = seg000:5728 jnb — only a rallied troop (CF = occ < 0x80).
+            if occupation >= 0x80 {
+                return;
+            }
+            // = seg000:572a..5731 class 2 (waiting orders) does not count.
+            let class = occupation & 0x0f;
+            if class == 2 {
+                return;
+            }
+            // = seg000:5733..5743 bits 2-3: 0 spice, 1 military, else
+            //   ecology.
+            match class >> 2 {
+                0 => counts.0 = counts.0.wrapping_add(1),
+                1 => counts.1 = counts.1.wrapping_add(1),
+                _ => counts.2 = counts.2.wrapping_add(1),
+            }
+        }
+        let mut counts = (0u8, 0u8, 0u8);
+        // = seg000:6639 the in-location chain first (call_callback_on_all_
+        //   troops_in_location, seg000:6603).
+        self.for_each_troop_in_location(li, |s, ti| {
+            tally(&mut counts, s.troops[ti].occupation);
+        });
+        // = seg000:663d..666c then every traveling troop (occupation bit 6)
+        //   bound for the location: the destination is offset_of_location,
+        //   or the home ptr in troop_occupation_dependent_C (harvest_rate)
+        //   when (occupation & 3) == 3 — DOS walks troops[0..67].
+        let dest = crate::locations::location_ptr_from_index(li);
+        for ti in 0..67 {
+            let t = &self.troops[ti];
+            if t.occupation & 0x40 == 0 {
+                continue;
+            }
+            let d = if t.occupation & 3 == 3 {
+                t.harvest_rate
+            } else {
+                t.offset_of_location
+            };
+            if d == dest {
+                tally(&mut counts, t.occupation);
+            }
+        }
+        counts
+    }
+
+    // = seg000:5692 map_main_draw_hover_label — draw the full-map hover
+    // label for a hovered location marker (0 = none): clear the label strip
+    // (map_overlay_draw_legend_strip), then the location type + name in
+    // colour 0xfe on 0xf5; for locations past the palaces (and not
+    // appearance 0x21) also the stationed-troop summary — one ONMAP class
+    // icon + count per occupation class, or the "no troops" phrase (0x66).
+    // No marker redraws the plain legend (map_overlay_draw_legend).
+    fn map_main_draw_hover_label(&mut self, marker_ptr: u16) {
+        // = seg000:5692/5693 the strip background under either content.
+        self.map_overlay_draw_legend_strip();
+        // = seg000:5697/5699 jz map_overlay_draw_legend.
+        if marker_ptr == 0 {
+            self.map_overlay_draw_legend();
+            return;
+        }
+        let li = location_index_from_ptr(marker_ptr);
+        let (px, py) = self.map_overlay_panel_pos;
+        // = seg000:569b..56ad the location type then its name at the pen the
+        //   type draw left, colour word 0xf5fe.
+        self.draw_string_location_type(li, 0xf5fe, (px + 6) as u16, (py + 0x62) as u16);
+        let (nx, ny) = self.font_get_draw_position();
+        self.draw_location_name(li, 0xf5fe, nx, ny);
+        // = seg000:56b0..56ba the troop summary only past the two palaces
+        //   (locations[2]) and not for the appearance-0x21 village.
+        if li < 2 || self.locations[li].appearance == 0x21 {
+            return;
+        }
+        // = seg000:56bc..56c3 the class counts.
+        let (spice, military, ecology) = self.count_troops_by_occupation_class(li);
+        // = seg000:56c6/56ca the counts column starts at panel x + 0x71.
+        let mut x = px + 0x71;
+        // = seg000:56cd..56d1 no troops at all: the phrase instead.
+        if spice == 0 && military == 0 && ecology == 0 {
+            // = seg000:571a..5725 "no troops" (phrase 0x66) in 0xfb on 0xf5
+            //   at the column, on the row the name draw's pen is on.
+            let (_, pen_y) = self.font_get_draw_position();
+            self.font_draw_phrase_or_command_string_with_color_at_pos(
+                0x66, 0xf5fb, x as u16, pen_y,
+            );
+            return;
+        }
+        // = seg000:56d3 the class icons live in ONMAP; 56d6 the counts draw
+        //   3 shades darker than the label.
+        self.open_onmap_spritesheet();
+        let fg = (self.font_state.color as u8).wrapping_sub(3);
+        self.font_state.color = (self.font_state.color & 0xff00) | fg as u16;
+        // = seg000:56db..56ea one entry per class: spice (icon 0x82),
+        //   military (0x83), ecology (0x84).
+        for (class, count) in [(0u16, spice), (1, military), (2, ecology)] {
+            x = self.hover_label_draw_troop_count(class, count, x);
+        }
+    }
+
+    // = seg000:56ed hover_label_draw_troop_count — one occupation-class
+    // count of the hover label: the ONMAP class icon 0x82+class at
+    // (x, py+0x62), a ':' glyph and the count digit 6 px past it. A zero
+    // count draws nothing and does not advance; otherwise the next class
+    // column is 0x12 further.
+    fn hover_label_draw_troop_count(&mut self, class: u16, count: u8, x: i16) -> i16 {
+        // = seg000:56ed or bl,bl; jz.
+        if count == 0 {
+            return x;
+        }
+        let (_, py) = self.map_overlay_panel_pos;
+        // = seg000:56f4..56f8 the icon row: panel y + 0x62.
+        let y = py + 0x62;
+        // = seg000:56fb/56fe the class icon.
+        let full = rect(0, 0, 320, 200);
+        self.with_active_bank_sheet(|s, sheet| {
+            s.draw_sprite_from_sheet_clipped(sheet, 0x82 + class, x, y, full);
+        });
+        // = seg000:5701..5710 ':' then '0' + count at x + 6.
+        self.font_set_draw_position((x + 6) as u16, y as u16);
+        self.font_draw_glyph(b':');
+        self.font_draw_glyph(0x30 + count);
+        // = seg000:5716 add dx,12h.
+        x + 0x12
+    }
+
+    // = seg000:5746 map_overlay_hover_readout — the overlay's idle readout
+    // while no marker is hovered. Outside the panel the footer label is
+    // normal; over the panel's bottom 10 rows it inverts (the
+    // click-to-toggle hint); on the map window it is normal and, in spice
+    // mode, the density tick tracks the region under the cursor: the screen
+    // pixel's ramp shade 0x50..0x5f maps to tick 0..15 (anything else parks
+    // the tick), XOR-moved on the legend ramp on change.
+    fn map_overlay_hover_readout(&mut self) {
+        let x = self.mouse_pos_x as i16;
+        let y = self.mouse_pos_y as i16;
+        // = seg000:5746..574c outside the panel rect: label normal.
+        if !self.map_overlay_panel_rect.in_rect(x, y) {
+            self.map_overlay_set_footer_label_color(0xf5fe);
+            return;
+        }
+        // = seg000:574e..5756 the bottom 10 rows: label inverted (57ad).
+        if y >= self.map_overlay_panel_rect.y1 - 10 {
+            self.map_overlay_set_footer_label_color(0xfef5);
+            return;
+        }
+        // = seg000:5758 the label back to normal on the map window.
+        self.map_overlay_set_footer_label_color(0xf5fe);
+        // = seg000:575b/5760 the density tick only exists in spice mode.
+        if self.map_overlay_mode != 0 {
+            return;
+        }
+        // = seg000:5762..5766 the pixel under the cursor, from the front
+        //   buffer (the presented overlay).
+        let yoff = self.y_offset as i16;
+        let pixel = self
+            .fb_mut(self.screen_buffer)
+            .get(x as u16, (y + yoff) as u16);
+        // = seg000:576a..5772 ramp shades 0x50..0x5f map to tick 0..15; any
+        //   other colour parks the tick (0xff).
+        let tick = pixel.wrapping_sub(0x50);
+        let tick = if tick < 0x10 { tick } else { 0xff };
+        // = seg000:5772..577a swap with the cache; no change, no redraw.
+        let old = std::mem::replace(&mut self.map_overlay_hover_tick, tick);
+        if old == tick {
+            return;
+        }
+        // = seg000:577c..5787 XOR the old tick off and the new one on,
+        //   around a cursor bracket.
+        self.call_restore_cursor();
+        self.map_overlay_xor_density_tick(old);
+        self.map_overlay_xor_density_tick(tick);
+        self.draw_mouse();
+        // DOS XORs the visible A000 buffer; the port publishes the touched
+        // screen.
+        if !self.front_buffer_is_fb1() {
+            self.send_frame_to_display();
+        }
+    }
+
+    // = seg000:578b map_overlay_xor_density_tick — XOR a 5x7 tick outline on
+    // the visible screen at panel origin + (0x5e + 4*tick, 0x62): the
+    // position of density shade `tick` (0..15) on the legend ramp. A
+    // negative tick (0xff = none) draws nothing; the same call erases.
+    fn map_overlay_xor_density_tick(&mut self, tick: u8) {
+        // = seg000:578b or al,al; js.
+        if tick & 0x80 != 0 {
+            return;
+        }
+        let (px, py) = self.map_overlay_panel_pos;
+        // = seg000:5790..57a7 the outline: si = 5 wide, cx = 7 tall, through
+        //   the far entry (its dec si makes 5 the visible width).
+        gfx::vga_xor_rect_outline(self, px + 0x5e + 4 * tick as i16, py + 0x62, 5, 7);
+    }
+
+    // = seg000:57b2 map_overlay_footer_label_normal / seg000:57ad the
+    // inverted entry / seg000:57b5 the shared redraw — recolour the footer
+    // label. The colour word's fg byte swaps with the cache; on a change the
+    // label phrase (0x65 spice / 0x68 occupation) redraws on the visible
+    // screen at (px+6, py+0x62) around a cursor restore, and fb1 is the
+    // active framebuffer again after.
+    fn map_overlay_set_footer_label_color(&mut self, color: u16) {
+        // = seg000:57b5..57bd the fg byte is the change detector.
+        let fg = color as u8;
+        let old = std::mem::replace(&mut self.map_overlay_footer_label_color, fg);
+        if old == fg {
+            return;
+        }
+        // = seg000:57c1 the redraw lands on the front buffer.
+        self.set_screen_as_active_framebuffer();
+        let (px, py) = self.map_overlay_panel_pos;
+        // = seg000:57cd..57d7 the phrase by layer.
+        let phrase = if self.map_overlay_mode == 0 {
+            0x65
+        } else {
+            0x68
+        };
+        // = seg000:57da/57dd the cursor lifts just before the draw; the next
+        //   redraw_mouse pass re-shows it (DOS leaves the bracket open too).
+        self.call_restore_cursor();
+        self.font_draw_phrase_or_command_string_with_color_at_pos(
+            phrase,
+            color,
+            (px + 6) as u16,
+            (py + 0x62) as u16,
+        );
+        // = seg000:57e2 jmp set_fb1_as_active_framebuffer.
+        self.set_fb1_as_active_framebuffer();
+        // DOS draws straight to the visible A000 buffer; the port publishes
+        // the touched screen.
+        if !self.front_buffer_is_fb1() {
+            self.send_frame_to_display();
+        }
+    }
+
+    // = seg000:82a0 loc_082a0 — the ZF check shared by the overlay's close
+    // corner and the map centre button: set iff the active menu is
+    // menu_multiple_cancel or menu_map_move_prospectors AND data_046eb bit 6
+    // (the overlay sub-mode) is set.
+    pub(crate) fn overlay_pick_menu_active(&self) -> bool {
+        let menu = self.get_active_menu_ref();
+        (menu == MenuRef::MenuCancel || menu == MenuRef::MenuMoveProspectors)
+            && self.data_046eb & 0x40 != 0
+    }
+
+    // = seg000:5923 map_overlay_lmb — an LMB inside the overlay panel: the
+    // hit test may swallow the click (title strip / footer toggle);
+    // otherwise re-run the idle hover, and a hovered marker leaves the
+    // overlay sub-mode and recentres the main map on that location.
+    fn map_overlay_lmb(&mut self) {
+        // = seg000:5923 call map_overlay_panel_hit_test.
+        if self.map_overlay_panel_hit_test() {
+            return;
+        }
+        // = seg000:5926..592a the idle pass refreshes data_046fc.
+        self.dune_map_mouse_idle();
+        // = seg000:592b..5931 no hovered marker: nothing more.
+        let marker = self.data_046fc;
+        if marker == 0 {
+            return;
+        }
+        // = seg000:5933..5938 drop the overlay sub-mode bit and the popup.
+        self.data_046eb &= 0xbf;
+        self.map_popup_ptr = 0;
+        // = seg000:593e call set_zoomed_globe_pos_from_location (loc_05b55):
+        //   centre on the marker location's +2/+4 map words.
+        let li = location_index_from_ptr(marker);
+        self.zoomed_globe_longitude = self.locations[li].map_x as u16;
+        self.zoomed_globe_latitude = self.locations[li].map_y;
+        // = seg000:5941 jmp map_refresh_main_view.
+        self.map_refresh_main_view();
+    }
+
+    // = seg000:5944 map_overlay_panel_hit_test — route a click inside the
+    // overlay panel by row; true = the click was swallowed (the DOS
+    // `add sp,2` return takeover). The title strip's close corner (x within
+    // 10 px of the panel's left edge) exits the menu when the prospector
+    // pick menu owns the view, else leaves the overlay; further right DOS
+    // arms the panel drag (unported). The footer rows toggle the layer and
+    // redraw. A click on the map window rows returns false to the caller.
+    fn map_overlay_panel_hit_test(&mut self) -> bool {
+        let x = self.mouse_pos_x as i16;
+        let y = self.mouse_pos_y as i16;
+        let (px, py) = self.map_overlay_panel_pos;
+        // = seg000:5944..594d y above the map window rows: the title strip.
+        if y - py - 7 < 0 {
+            // = seg000:5958..5961 the close corner is the leftmost 10 px.
+            if x - px - 10 < 0 {
+                // = seg000:5963..596a the prospector pick menu stays up (the
+                //   exit-menu path); anything else closes the overlay.
+                if self.overlay_pick_menu_active() {
+                    self.menu_callback_choice_exit_menu(0, 0);
+                } else {
+                    self.map_leave_spice_density_overlay();
+                }
+            } else {
+                // = seg000:5978..599e the panel drag (map_overlay_drag_armed
+                //   + the XOR home outline). TODO: not ported.
+                println!("map_overlay_panel_hit_test: panel drag (seg000:5978) not ported");
+            }
+            return true;
+        }
+        // = seg000:594f/5952 y past the map window's 0x59 rows: the footer.
+        if y - py - 7 >= 0x59 {
+            // = seg000:5970/5975 toggle the layer and redraw the overlay —
+            //   the SPICE DENSITY <-> TROOP OCCUPATION switch.
+            self.map_overlay_mode ^= 0xff;
+            self.map_draw_spice_density_overlay();
+            return true;
+        }
+        // = seg000:5954 a map-window click returns to the caller.
+        false
     }
 
     // = seg000:58fa loc_058fa — leave the spice-density overlay: drop the
@@ -739,8 +1142,8 @@ impl GameState {
         self.set_fb1_as_active_framebuffer();
         // = seg000:8129..812f data_04720 = data_018f3 (the contact head box
         //   seeds the overlay-open effect-6 flourish: the XOR outline grows
-        //   from the portrait to the panel) and data_04722 = 0 (the
-        //   spice-density mode).
+        //   from the portrait to the panel) and map_overlay_mode = 0 (the
+        //   spice-density layer).
         self.map_overlay_anim_src =
             Some((self.map_contact_head_rect.x0, self.map_contact_head_rect.y0));
         self.map_overlay_mode = 0;
@@ -765,8 +1168,7 @@ impl GameState {
     // during the move mode that word is 0 unless the modify-equipment panel
     // record was staged, leaving the test on the pseudo-rect at ds:0; the
     // port reads the evident intent and cancels on a click outside the map
-    // window. The caption-panel hit test (loc_05944) belongs to the
-    // unported overlay sub-mode.
+    // window.
     pub(crate) fn move_troop_pick_lmb(&mut self) {
         // = seg000:81ec call open_onmap_resource.
         self.open_onmap_spritesheet();
@@ -776,6 +1178,12 @@ impl GameState {
         if !self.map_view_clip_rect().in_rect(x, y) {
             self.menu_callback_choice_exit_menu(0, 0);
             self.open_onmap_spritesheet();
+            return;
+        }
+        // = seg000:81f8 call map_overlay_panel_hit_test — a click on the
+        //   overlay panel's title strip or footer acts there (close corner,
+        //   layer toggle) and swallows the pick.
+        if self.map_overlay_panel_hit_test() {
             return;
         }
         // = seg000:81fb..8209 the marker pick, with data_046eb forced to the
@@ -823,8 +1231,10 @@ impl GameState {
         let slot = self.prospector_pick_count as usize;
         self.prospector_pick_queue[slot] = crate::locations::location_ptr_from_index(li);
         self.prospector_pick_count += 1;
-        // = seg000:8286..828c redraw the overlay (loc_0542f, unported) and
-        //   the menu (its ADD slot may grey), re-inserted in place.
+        // = seg000:8286..828c redraw the overlay (the route line picks up
+        //   the appended destination) and the menu (its ADD slot may grey),
+        //   re-inserted in place.
+        self.map_draw_spice_density_overlay();
         self.move_prospectors_configure_menu();
         self.menu_stack_push(
             MenuRef::MenuMoveProspectors,
@@ -1158,20 +1568,144 @@ impl GameState {
         let Some((sx, sy)) = self.map_position_to_screen_if_visible(x, lat) else {
             return;
         };
+        // = seg000:631a ax = 0x4c; 631e dx -= 13; falls into the shared tail.
+        self.draw_icones_sprite_above_point(0x4c, sx - 13, sy);
+    }
+
+    // = seg000:6322 draw_icones_sprite_above_point — the shared marker tail:
+    // push the active bank and open ICONES, subtract the sprite's height from
+    // the y so it sits above the point, draw it clipped to the map window,
+    // and restore the previous bank.
+    fn draw_icones_sprite_above_point(&mut self, sprite: u16, sx: i16, sy: i16) {
         let clip = self.map_view_clip_rect();
         let yoff = self.y_offset as i16;
         // = seg000:6324..632c push the active bank and open ICONES.
         let prev = self.open_icones_spritesheet();
-        // = seg000:631a ax = 0x4c; 631e dx -= 13; 6330 bl -= the sprite
-        //   height; 6334 call draw_sprite_clipped_clobbering_bx_dx.
+        // = seg000:632d..6334 bl -= the sprite height; call
+        //   draw_sprite_clipped_clobbering_bx_dx.
         self.with_active_bank_sheet(|s, sheet| {
-            if let Some(sprite) = sheet.get_sprite(0x4c) {
-                let h = sprite.height() as i16;
-                s.draw_sprite_from_sheet_clipped(sheet, 0x4c, sx - 13, sy - h + yoff, clip);
+            if let Some(spr) = sheet.get_sprite(sprite) {
+                let h = spr.height() as i16;
+                s.draw_sprite_from_sheet_clipped(sheet, sprite, sx, sy - h + yoff, clip);
             }
         });
         // = seg000:6337/6338 restore the previous bank.
         self.open_sprite_bank(prev as i16);
+    }
+
+    // = seg000:62f2 map_overlay_draw_contact_troop_marker — the contact
+    // troop's position cross on the overlay window: a traveling troop
+    // (occupation bit 6) draws at its gps position, anyone else at their
+    // location; ICONES sprite 0x36 bottom-anchored above the point. Runs
+    // with data_046eb = 0x40, so contact_verb_troop resolves through the
+    // fremen2 slot the contact popup seeded (seg000:79ee).
+    fn map_overlay_draw_contact_troop_marker(&mut self) {
+        // = seg000:62f2 call contact_verb_troop.
+        let Some(ti) = self.contact_verb_troop() else {
+            return;
+        };
+        let t = self.troops[ti];
+        // = seg000:62f5..62f9 test occupation,40h.
+        let pos = if t.occupation & 0x40 != 0 {
+            // = seg000:6306..630c the traveling troop's gps position.
+            self.map_position_to_screen_if_visible(t.gps_coordinates_1, t.gps_coordinates_2 as i16)
+        } else {
+            // = seg000:62fb/62fe the troop's location (draw_location_target_
+            //   cross = location_visible_on_map on [si+4]).
+            let li = location_index_from_ptr(t.offset_of_location);
+            self.location_visible_on_map(li)
+        };
+        // = seg000:6322 jb ret — off-window draws nothing.
+        let Some((sx, sy)) = pos else {
+            return;
+        };
+        // = seg000:630f/6301 ax = 0x36 — the target cross.
+        self.draw_icones_sprite_above_point(0x36, sx, sy);
+    }
+
+    // = seg000:813e map_overlay_draw_move_route — the contact troop's move
+    // route on the overlay window: a red (0x0c) dotted (0x5555) polyline
+    // through the troop's position and its destinations, clipped to the
+    // window. The prospector (troops[2]) contributes every destination in
+    // the working queue (data_04718, 0-terminated); any other troop the
+    // single location it travels to (offset_of_location). DOS collects
+    // (screen_x, screen_y, map_lon) triples in a stack buffer (loc_081d7,
+    // 0x8000 x-sentinel); the raw longitudes detect a segment crossing the
+    // map seam: when sign(lon0-lon1) != sign(x0-x1) and the screen delta is
+    // at least 0x50, the endpoint outside the window (the swap at
+    // seg000:81af keeps the in-window one fixed) is pushed 0x190 px past
+    // the seam so the visible part runs off the window edge in the wrap
+    // direction.
+    fn map_overlay_draw_move_route(&mut self) {
+        // = seg000:8143 call contact_verb_troop.
+        let Some(ti) = self.contact_verb_troop() else {
+            return;
+        };
+        // = seg000:81d7 map_overlay_route_append_point — the raw longitude
+        //   plus the projected screen position.
+        let mut points: Vec<(i16, i16, i16)> = Vec::new();
+        let append = |s: &mut Self, points: &mut Vec<(i16, i16, i16)>, lon: u16, lat: i16| {
+            let (sx, sy) = s.map_position_to_screen(lon, lat);
+            points.push((sx, sy, lon as i16));
+        };
+        // = seg000:8146..814c the troop's own position first.
+        let t = self.troops[ti];
+        append(
+            self,
+            &mut points,
+            t.gps_coordinates_1,
+            t.gps_coordinates_2 as i16,
+        );
+        // = seg000:814f..8168 the prospector walks the working destination
+        //   queue; = seg000:816a..8173 anyone else adds the location they
+        //   travel to.
+        if ti == 2 {
+            for slot in 0..self.prospector_pick_queue.len() {
+                let ptr = self.prospector_pick_queue[slot];
+                if ptr == 0 {
+                    break;
+                }
+                let li = location_index_from_ptr(ptr);
+                let loc = self.locations[li];
+                append(self, &mut points, loc.map_x as u16, loc.map_y);
+            }
+        } else {
+            let li = location_index_from_ptr(t.offset_of_location);
+            let loc = self.locations[li];
+            append(self, &mut points, loc.map_x as u16, loc.map_y);
+        }
+        // = seg000:8176..81d1 one line per consecutive pair.
+        for i in 0..points.len() - 1 {
+            let (mut x0, mut y0, lon0) = points[i];
+            let (mut x1, mut y1, lon1) = points[i + 1];
+            // = seg000:818b..8194 sign(lon delta) vs sign(screen x delta):
+            //   a mismatch means the segment crosses the map seam.
+            let lon_delta = lon0.wrapping_sub(lon1);
+            let mut sdx = x0.wrapping_sub(x1);
+            if (lon_delta ^ sdx) < 0 {
+                // = seg000:8196..81a1 a screen delta under 0x50 draws as-is.
+                if sdx.unsigned_abs() >= 0x50 {
+                    // = seg000:81a3..81b3 keep the in-window endpoint fixed:
+                    //   when x0 lies in the window band, swap so the shifted
+                    //   endpoint is the other one.
+                    let r = self.map_view_rect;
+                    if x0 >= r.x0 && x0 < r.x1 {
+                        std::mem::swap(&mut x0, &mut x1);
+                        std::mem::swap(&mut y0, &mut y1);
+                        sdx = sdx.wrapping_neg();
+                    }
+                    // = seg000:81b5..81be push the loose endpoint 0x190 px
+                    //   past the seam, against the screen delta's direction.
+                    x0 = x0.wrapping_add(if sdx < 0 { 0x190 } else { -0x190 });
+                }
+            }
+            // = seg000:81c0..81cc the red dotted line into the active
+            //   framebuffer, clipped to the map window (the overlay window
+            //   while the overlay draws).
+            let dest = self.active_fb();
+            let clip = self.map_view_rect;
+            gfx::vga_draw_line(self, dest, x0, y0, x1, y1, 0x0c, 0x5555, clip);
+        }
     }
 
     // = seg000:633b map_draw_vegetation_marks — draw the vegetation tufts over
@@ -1285,9 +1819,50 @@ impl GameState {
             self.map_close_rallied_troops_popup();
             self.draw_mouse();
         }
-        // = seg000:5c22..5c75 the marker hover label + the occupation-panel
-        //   readout — both gated on the troop occupation panel (data_04710)
-        //   being open, which is not ported yet. TODO.
+        // = seg000:5c22..5c30 the rest only runs with the spice-density
+        //   overlay panel open in either popup slot.
+        if self.map_popup_ptr != MAP_POPUP_SPICE_OVERLAY
+            && self.map_popup2_ptr != MAP_POPUP_SPICE_OVERLAY
+        {
+            return;
+        }
+        let x = self.mouse_pos_x as i16;
+        let y = self.mouse_pos_y as i16;
+        // = seg000:5c32..5c4b inside the panel, the marker under the cursor
+        //   (within 9 px): the search runs under data_046eb = 0x40, the mode
+        //   the overlay's marker entries were built with, and 0xc0 after.
+        let mut marker = 0u16;
+        if self.map_overlay_panel_rect.in_rect(x, y) {
+            self.data_046eb = 0x40;
+            let (m, dist) = self.find_nearest_location_marker(0xff, x, y);
+            self.data_046eb = 0xc0;
+            if dist < 9 {
+                marker = m;
+            }
+        }
+        // = seg000:5c4d..5c55 swap with the hover state; no change, no
+        //   redraw.
+        let old = std::mem::replace(&mut self.data_046fc, marker);
+        if old != marker {
+            // = seg000:5c57..5c6d redraw the hover label onto the front
+            //   buffer around a cursor lift (the next redraw_mouse pass
+            //   re-shows the cursor, as in DOS), the active framebuffer
+            //   restored after.
+            let saved = self.active_fb();
+            self.call_restore_cursor();
+            self.set_screen_as_active_framebuffer();
+            self.map_main_draw_hover_label(marker);
+            self.active_fb = saved;
+            // DOS draws straight to the visible A000 buffer; the port
+            // publishes the touched screen.
+            if !self.front_buffer_is_fb1() {
+                self.send_frame_to_display();
+            }
+        }
+        // = seg000:5c6e..5c72 with no marker hovered, the footer readout.
+        if marker == 0 {
+            self.map_overlay_hover_readout();
+        }
     }
 
     // = seg000:5c76 map_main_mouse_lmb — the full-map view's LMB handler.
@@ -1298,17 +1873,29 @@ impl GameState {
         self.open_onmap_spritesheet();
         let x = self.mouse_pos_x as i16;
         let y = self.mouse_pos_y as i16;
-        // = seg000:5c7c..5ca2 a click inside the open popup panel routes to the
-        //   panel, not a dismiss: the troop occupation panel (data_04710 ->
-        //   loc_05923) or the equipment spinners (loc_07e97/loc_07eb8), both
-        //   stubbed, so an inside-click is a no-op here.
+        // = seg000:5c7c..5c8f a click inside the open primary popup panel
+        //   routes to the panel, not a dismiss: the spice-density overlay
+        //   (data_04710 -> map_overlay_lmb) or the info panel's equipment
+        //   spinners (loc_07e97, stubbed).
         if let Some(r) = self.map_open_popup_rect() {
             if r.in_rect(x, y) {
+                if self.map_popup_ptr == MAP_POPUP_SPICE_OVERLAY {
+                    self.map_overlay_lmb();
+                }
                 return;
             }
         }
-        // = seg000:5ca5 cmp data_046f5,0 — with the spice-density overlay up
-        //   any other click exits the menu. Not ported (no overlay yet).
+        // = seg000:5c95..5ca2 same for the secondary popup slot (loc_07eb8,
+        //   stubbed).
+        if self.map_popup2_ptr != 0 {
+            if let Some(r) = self.map_popup_record_rect(self.map_popup2_ptr) {
+                if r.in_rect(x, y) {
+                    return;
+                }
+            }
+        }
+        // = seg000:5ca5 cmp data_046f5,0 — with the spinner sub-mode armed
+        //   any other click exits the menu. Not ported (no spinners yet).
         // = seg000:5caf call loc_06946 (the icon hit-test); jb troop_0872c.
         if let Some((_, ti)) = self.troop_icon_hit_test(x, y) {
             self.map_click_troop_icon(ti);
@@ -1329,9 +1916,10 @@ impl GameState {
         }
         // = seg000:5cca..5cd0 a click on empty map space closes the open
         //   popups: the location popup menu (loc_05f79), the troop info panel
-        //   (loc_079de) and the spice sub-mode (loc_058fa, stubbed).
+        //   (loc_079de) and the spice-density overlay (loc_058fa).
         self.map_close_location_troop_popup();
         self.map_close_troop_info_popup();
+        self.map_leave_spice_density_overlay();
         // = seg000:5cd3..5ce0 a live troop contact (data_01954) tears down
         //   through the no-more-orders path, folded back in.
         if self.map_selected_troop_id != 0 {
@@ -3254,7 +3842,7 @@ impl GameState {
     }
 
     // = seg000:599f map_main_mouse_release — end a popup panel drag
-    // (data_04723). Panel dragging is not ported yet.
+    // (map_overlay_drag_armed). Panel dragging is not ported yet.
     pub(crate) fn dune_map_mouse_release(&mut self) {}
 
     // = seg000:59c1 map_main_mouse_drag — move a dragged popup panel. Panel
@@ -3862,7 +4450,8 @@ mod tests {
             window.iter().any(|&p| (0x50..=0x5f).contains(&p)),
             "and the density-ramp field shades on top of it"
         );
-        // The legend strip below the window (loc_05605/loc_0563e): the 0xf5
+        // The legend strip below the window (map_overlay_draw_legend_strip
+        // / map_overlay_draw_legend): the 0xf5
         // band with the SPICE DENSITY label and ramp bars on it.
         let legend: Vec<u8> = (ox + 6..ox + 6 + 0x9e)
             .map(|x| game.screen.get(x as u16, (oy + 0x63) as u16 + yoff))
@@ -3897,6 +4486,207 @@ mod tests {
             MenuRef::MenuTroopDialog,
             "the troop's order menu is back"
         );
+    }
+
+    // The spice-density overlay's hover readout and layer toggle: hovering a
+    // density-shaded region XOR-marks its shade on the legend ramp
+    // (map_overlay_hover_readout, seg000:5746); hovering a sietch marker
+    // draws its name + troop counts in the footer (map_main_draw_hover_label,
+    // seg000:5692); clicking the footer toggles map_overlay_mode to the
+    // troop-occupation layer (map_overlay_panel_hit_test, seg000:5970).
+    // Asset-gated:
+    //   cargo test -p dune --bin dune -- --ignored spice_overlay_hover
+    #[test]
+    #[ignore = "needs assets/DUNE.DAT"]
+    fn spice_overlay_hover_readout_and_layer_toggle() {
+        let dat_path = concat!(env!("CARGO_MANIFEST_DIR"), "/../../assets/DUNE.DAT");
+        let Ok(dat_file) = DatFile::open(dat_path) else {
+            eprintln!("skipping: {dat_path} not found");
+            return;
+        };
+        let (tx, rx) = mpsc::sync_channel(64);
+        let mut game = GameState::new(dat_file, tx);
+        game.set_headless();
+        game.start(true);
+        while rx.try_recv().is_ok() {}
+
+        // The map view, then the SEE SPICE DENSITY verb raises the overlay
+        // at its home position.
+        game.ui_toggle_room_view();
+        while rx.try_recv().is_ok() {}
+        game.mouse_pos_x = 0;
+        game.mouse_pos_y = 0;
+        game.menu_callback_choice_map_main_see_spice_density(cmd::SEE_SPICE_DENSITY, 0);
+        while rx.try_recv().is_ok() {}
+        assert_ne!(game.data_046eb & 0x40, 0, "the overlay is up");
+        assert_eq!(game.map_popup_ptr, super::MAP_POPUP_SPICE_OVERLAY);
+        let (ox, oy) = game.map_overlay_panel_pos;
+        let yoff = game.y_offset;
+        assert_eq!(game.map_overlay_hover_tick, 0xff, "no legend tick yet");
+
+        // Hover a density-shaded region pixel inside the map window: the
+        // legend tick appears at the shade's ramp position.
+        let shaded = (oy + 8..oy + 8 + 0x57)
+            .flat_map(|y| (ox + 6..ox + 6 + 0x9e).map(move |x| (x, y)))
+            .find(|&(x, y)| {
+                let p = game.screen.get(x as u16, (y as u16) + yoff);
+                (0x50..=0x5f).contains(&p)
+            })
+            .expect("a density-shaded pixel in the overlay window");
+        let shade = game.screen.get(shaded.0 as u16, (shaded.1 as u16) + yoff);
+        let tick = shade - 0x50;
+        let tick_x = (ox + 0x5e + 4 * tick as i16) as u16;
+        let tick_y = (oy + 0x62) as u16 + yoff;
+        let before = game.screen.get(tick_x, tick_y);
+        let before_right = game.screen.get(tick_x + 4, tick_y);
+        let before_past = game.screen.get(tick_x + 5, tick_y);
+        game.mouse_pos_x = shaded.0 as u16;
+        game.mouse_pos_y = shaded.1 as u16;
+        game.dune_map_mouse_idle();
+        while rx.try_recv().is_ok() {}
+        assert_eq!(
+            game.map_overlay_hover_tick, tick,
+            "the hovered shade's tick is tracked"
+        );
+        // The tick box is 5 px wide (the far entry's dec si, segvga:3724):
+        // both edges toggle, the column past the box stays untouched.
+        assert_eq!(
+            game.screen.get(tick_x + 4, tick_y),
+            before_right ^ 0x0f,
+            "the tick's right edge sits at x + 4"
+        );
+        assert_eq!(
+            game.screen.get(tick_x + 5, tick_y),
+            before_past,
+            "the column past the tick box is untouched"
+        );
+        assert_eq!(
+            game.screen.get(tick_x, tick_y),
+            before ^ 0x0f,
+            "the tick outline is XOR-drawn on the legend ramp"
+        );
+
+        // Hover a sietch marker: the footer shows its name (and troop
+        // counts), and the strip repaint parks the tick.
+        let marker = game
+            .visible_location_markers
+            .iter()
+            .find(|m| m.mode == 0x40 && m.location_index >= 2)
+            .copied()
+            .expect("a sietch marker inside the overlay window");
+        let legend_before: Vec<u8> = (ox + 6..ox + 6 + 0x9e)
+            .map(|x| game.screen.get(x as u16, (oy + 0x63) as u16 + yoff))
+            .collect();
+        game.mouse_pos_x = marker.x as u16;
+        game.mouse_pos_y = marker.y as u16;
+        game.dune_map_mouse_idle();
+        while rx.try_recv().is_ok() {}
+        assert_eq!(
+            game.data_046fc,
+            crate::locations::location_ptr(marker.location_index),
+            "the marker is the hover state"
+        );
+        assert_eq!(
+            game.map_overlay_hover_tick, 0xff,
+            "the strip repaint parked the legend tick"
+        );
+        let legend_after: Vec<u8> = (ox + 6..ox + 6 + 0x9e)
+            .map(|x| game.screen.get(x as u16, (oy + 0x63) as u16 + yoff))
+            .collect();
+        assert_ne!(
+            legend_before, legend_after,
+            "the footer redrew with the location label"
+        );
+
+        // Unhover (outside the panel): the plain legend comes back.
+        game.mouse_pos_x = 4;
+        game.mouse_pos_y = 4;
+        game.dune_map_mouse_idle();
+        while rx.try_recv().is_ok() {}
+        assert_eq!(game.data_046fc, 0, "no marker hovered");
+
+        // The nav-panel arrows scroll the overlay's own parked position
+        // (map_overlay_scroll, seg000:8858) and redraw the panel; the shared
+        // map position stays put.
+        let map_pos = (game.zoomed_globe_longitude, game.zoomed_globe_latitude);
+        let overlay_pos = (game.globe_param_3, game.globe_param_4);
+        game.prev_mouse_buttons = 1;
+        game.ui_click_map_right();
+        game.ui_click_map_down();
+        game.prev_mouse_buttons = 0;
+        while rx.try_recv().is_ok() {}
+        assert_eq!(
+            game.globe_param_3,
+            overlay_pos.0.wrapping_add(0x1002),
+            "the overlay position scrolled right"
+        );
+        assert_eq!(
+            game.globe_param_4,
+            overlay_pos.1 + 0x0c,
+            "and down one arrow step"
+        );
+        assert_eq!(
+            (game.zoomed_globe_longitude, game.zoomed_globe_latitude),
+            map_pos,
+            "the shared map position is untouched"
+        );
+        assert_ne!(game.data_046eb & 0x40, 0, "the overlay is still up");
+
+        // The centre button outside the pick menu recentres the map on the
+        // player (seg000:5b0d); the refresh re-enters the overlay, which
+        // recentres its window too, and the shared tail puts the nav rect
+        // back on the panel (map_refresh_and_restore_overlay_nav).
+        game.ui_click_map_center();
+        while rx.try_recv().is_ok() {}
+        let (px_pos, plat) = game.get_map_position();
+        assert_eq!(
+            (game.zoomed_globe_longitude, game.zoomed_globe_latitude),
+            (px_pos, plat),
+            "the map recentred on the player"
+        );
+        assert_ne!(game.data_046eb & 0x40, 0, "the overlay came back up");
+        assert_eq!(
+            game.globe_param_3, game.zoomed_globe_longitude,
+            "the overlay window recentred with it"
+        );
+        assert_eq!(
+            game.mouse_nav_rect,
+            Some(game.map_overlay_panel_rect),
+            "the nav rect is back on the panel"
+        );
+
+        // Click the footer: the layer toggles to troop occupation and the
+        // overlay redraws — the window now carries the class-mix colours
+        // (no-troops fields paint 0), not the density ramp.
+        game.mouse_pos_x = (ox + 0x20) as u16;
+        game.mouse_pos_y = (oy + 0x65) as u16;
+        game.dune_map_mouse_lmb();
+        while rx.try_recv().is_ok() {}
+        assert_eq!(game.map_overlay_mode, 0xff, "the troop-occupation layer");
+        assert_ne!(game.data_046eb & 0x40, 0, "the overlay stayed up");
+        let window: Vec<u8> = (oy + 8..oy + 8 + 0x57)
+            .flat_map(|y| (ox + 6..ox + 6 + 0x9e).map(move |x| (x, y)))
+            .map(|(x, y)| game.screen.get(x as u16, (y as u16) + yoff))
+            .collect();
+        assert!(
+            !window.iter().any(|&p| (0x50..=0x5f).contains(&p)),
+            "the density ramp shades are gone"
+        );
+        game.screen
+            .write_png(&game.palette, "spice_overlay_troop_occupation.png")
+            .unwrap();
+
+        // Click the footer again: back to the spice-density layer.
+        game.dune_map_mouse_lmb();
+        while rx.try_recv().is_ok() {}
+        assert_eq!(game.map_overlay_mode, 0, "the spice-density layer again");
+
+        // A click on empty map space outside the panel closes the overlay.
+        game.mouse_pos_x = 8;
+        game.mouse_pos_y = 8;
+        game.dune_map_mouse_lmb();
+        while rx.try_recv().is_ok() {}
+        assert_eq!(game.data_046eb & 0x40, 0, "the overlay is down");
     }
 
     // MOVE TROOP (seg000:8064): from an open contact, the verb switches into
@@ -4080,6 +4870,23 @@ mod tests {
         );
         assert_eq!(game.prospector_pick_count, 0);
 
+        // The centre button inside the pick menu takes the loc_082a0-gated
+        // overlay path (seg000:5b0a): redraw the overlay in place, keeping
+        // the pick menu and the panel position.
+        let panel_pos = game.map_overlay_panel_pos;
+        game.ui_click_map_center();
+        while rx.try_recv().is_ok() {}
+        assert_eq!(
+            game.get_active_menu_ref(),
+            MenuRef::MenuMoveProspectors,
+            "the pick menu survives the centre click"
+        );
+        assert_eq!(game.map_overlay_panel_pos, panel_pos, "the panel stays put");
+        assert_eq!(
+            game.globe_param_3, game.zoomed_globe_longitude,
+            "the overlay window recentred on the map position"
+        );
+
         // Click two sietch markers: both queue, the menu stays up. Far ones
         // (14+ latitude rows, not the prospector's own location) so the
         // order's head start does not already arrive.
@@ -4099,6 +4906,17 @@ mod tests {
             .copied()
             .collect();
         assert_eq!(sietches.len(), 2, "two sietch markers visible");
+        // The route line baseline: with an empty queue the overlay window
+        // holds no red (0x0c) route pixels yet.
+        let (ox, oy) = game.map_overlay_panel_pos;
+        let yoff = game.y_offset;
+        let count_red = |game: &GameState| {
+            (oy + 7..oy + 7 + 0x59)
+                .flat_map(|y| (ox + 5..ox + 5 + 0xa0).map(move |x| (x, y)))
+                .filter(|&(x, y)| game.screen.get(x as u16, (y as u16) + yoff) == 0x0c)
+                .count()
+        };
+        let red_before = count_red(&game);
         for m in &sietches {
             game.mouse_pos_x = m.x as u16;
             game.mouse_pos_y = m.y as u16;
@@ -4106,6 +4924,19 @@ mod tests {
             while rx.try_recv().is_ok() {}
         }
         assert_eq!(game.prospector_pick_count, 2, "two destinations queued");
+        // Each pick redraws the overlay (seg000:8286), and the redraw's
+        // secondary-slot decorations include the move route: the red dotted
+        // polyline from the troop through the queued destinations
+        // (map_overlay_draw_move_route).
+        let red_after = count_red(&game);
+        assert!(
+            red_after > red_before + 4,
+            "the red dotted route line is drawn in the overlay window \
+             ({red_before} -> {red_after} red pixels)"
+        );
+        game.screen
+            .write_png(&game.palette, "prospector_move_route.png")
+            .unwrap();
         assert_eq!(
             game.get_active_menu_ref(),
             MenuRef::MenuMoveProspectors,

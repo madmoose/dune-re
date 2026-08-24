@@ -1656,6 +1656,141 @@ pub fn panel_anim_play_step(state: &mut GameState, frame: u16) {
     }
 }
 
+// = segvga:1a07 vga_draw_line (gfx_vtable_vga_draw_line, seg001:3901) — draw
+// a line from (x0, y0) to (x1, y1) in `color` through the 16-bit `pattern`:
+// the pattern rotates left one bit per step and a pixel plots only on a set
+// bit, each plot clipped to the half-open `clip` rect. `dest` is the DOS
+// caller's es load. fb_base_ofs (y_offset) applies like every segvga
+// primitive. Three DOS shapes, all kept:
+// - Δy == 0 (segvga:1a3a): a horizontal run from the left end, |Δx|+1
+//   pixels, the row's clip checked once, per-pixel x clip;
+// - Δx == 0 (segvga:1a86): a vertical run from the top end, |Δy|+1 rows,
+//   the start row clamped into 0..200 (segvga:1a98..1aa2), the column's
+//   clip checked once, per-pixel y clip;
+// - the general Bresenham (segvga:1afb): max(|Δx|, |Δy|) steps from the
+//   start with err seeded at major/2, plotting the stepped positions —
+//   the start pixel is never drawn (DOS steps before plotting) — with the
+//   full rect clip per pixel.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn vga_draw_line(
+    state: &mut GameState,
+    dest: FbId,
+    x0: i16,
+    y0: i16,
+    x1: i16,
+    y1: i16,
+    color: u8,
+    pattern: u16,
+    clip: Rect,
+) {
+    // The port guards the framebuffer bounds where DOS's calc_fb_offset
+    // clamps the row to 199; the clip tests keep the two equivalent.
+    fn put(fb: &mut FrameBuffer, x: i16, y: i16, color: u8) {
+        if x >= 0 && (x as u16) < fb.w() && y >= 0 && (y as u16) < fb.h() {
+            fb.set(x as u16, y as u16, color);
+        }
+    }
+    let yoff = state.y_offset as i16;
+    let fb = state.fb_mut(dest);
+    let mut pat = pattern;
+    // = segvga:1a6d/1abf/1b4b rol the pattern one bit; the rolled-out MSB
+    //   gates the plot.
+    let mut bit = || {
+        let b = pat & 0x8000 != 0;
+        pat = pat.rotate_left(1);
+        b
+    };
+    // = segvga:1a24..1a2a the deltas.
+    let dx = x1.wrapping_sub(x0);
+    let dy = y1.wrapping_sub(y0);
+    // = segvga:1ade/1ae2 Δy == 0: the horizontal run.
+    if dy == 0 {
+        // = segvga:1a56..1a5e the row must lie in the clip band.
+        if y0 < clip.y0 || y0 >= clip.y1 {
+            return;
+        }
+        // = segvga:1a3f..1a4f walk from the left end, |Δx|+1 pixels.
+        let sx = if dx < 0 { x0 + dx } else { x0 };
+        for i in 0..=dx.unsigned_abs() as i16 {
+            let x = sx + i;
+            // = segvga:1a6d..1a7d pattern bit + the x clip.
+            if bit() && x >= clip.x0 && x < clip.x1 {
+                put(fb, x, y0 + yoff, color);
+            }
+        }
+        return;
+    }
+    // = segvga:1ae5..1aec the y step.
+    let ystep: i16 = if dy < 0 { -1 } else { 1 };
+    // = segvga:1aee/1af0 Δx == 0: the vertical run.
+    if dx == 0 {
+        // = segvga:1a86..1a96 from the top end.
+        let mut count = dy.unsigned_abs() as i16;
+        let mut y = if ystep < 0 { y0 - count } else { y0 };
+        // = segvga:1a98..1aa2 clamp the start row into 0..200.
+        if y >= 0xc8 {
+            return;
+        }
+        if y < 0 {
+            count += y;
+            y = 0;
+        }
+        // = segvga:1aa9..1ab0 the column must lie in the clip band.
+        if x0 < clip.x0 || x0 >= clip.x1 {
+            return;
+        }
+        // = segvga:1ab5..1ad7 count+1 rows down.
+        for i in 0..=count.max(-1) {
+            // = segvga:1abf..1ad0 pattern bit + the y clip.
+            let ry = y + i;
+            if bit() && ry >= clip.y0 && ry < clip.y1 {
+                put(fb, x0, ry + yoff, color);
+            }
+        }
+        return;
+    }
+    // = segvga:1af2..1af9 the x step.
+    let xstep: i16 = if dx < 0 { -1 } else { 1 };
+    let adx = dx.unsigned_abs();
+    let ady = dy.unsigned_abs();
+    // = segvga:1afb..1b16 the step pairs: the minor step moves along the
+    //   major axis only; the major (diagonal) step moves both.
+    let (minor_step, major, minor) = if adx > ady {
+        ((xstep, 0i16), adx, ady)
+    } else {
+        ((0i16, ystep), ady, adx)
+    };
+    // = segvga:1b19..1b1d err seeds at major/2.
+    let mut err = major >> 1;
+    let (mut x, mut y) = (x0, y0);
+    for _ in 0..major {
+        // = segvga:1b1f..1b44 the Bresenham step.
+        err = err.wrapping_add(minor);
+        let (sx, sy) = if err >= major {
+            err -= major;
+            (xstep, ystep)
+        } else {
+            minor_step
+        };
+        x = x.wrapping_add(sx);
+        y = y.wrapping_add(sy);
+        // = segvga:1b4b..1b71 pattern bit + the full rect clip.
+        if bit() && x >= clip.x0 && x < clip.x1 && y >= clip.y0 && y < clip.y1 {
+            put(fb, x, y + yoff, color);
+        }
+    }
+}
+
+// = segvga:3724 vga_xor_rect_outline (gfx_vtable_vga_xor_rect_outline,
+// seg001:3905) — the far entry the seg000 callers reach: it decrements the
+// width before the inner, so the caller's width is the visible pixel width
+// (the inner walks x..x+w inclusive). Only the width; the height passes
+// through undecremented.
+pub(crate) fn vga_xor_rect_outline(state: &mut GameState, x: i16, y: i16, w: i16, h: i16) {
+    // = segvga:3724 dec si.
+    vga_xor_rect_outline_inner(state, x, y, w - 1, h);
+}
+
 // = segvga:3733 vga_xor_rect_outline_inner — XOR (with 0x0f) a one-pixel
 // rect outline onto the visible screen. The corners come from (x, y) and
 // (x + w, y + h), each clamped into 4..=0x13c horizontally and 4..=0x94

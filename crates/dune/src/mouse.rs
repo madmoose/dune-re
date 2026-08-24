@@ -637,8 +637,9 @@ impl GameState {
         if self.settings_drag_target != 0 {
             return CursorShapeId::Hand;
         }
-        // = seg000:dc77 cmp [data_04723],0; jnz — the map-main-menu busy flag
-        // also forces the hand; not modelled (nothing ported sets it).
+        // = seg000:dc77 cmp [map_overlay_drag_armed],0; jnz — a dragged
+        // overlay panel also forces the hand; not modelled (the drag is not
+        // ported).
         // = seg000:dc7e di = [mouse_nav_rect_ptr]; or di,di; jz — no
         // navigation hot-zone installed: the plain arrow.
         let Some(rect) = self.mouse_nav_rect else {

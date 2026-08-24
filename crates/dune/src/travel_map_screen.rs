@@ -403,13 +403,21 @@ impl GameState {
             return;
         }
         // = seg000:8835 cmp [data_046eb],0; jns loc_08846 — the full-map view
-        //   (bit 0x80): the spice-density sub-mode (bit 0x40) scrolls
-        //   globe_param_3/4 instead (loc_08858 -> loc_0542f, not ported); the
-        //   plain full map dismisses the rallied-troops popup and scrolls the
-        //   shared zoomed position below.
+        //   (bit 0x80): the spice-density sub-mode (bit 0x40) scrolls the
+        //   overlay instead; the plain full map dismisses the rallied-troops
+        //   popup and scrolls the shared zoomed position below.
         if self.data_046eb & 0x80 != 0 {
             if self.data_046eb & 0x40 != 0 {
-                println!("ui_click_map_buttons: spice-density scroll (loc_08858) not ported");
+                // = seg000:8858..8862 loc_08858 — the overlay keeps its own
+                //   map position parked in globe_param_3/4 (the draw swaps
+                //   it live around the window fill): add the delta pair
+                //   there and redraw the panel. The longitude wraps; the
+                //   latitude is clamped by the redraw's window row fill
+                //   (map_fill_window_rows_from), which runs on the
+                //   swapped-in value and so clamps the overlay's own copy.
+                self.globe_param_3 = self.globe_param_3.wrapping_add(dlng);
+                self.globe_param_4 = self.globe_param_4.wrapping_add(dlat);
+                self.map_draw_spice_density_overlay();
                 return;
             }
             // = seg000:8843 call map_dismiss_rallied_troops_popup.
@@ -428,29 +436,42 @@ impl GameState {
     // button (live HUD record 12): recentre the map view on the player's map
     // position and redraw.
     pub(crate) fn ui_click_map_center(&mut self) {
-        // = seg000:5b05 call loc_082a0; jnz loc_05b0d — ZF is set only when
-        //   the active menu is menu_multiple_cancel/menu_map_move_prospectors
-        //   AND data_046eb bit 0x40 is set (the globe-0x40 sub-mode); that
-        //   path copies the zoomed position into globe_param_3/4 instead
-        //   (map_enter_spice_density_overlay_in_place). The windowed map
-        //   view (data_046eb == 1) never takes
-        //   it. TODO: port with SEE DUNE MAP (the full-globe view).
-        if self.data_046eb & 0x40 != 0 {
-            println!("ui_click_map_center: globe-0x40 branches not ported");
+        // = seg000:5b05/5b08 call loc_082a0; jnz loc_05b0d — ZF (the plain
+        //   Cancel / prospector pick menu owns the view AND data_046eb bit
+        //   0x40) takes the overlay path: recentre the overlay window on the
+        //   map view's position instead.
+        if self.overlay_pick_menu_active() {
+            // = seg000:5b0a jmp map_enter_spice_density_overlay_in_place —
+            //   its entry copies the zoomed position into globe_param_3/4
+            //   and redraws the panel in place.
+            self.map_enter_spice_density_overlay_in_place();
             return;
         }
         // = seg000:5b0d call set_zoomed_globe_pos_from_map_position.
         self.set_zoomed_globe_pos_from_map_position();
+        // = seg000:5b0d falls into the shared recentre tail.
+        self.map_refresh_main_view_restoring_overlay_nav();
+    }
+
+    // = seg000:5b10 map_refresh_and_restore_overlay_nav — the shared
+    // recentre tail: redraw the main view; with the overlay sub-mode up the
+    // recompose re-entered the overlay but its own tail leaves the nav rect
+    // on the map window (seg000:5ad9), so put it back on the panel
+    // (loc_05575). Also the FIND PROSPECTORS verb's tail (seg000:5b30,
+    // unported).
+    pub(crate) fn map_refresh_main_view_restoring_overlay_nav(&mut self) {
         // = seg000:5b10 call map_refresh_main_view.
         self.map_refresh_main_view();
-        // = seg000:5b13 test [data_046eb],40h; jz ret — the globe-0x40
-        //   sub-mode reinstalls its nav rect (loc_05575, si = data_04710);
-        //   unreachable here (bit 0x40 bailed out above).
+        // = seg000:5b13/5b1a test [data_046eb],40h; jmp loc_05575 — the nav
+        //   rect back on the overlay panel.
+        if self.data_046eb & 0x40 != 0 {
+            self.set_mouse_nav_rect(self.map_overlay_panel_rect);
+        }
     }
 
     // = seg000:8850 map_refresh_main_view — redraw the current main view after
     // a map scroll/recentre.
-    fn map_refresh_main_view(&mut self) {
+    pub(crate) fn map_refresh_main_view(&mut self) {
         // = seg000:8850 call map_dismiss_troop_popups.
         self.map_dismiss_troop_popups();
         // = seg000:8853 call [_word_23B9D_current_main_view_drawing_function]
@@ -733,7 +754,7 @@ impl GameState {
 
     // = seg000:62c9 location_visible_on_map — Some(screen pos) iff the
     // location is visible on the map view.
-    fn location_visible_on_map(&self, location_index: usize) -> Option<(i16, i16)> {
+    pub(crate) fn location_visible_on_map(&self, location_index: usize) -> Option<(i16, i16)> {
         // = seg000:62c9 cmp [data_046eb],1; jb ret — no map view on screen.
         if self.data_046eb == 0 {
             return None;
