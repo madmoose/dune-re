@@ -1537,7 +1537,8 @@ pub struct GameState {
     // = seg001:4728 travel_minimap_state — the flight minimap state: 0 normal,
     // 1 = recenter + redraw pending (set by the pump when the position leaves
     // the minimap bounds, seg000:4f8e, and by CHANGE DESTINATION at
-    // seg000:4980), bit 0x80 = minimap hidden (toggled by loc_04aad).
+    // seg000:4980), bit 0x80 = minimap hidden (toggled by travel_toggle_minimap,
+    // seg000:4aad).
     // map_screen_cleanup re-enters the minimap view when > 0. Reset by
     // travel_reset_trail when the map screen opens.
     pub(crate) travel_minimap_state: i8,

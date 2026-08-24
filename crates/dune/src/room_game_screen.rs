@@ -968,8 +968,18 @@ impl GameState {
         }
         // = seg000:9427 call get_active_screen_element; 942a cmp bp,20c2h.
         if self.get_active_menu_ref() != MenuRef::MenuPalaceMirrorRoom {
-            // TODO: the other game-area click branches (dialogue / map modes,
-            //   seg000:9436..9458) are not ported.
+            // = seg000:9436 loc_09436 — test game_screen_mode_flags,3;
+            //   943d cmp data_011ca,0; 9444 jmp travel_toggle_minimap: during
+            //   a travel mode (the ornithopter / worm flight), with no room
+            //   swap pending, a click in the game area hides or shows the
+            //   flight minimap.
+            if self.game_screen_mode_flags & 3 != 0 && self.data_011ca == 0 {
+                self.travel_toggle_minimap();
+                return;
+            }
+            // TODO: the remaining game-area click branch (seg000:9447..9458,
+            //   the room redraw + callback_main_ui_element_21_22, or the
+            //   speech-bubble menu close) is not ported.
             return;
         }
         // = seg000:9430 call screen_element_stack_pop_and_cleanup — a no-op in

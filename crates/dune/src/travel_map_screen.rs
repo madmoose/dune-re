@@ -2249,6 +2249,24 @@ impl GameState {
         self.travel_trail_redraw();
     }
 
+    // = seg000:4aad travel_toggle_minimap — toggle the flight minimap: flip
+    // travel_minimap_state bit 0x80. With the bit set the minimap is hidden,
+    // so travel_restore_minimap_rect stops stamping it over each flight frame
+    // and the next present leaves the raw clip on screen; with the bit clear
+    // travel_enter_minimap_view redraws the minimap and the full trail into
+    // the back buffer, so the next present shows it again. Reached from the
+    // game-area click (seg000:9444) while a travel mode is active.
+    pub(crate) fn travel_toggle_minimap(&mut self) {
+        // = seg000:4aad xor byte ptr [travel_minimap_state],80h.
+        self.travel_minimap_state ^= 0x80u8 as i8;
+        // = seg000:4ab2 js loc_04ab7 — now hidden: nothing to redraw.
+        if self.travel_minimap_state < 0 {
+            return;
+        }
+        // = seg000:4ab4 call travel_enter_minimap_view.
+        self.travel_enter_minimap_view();
+    }
+
     // = seg000:49d9 travel_refresh_view — refresh the travel view: the full
     // globe (data_046eb bit 0x80) dispatches the installed main-view drawing
     // function; the flight minimap redraws + the full trail.
