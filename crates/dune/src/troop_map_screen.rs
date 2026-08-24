@@ -3561,8 +3561,8 @@ impl GameState {
         self.font_select_tall_font();
         let hx = (r.x0 + 12) as u16;
         let ty = (r.y0 + 4) as u16;
-        self.draw_string_location_type(li, 0xf09a, hx, ty);
-        self.draw_location_name(li, 0xf096, hx - 8, ty + 9);
+        self.draw_string_location_type(li, 0x109a, hx, ty);
+        self.draw_location_name(li, 0x1096, hx - 8, ty + 9);
         // = seg000:603f..6056 the class dispatch: class 2 (Atreides /
         //   undiscovered / plain) shows only the header; class 0 with the
         //   Paul-events 0x20 water flag draws the water/spice extra first.
