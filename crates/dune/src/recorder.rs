@@ -619,16 +619,32 @@ fn expand_frame(fb: &FrameBuffer, pal: &Palette, rgba: &mut [u8]) {
 /// ffmpeg #1: raw RGBA frames on stdin → H.264 in `tmp_video`, upscaled
 /// nearest-neighbour to the aspect-corrected output size.
 ///
-/// Colour handling: the game's palette produces full-range (0–255) RGB. Left to
-/// its defaults, swscale compresses that into limited-range (16–235) YUV and
-/// leaves the stream untagged, so each player guesses the range — QuickTime and
-/// VLC guess differently, and the full-range guess shows lifted blacks / dimmed
-/// whites (the "faded" look). We instead convert with the `colorspace` filter at
-/// full range and a BT.709 matrix (`iall=bt709` == `all=bt709`, so it applies
-/// only the RGB→YUV matrix — no gamma/primary remap), then tag the stream
-/// full-range BT.709 and write the `nclx colr` atom QuickTime reads. Every
-/// player then expands the levels identically; a black→white ramp round-trips
-/// 0x00→0xff.
+/// Colour handling: the game's palette produces full-range (0–255) RGB, and the
+/// recording has to hand a player back the same codes the window presents and
+/// `save_screenshot` dumps. Three things have to line up for that.
+///
+/// Range: left to its defaults, swscale compresses 0–255 into limited-range
+/// (16–235) YUV and leaves the stream untagged, so each player guesses —
+/// QuickTime and VLC guess differently, and the full-range guess shows lifted
+/// blacks / dimmed whites (the "faded" look). `in_range=full:out_range=full`
+/// converts without rescaling and the `pc` tag says so; a black→white ramp
+/// round-trips 0x00→0xff.
+///
+/// Matrix: `out_color_matrix=bt709` is the RGB→YUV matrix only — no gamma or
+/// primary remap. swscale's own conversion is what does it. The `colorspace`
+/// filter looks like the tidier tool for this and is not: fed RGB it desaturates
+/// saturated colours badly (a 0,252,0 patch decodes back as 0,212,0), at 4:4:4
+/// as well as 4:2:0, and declaring `irange=pc` makes it worse.
+///
+/// Transfer: sRGB (`iec61966-2-1`), not BT.709. The codes are sRGB-referred, and
+/// BT.709 names a different curve for them — ColorSync reads a 709-tagged clip
+/// as its "HDTV" profile, and converting that to sRGB lifts the midtones
+/// (64→73, 128→139, 192→199), so the recording plays brighter than the game.
+/// Primaries stay BT.709, which are sRGB's primaries. `setparams` stamps the
+/// filtered frames, because the encoder tag alone does not override what the
+/// filter chain put on them.
+///
+/// `+write_colr` writes the `nclx colr` atom QuickTime reads.
 fn spawn_video_ffmpeg(tmp_video: &Path) -> std::io::Result<Child> {
     Command::new("ffmpeg")
         .args([
@@ -643,13 +659,18 @@ fn spawn_video_ffmpeg(tmp_video: &Path) -> std::io::Result<Child> {
             &format!("{FPS}"),
             "-i",
             "pipe:0",
-            // Nearest-neighbour upscale, then an explicit full-range BT.709
-            // RGB→YUV conversion so the pixel levels match the colour tags below.
+            // Nearest-neighbour upscale and an explicit full-range BT.709
+            // RGB→YUV conversion in one swscale pass, then the colour tags the
+            // pixels were actually encoded with.
             "-vf",
             &format!(
-                "scale={OUT_W}:{OUT_H}:flags=neighbor,format=gbrp,\
-                 colorspace=all=bt709:iall=bt709:range=pc:format=yuv420p"
+                "scale={OUT_W}:{OUT_H}:flags=neighbor:in_range=full:out_range=full\
+                 :out_color_matrix=bt709,\
+                 setparams=range=pc:colorspace=bt709:color_primaries=bt709\
+                 :color_trc=iec61966-2-1"
             ),
+            "-pix_fmt",
+            "yuv420p",
             "-c:v",
             "libx264",
             "-crf",
@@ -661,7 +682,7 @@ fn spawn_video_ffmpeg(tmp_video: &Path) -> std::io::Result<Child> {
             "-color_primaries",
             "bt709",
             "-color_trc",
-            "bt709",
+            "iec61966-2-1",
             "-movflags",
             "+write_colr",
         ])

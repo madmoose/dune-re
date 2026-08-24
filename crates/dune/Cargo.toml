@@ -21,6 +21,13 @@ paste = "1.0.15"
 # which apply cursor visibility immediately where winit's cursor-rect path
 # only takes effect on the next pointer move.
 objc2-app-kit = { version = "0.2.2", features = ["NSCursor"] }
+# Names the sRGB colour space for the presentation layer (see
+# `set_srgb_colorspace`). Pinned to the version wgpu-hal 30 links, so the
+# `CGColorSpace` we hand to the layer is the type its `CAMetalLayer` expects.
+objc2-core-graphics = { version = "0.3.2", default-features = false, features = [
+    "std",
+    "CGColorSpace",
+] }
 
 [lints]
 workspace = true

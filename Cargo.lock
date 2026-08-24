@@ -621,6 +621,7 @@ dependencies = [
  "naga",
  "num",
  "objc2-app-kit",
+ "objc2-core-graphics",
  "opl3-rs",
  "paste",
  "png",

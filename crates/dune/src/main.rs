@@ -206,6 +206,60 @@ struct Gpu {
     needs_reconfigure: bool,
 }
 
+// Configure the swapchain and re-tag the presentation colour space, which
+// `Surface::configure` resets. Every configure goes through here.
+fn configure_surface(
+    surface: &wgpu::Surface<'static>,
+    device: &wgpu::Device,
+    config: &wgpu::SurfaceConfiguration,
+) {
+    surface.configure(device, config);
+    set_srgb_colorspace(surface);
+}
+
+// Tell the macOS compositor that the frame we present is sRGB-encoded, so it
+// gamut-maps to the display profile like every other colour-managed image.
+//
+// The 6-bit DOS DAC values are sRGB-referred once `scale_6bit_to_8bit` widens
+// them: that is what the PNG screen dumps (`save_screenshot`) mean, and what
+// any viewer assumes of an untagged PNG. wgpu asks the surface for
+// `SurfaceColorSpace::Srgb`, but its Metal backend implements that as a nil
+// `CAMetalLayer.colorspace`, which turns colour matching off entirely — the
+// bytes then drive the panel's native primaries. On a wide-gamut (P3) display
+// that renders the window far more saturated than the same frame dumped to a
+// PNG: pure green reaches the panel as its own primary instead of the paler
+// sRGB green. Naming the colour space closes the gap.
+//
+// This changes nothing about the values the pipeline writes. The surface
+// format stays non-sRGB, so no EOTF is applied on the way out; only the tag
+// the compositor reads changes.
+//
+// No-op off macOS — only the Metal backend drops the colour-space tag.
+#[cfg(target_os = "macos")]
+fn set_srgb_colorspace(surface: &wgpu::Surface<'static>) {
+    use objc2_core_graphics::{CGColorSpace, kCGColorSpaceSRGB};
+
+    // SAFETY: `kCGColorSpaceSRGB` is a Core Graphics constant string.
+    let Some(colorspace) = CGColorSpace::with_name(Some(unsafe { kCGColorSpaceSRGB })) else {
+        return;
+    };
+
+    // SAFETY: the layer is only borrowed to set a property on it — nothing is
+    // destroyed, and `surface` outlives the call.
+    unsafe {
+        let Some(metal_surface) = surface.as_hal::<wgpu::hal::api::Metal>() else {
+            return;
+        };
+        metal_surface
+            .render_layer()
+            .lock()
+            .setColorspace(Some(&colorspace));
+    }
+}
+
+#[cfg(not(target_os = "macos"))]
+fn set_srgb_colorspace(_surface: &wgpu::Surface<'static>) {}
+
 impl Gpu {
     fn new(window: Arc<Window>) -> Gpu {
         let size = window.inner_size();
@@ -226,7 +280,8 @@ impl Gpu {
 
         // Present without sRGB conversion so the raw 8-bit DOS palette values
         // reach the screen unchanged; the resample in the shader runs in this
-        // same non-gamma space.
+        // same non-gamma space. The values are still sRGB-referred once they
+        // leave the pipeline — `set_srgb_colorspace` tells the compositor so.
         let caps = surface.get_capabilities(&adapter);
         let format = caps
             .formats
@@ -245,7 +300,7 @@ impl Gpu {
         // cursor trails the OS pointer by up to that many vsync intervals.
         // One frame of latency keeps the overlay glued to the real pointer.
         config.desired_maximum_frame_latency = 1;
-        surface.configure(&device, &config);
+        configure_surface(&surface, &device, &config);
 
         let texture = device.create_texture(&wgpu::TextureDescriptor {
             label: Some("frame"),
@@ -452,7 +507,7 @@ impl Gpu {
         if self.needs_reconfigure || self.config.width != win_w || self.config.height != win_h {
             self.config.width = win_w;
             self.config.height = win_h;
-            self.surface.configure(&self.device, &self.config);
+            configure_surface(&self.surface, &self.device, &self.config);
             self.needs_reconfigure = false;
         }
 
@@ -490,7 +545,7 @@ impl Gpu {
             // Surface went stale (e.g. mid-resize) — reconfigure and skip; the
             // next redraw paints it.
             wgpu::CurrentSurfaceTexture::Outdated | wgpu::CurrentSurfaceTexture::Lost => {
-                self.surface.configure(&self.device, &self.config);
+                configure_surface(&self.surface, &self.device, &self.config);
                 return;
             }
             _ => return,
