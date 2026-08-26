@@ -1,6 +1,6 @@
 use crate::{
     CursorMode, CursorShapeId, DatFile, Equipment, Font, FontState, FrameBuffer, InputState,
-    Location, Palette, Rect, SpriteSheet, TalkingHead,
+    Location, MapPanelRef, Palette, PanelRecord, Rect, SpriteSheet, TalkingHead,
     attack::AttackState,
     blit, cmd,
     frame_slot::FrameSink,
@@ -961,6 +961,27 @@ pub struct GameState {
     // slot travel_trail_append fills; DOS keeps a byte pointer).
     pub(crate) travel_trail_cursor: usize,
 
+    // = seg001:1668 record's runtime rect.
+    pub(crate) map_location_info_panel: PanelRecord,
+
+    // = seg001:18df
+    pub(crate) map_troop_info_panel: PanelRecord,
+
+    // = seg001:18e9
+    pub(crate) map_troop_contact_text_panel: PanelRecord,
+
+    // = seg001:18f3
+    pub(crate) map_troop_contact_head_panel: PanelRecord,
+
+    // = seg001:1936
+    pub(crate) data_01936: PanelRecord,
+
+    // = seg001:1940
+    pub(crate) data_01940: PanelRecord,
+
+    // = seg001:194a
+    pub(crate) data_0194a: PanelRecord,
+
     // = seg001:1954 data_01954 — the selected troop id on the full map view
     // (0 = none): set by the icon click (troop_0872c), shown with the
     // highlight ring; reset_room_scene_state zeroes it.
@@ -1330,10 +1351,6 @@ pub struct GameState {
     pub(crate) head_popup_anchor: (i16, i16),
     pub(crate) head_popup_box: Rect,
 
-    // = the data_018df panel record's runtime rect (loc_05f25 writes the
-    // record's +0..+7 next to the clicked icon each open).
-    pub(crate) map_info_panel_rect: Rect,
-
     // = seg001:46d6 _byte_23B86_current_sky_palette — persistent state of the
     // loc_00826 sky palette cycler (TaskId::SkyPaletteCycler), kept as a global
     // across frame-task clears.
@@ -1435,12 +1452,6 @@ pub struct GameState {
     // line is presented with no popup up.
     pub(crate) map_contact_troop_pending: Option<usize>,
 
-    // = the troop_contact_text_panel_record's runtime rect (seg001:18e9: x
-    // (5,232) compiled in, the y pair rewritten per open) and the head box
-    // (seg001:18f3, written per open) inside it.
-    pub(crate) map_contact_popup_rect: Rect,
-    pub(crate) map_contact_head_rect: Rect,
-
     // = seg001:46f3 map_view_reentry_count — counts map-view re-entries within
     // one visit (loc_05a03 increments it when a troop dialogue path re-opens
     // the view); reset_room_scene_state zeroes it. While 0,
@@ -1455,9 +1466,6 @@ pub struct GameState {
     // re-click gate. = seg001:46f7 data_046f7 — its class+1 (0 = closed).
     pub(crate) map_location_popup_loc: Option<usize>,
     pub(crate) map_location_popup_class: u8,
-
-    // = the data_01668 record's runtime rect.
-    pub(crate) map_location_popup_rect: Rect,
 
     // = seg001:46fa data_046fa — the troop whose info panel (data_018df) is
     // open (a troop ptr in DOS, the table index here; None = closed).
@@ -1964,14 +1972,12 @@ pub struct GameState {
     // primitive currently targets. Stage inits run with this == Fb1.
     pub(crate) active_fb: FbId,
 
-    // = seg001:dbe0 map_popup_ptr / seg001:dbe2 map_popup2_ptr — pointers to
-    // the open popup panel records on the full map view (0 = none): the
-    // rallied-troops title panel (MAP_POPUP_RALLIED = data_0194a), the troop
-    // occupation panel (data_04710) or the troop info panel (data_018df).
-    // The map mouse handlers dispatch on which record is open. The port keeps
-    // the DOS record offsets as the identity values.
-    pub(crate) map_popup_ptr: u16,
-    pub(crate) map_popup2_ptr: u16,
+    // = seg001:dbe0 map_popup_ptr — which popup panel record is open on the
+    // full map view.
+    pub(crate) map_popup: MapPanelRef,
+
+    // == seg001:dbe2 map_popup2_ptr
+    pub(crate) map_popup2: MapPanelRef,
 
     // = seg001:dbe6
     pub(crate) hnm_finished: bool,
@@ -2482,6 +2488,13 @@ impl GameState {
             ],
             scene_records: crate::room_scene::SCENE_RECORDS,
             travel_trail_cursor: 0,
+            map_location_info_panel: crate::troop_map_screen::LOCATION_INFO_PANEL,
+            map_troop_info_panel: crate::troop_map_screen::TROOP_INFO_PANEL,
+            map_troop_contact_text_panel: crate::troop_map_screen::TROOP_CONTACT_POPUP_PANEL,
+            map_troop_contact_head_panel: crate::troop_map_screen::TROOP_CONTACT_HEAD_PANEL,
+            data_01936: crate::troop_map_screen::LOC_01936,
+            data_01940: crate::troop_map_screen::LOC_01940,
+            data_0194a: crate::troop_map_screen::RALLIED_POPUP_PANEL,
             map_selected_troop_id: 0,
             map_last_selected_troop_id: 0,
             data_01968: 0,
@@ -2581,7 +2594,6 @@ impl GameState {
             troop_icons: Vec::new(),
             head_popup_anchor: (0, 0),
             head_popup_box: Rect::default(),
-            map_info_panel_rect: Rect::default(),
             current_sky_palette: 0,
             sky_fade_countdown: 0,
             pending_room_screen_request: 0,
@@ -2599,13 +2611,10 @@ impl GameState {
             current_main_view_drawing_function: None,
             map_contact_troop: None,
             map_contact_troop_pending: None,
-            map_contact_popup_rect: crate::troop_map_screen::TROOP_CONTACT_POPUP_RECT,
-            map_contact_head_rect: Rect::default(),
             map_view_reentry_count: 0,
             troop_icon_anim_phase: 0,
             map_location_popup_loc: None,
             map_location_popup_class: 0,
-            map_location_popup_rect: Rect::default(),
             map_info_popup_troop: None,
             data_046fc: 0,
             available_equipment: Equipment::default(),
@@ -2705,8 +2714,8 @@ impl GameState {
             rand_iterated_seed: 0,
             screen_buffer: FbId::Screen,
             active_fb: FbId::Fb1,
-            map_popup_ptr: 0,
-            map_popup2_ptr: 0,
+            map_popup: MapPanelRef::None,
+            map_popup2: MapPanelRef::None,
             hnm_finished: false,
             hnm_frame_counter: 0,
             hnm_counter_2: 0,
@@ -4147,17 +4156,14 @@ impl GameState {
             return;
         }
 
-        // Port-only: composite the debug overlay onto a copy of the screen so
-        // the game's own framebuffers stay clean (the overlay must never be
-        // baked into fb1/fb2, which the render restores from).
+        let (mut fb, pal) = (self.screen.clone(), self.screen_pal.clone());
         if self.debug_overlay {
-            let mut fb = self.screen.clone();
+            // Port-only: composite the debug overlay onto a copy of the screen so
+            // the game's own framebuffers stay clean (the overlay must never be
+            // baked into fb1/fb2, which the render restores from).
             self.draw_debug_overlay(&mut fb);
-            self.frame_sink.publish(fb, self.screen_pal.clone());
-        } else {
-            self.frame_sink
-                .publish(self.screen.clone(), self.screen_pal.clone());
         }
+        self.frame_sink.publish(fb, pal);
     }
 
     // Port-only: flip `debug_overlay` on a backquote (`, scancode 0x29) key
@@ -4387,6 +4393,20 @@ impl GameState {
             // = seg000:5b87 sub al,2 — step the colour.
             color = color.wrapping_sub(2);
         }
+    }
+
+    // = seg000:c551 draw_panel_outline
+    pub(crate) fn draw_panel_outline(&mut self, panel: MapPanelRef) {
+        let Some(panel) = self.map_panel_record(panel) else {
+            return;
+        };
+        self.draw_rect_outline(
+            panel.rect.x0,
+            panel.rect.y0,
+            panel.rect.x1 - 1,
+            panel.rect.y1 - 1,
+            panel.frame_color,
+        );
     }
 
     // = seg000:c560 draw_rect_outline — outline the rectangle (x0, y0)-(x1, y1)

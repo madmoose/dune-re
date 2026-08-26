@@ -370,7 +370,7 @@ impl GameState {
         let mut popup_rects = Vec::new();
         if let Some(p) = self.map_open_popup_rect() {
             popup_rects.push(p);
-            popup_rects.extend(self.map_popup_record_rect(self.map_popup2_ptr));
+            popup_rects.extend(self.map_popup_record_rect(self.map_popup2));
         }
         let popup_save: Vec<(Rect, Vec<u8>)> = popup_rects
             .into_iter()

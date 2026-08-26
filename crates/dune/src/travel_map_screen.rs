@@ -10,7 +10,7 @@
 //! full-globe (data_046eb bit 0x80) drawing are not ported yet.
 
 use crate::{
-    FbId, GameState, Rect, TaskId,
+    FbId, GameState, Rect, TaskId, cmd,
     game_ui::MouseHandlers,
     gfx,
     locations::{location_index_from_ptr, location_ptr},
@@ -1203,7 +1203,7 @@ impl GameState {
             } else {
                 // = seg000:460c ax = 0xa4 "DESERT"; call font_draw_phrase_or_
                 //   command_string_with_color_at_pos.
-                self.font_draw_phrase_or_command_string_with_color_at_pos(0xa4, color, x, y);
+                self.font_draw_phrase_or_command_string_with_color_at_pos(cmd::DESERT, color, x, y);
                 // = seg000:4612..4618 di -= 0xfff0; only the compass states
                 //   (di < 8, not the plain-window 0xffff) name a direction.
                 let dir = hover - 0xfff0;
@@ -1211,7 +1211,7 @@ impl GameState {
                     // = seg000:461a..4625 a space, then the compass-point
                     //   phrase 0xda + n ("northwards", ...).
                     self.font_draw_glyph(0x20);
-                    self.font_draw_phrase_or_command_string(dir + 0xda);
+                    self.font_draw_phrase_or_command_string(cmd::NORTHWARDS + dir);
                 }
             }
         }
@@ -2057,7 +2057,7 @@ impl GameState {
             self.data_000e1 = side;
             // = seg000:415a..4160 the location-type string ("Sietch: ", ...).
             self.string_subst_id_table[4] =
-                self.get_location_type_string_offset(idx).wrapping_add(0x48);
+                self.get_location_type_string_offset(idx) + cmd::A_SIETCH;
             // = seg000:4163 arm room action 3 (companions are following).
             self.pending_room_action = 3;
             // = seg000:4168 mark the landmark discovered.

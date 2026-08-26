@@ -24,6 +24,7 @@ use crate::{
     font::{Font, TextSize},
     framebuffer::FrameBuffer,
     gfx,
+    panel::{MapPanelRef, PanelRecord, panel},
     rect::rect,
 };
 
@@ -52,6 +53,11 @@ const COL_FRAME: u8 = 0xf5;
 const COL_TEXT: u8 = 0xfa;
 const COL_GREY: u8 = 0xf5;
 const COL_FIELD: u8 = 0xf0;
+
+/// Port-only panel (this save/load UI has no DOS record): the panel body and
+/// its buttons all paint through the same fill/frame pair, so they share one
+/// record and place it with `at`.
+const PANEL: PanelRecord = panel(MapPanelRef::None, PANEL_RECT, COL_FRAME, COL_FILL);
 
 /// Caret blink half-period and status-line lifetime, in PIT ticks (~5 ms).
 const CARET_BLINK_TICKS: u64 = 60;
@@ -503,7 +509,7 @@ impl GameState {
 
         // The panel body: fill + inset outline, plus a second inner outline
         // for depth.
-        self.map_draw_panel_record(PANEL_RECT, COL_FILL, COL_FRAME);
+        self.map_draw_panel_record(PANEL);
         self.draw_rect_outline(
             PANEL_RECT.x0 + 3,
             PANEL_RECT.y0 + 3,
@@ -635,9 +641,9 @@ impl GameState {
         } else {
             COL_GREY
         };
-        self.map_draw_panel_record(ARROW_UP_RECT, COL_FILL, COL_FRAME);
+        self.map_draw_panel_record(PANEL.at(ARROW_UP_RECT));
         self.draw_arrow_triangle(ARROW_UP_RECT, true, up_col);
-        self.map_draw_panel_record(ARROW_DOWN_RECT, COL_FILL, COL_FRAME);
+        self.map_draw_panel_record(PANEL.at(ARROW_DOWN_RECT));
         self.draw_arrow_triangle(ARROW_DOWN_RECT, false, down_col);
 
         // The buttons.
@@ -656,7 +662,7 @@ impl GameState {
             (BTN_LOAD_RECT, &b"LOAD"[..], load_col),
             (BTN_CANCEL_RECT, &b"CANCEL"[..], COL_TEXT),
         ] {
-            self.map_draw_panel_record(r, COL_FILL, COL_FRAME);
+            self.map_draw_panel_record(PANEL.at(r));
             draw_bytes_centered(
                 &self.font,
                 &mut self.screen,

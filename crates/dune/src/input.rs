@@ -18,6 +18,7 @@ use winit::keyboard::KeyCode;
 use crate::{
     GameState, cmd,
     mouse::{MOUSE_START_X, MOUSE_START_Y},
+    panel::{MapPanelRef, PanelRecord, panel},
     rect::rect,
 };
 
@@ -78,6 +79,10 @@ pub struct InputState {
 /// Cap on the typed-character queue; stale characters accumulated outside the
 /// save panel are bounded and dropped wholesale when the panel opens.
 const TYPED_CHARS_CAP: usize = 32;
+
+/// = seg001:2945 pause_window_panel_record
+const PAUSE_WINDOW_PANEL: PanelRecord =
+    panel(MapPanelRef::None, rect(92, 159, 228, 200), 0xfe, 0xf1);
 
 impl Default for InputState {
     fn default() -> Self {
@@ -414,14 +419,38 @@ impl GameState {
         // buffer; the entry target is restored on exit (seg000:def5).
         let saved_active = self.active_fb();
         self.set_screen_as_active_framebuffer();
-        // = seg000:dea1..dea9 push framebuffer_1_seg; framebuffer_1_seg =
-        // vga_get_framebuffer_info() (= 0xA000): fb1 is aliased to the visible
-        // screen while paused, so a transition-staged verb repaint
-        // (draw_command_menu_item's in_transition route) lands on-screen. The
-        // port has no fb1 pointer to swap; clearing in_transition for the same
-        // scope routes those paints to the same target.
+
+        // = seg000:dea1..dea9 push framebuffer_1_seg
         let saved_in_transition = std::mem::take(&mut self.in_transition);
-        self.pause_draw_window();
+        self.map_draw_panel_record(PAUSE_WINDOW_PANEL);
+
+        // = seg000:deb2..dec1
+        self.font_select_tall_font();
+
+        // Port-only: center the text in the rect.
+        let width = self.measure_text(cmd::GAME_PAUSED) as i16;
+        let rect = PAUSE_WINDOW_PANEL.rect;
+        let x = rect.x0 + ((rect.x1 - rect.x0) - width) / 2;
+        self.font_draw_phrase_or_command_string_with_color_at_pos(
+            cmd::GAME_PAUSED,
+            PAUSE_WINDOW_PANEL.text_color(0xfe),
+            x as u16,
+            169,
+        );
+
+        // = seg000:dec4..ded3
+        self.font_select_small_font();
+
+        // Port-only: center the text in the rect.
+        let width = self.measure_text(cmd::ESC_REMOVES_THIS_WINDOW_ANY_OTHER_KEY_R) as i16;
+        let x = rect.x0 + ((rect.x1 - rect.x0) - width) / 2;
+
+        self.font_draw_phrase_or_command_string_with_color_at_pos(
+            cmd::ESC_REMOVES_THIS_WINDOW_ANY_OTHER_KEY_R,
+            PAUSE_WINDOW_PANEL.text_color(0xf7),
+            x as u16,
+            184,
+        );
         // Port-only: DOS drew straight into VGA memory; publish the frame.
         self.send_frame_to_display();
         // = seg000:ded6 wait for P to be released.
@@ -461,43 +490,6 @@ impl GameState {
         self.game_clock_last_tick = self.last_task_tick;
         // = seg000:defe mov [game_suspend_count],al — restore the suspend count.
         self.game_suspend_count = saved_suspend;
-    }
-
-    // = seg000:deac..ded3 the window body of pause_if_p_key_pressed: the panel
-    // and its two text lines, drawn into the active framebuffer.
-    fn pause_draw_window(&mut self) {
-        // = seg000:deac si = pause_window_panel_record (seg001:2945); deaf call
-        // loc_07b1b — fill (92,159)-(227,199) with 0xf1, frame it in 0xfe.
-        let rect = rect(92, 159, 228, 200);
-        self.map_draw_panel_record(rect, 0xf1, 0xfe);
-        // = seg000:deb2..dec1 tall font; "GAME  PAUSED" at (130, 169), colour
-        // word 0xf1fe.
-        self.font_select_tall_font();
-
-        // Port-only: center the text in the rect.
-        let width = self.measure_text(cmd::GAME_PAUSED) as i16;
-        let x = rect.x0 + ((rect.x1 - rect.x0) - width) / 2;
-        self.font_draw_phrase_or_command_string_with_color_at_pos(
-            cmd::GAME_PAUSED,
-            0xf1fe,
-            x as u16,
-            169,
-        );
-
-        // = seg000:dec4..ded3 small font; " <ESC> removes this window\nAny
-        // other key resumes game" at (96, 184), colour word 0xf1f7.
-        self.font_select_small_font();
-
-        // Port-only: center the text in the rect.
-        let width = self.measure_text(cmd::ESC_REMOVES_THIS_WINDOW_ANY_OTHER_KEY_R) as i16;
-        let x = rect.x0 + ((rect.x1 - rect.x0) - width) / 2;
-
-        self.font_draw_phrase_or_command_string_with_color_at_pos(
-            cmd::ESC_REMOVES_THIS_WINDOW_ANY_OTHER_KEY_R,
-            0xf1f7,
-            x as u16,
-            184,
-        );
     }
 
     // = seg000:df07 pause_remove_window — remove the GAME PAUSED window:

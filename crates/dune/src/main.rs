@@ -42,6 +42,7 @@ mod mouse;
 mod music;
 mod palace_plan;
 mod palette;
+mod panel;
 mod pcm_player;
 mod point;
 mod rand;
@@ -97,6 +98,7 @@ use crate::{
     locations::{Equipment, Location},
     mouse::{CursorMode, CursorShapeId, MOUSE_START_X, MOUSE_START_Y, SharedCursor, cursor_shape},
     palette::Palette,
+    panel::{MapPanelRef, PanelRecord},
     point::Point,
     recorder::{RecordFormat, Recorder, RecorderTee},
     rect::Rect,

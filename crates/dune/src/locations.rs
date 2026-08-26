@@ -1,4 +1,4 @@
-use crate::GameState;
+use crate::{GameState, cmd};
 
 // = the seg001 locations[] addressing: the table starts at seg001:0100 and
 // each record is 0x1c bytes. Several DOS-side words (data_046fc,
@@ -2105,11 +2105,11 @@ impl GameState {
         // = seg000:6232 bl = [di+8] (appearance); 6235..624e the threshold
         //   ladder (the >= 0x30 tail lands on 3 - 2 = 1).
         match self.locations[location_index].appearance {
-            0x00..0x20 => 0,
-            0x20 => 1,
-            0x21..0x28 => 2,
-            0x28..0x30 => 3,
-            _ => 1,
+            0x00..0x20 => 0, // Sietch
+            0x20 => 1,       // Palace
+            0x21..0x28 => 2, // Village
+            0x28..0x30 => 3, // Fort
+            _ => 1,          // Palace
         }
     }
 
@@ -2126,7 +2126,7 @@ impl GameState {
         // = seg000:629d call get_location_type_string_offset; 62a0 add
         //   ax,44h; 62a3 jmp font_draw_phrase_or_command_string_with_color_
         //   at_pos.
-        let index = self.get_location_type_string_offset(location_index) + 0x44;
+        let index = cmd::SIETCH + self.get_location_type_string_offset(location_index);
         self.font_draw_phrase_or_command_string_with_color_at_pos(index, color, x, y);
     }
 

@@ -11,6 +11,9 @@ pub const fn rect(x0: i16, y0: i16, x1: i16, y1: i16) -> Rect {
 }
 
 impl Rect {
+    /// The all-zero rect a panel record carries until its owner places it.
+    pub const EMPTY: Rect = rect(0, 0, 0, 0);
+
     pub fn default_clip_rect() -> Self {
         Rect {
             x0: 0,

@@ -226,6 +226,12 @@ impl GameState {
         // = seg000:0589 — initial midi driver reset before the script loop.
         self.midi.midi_reset();
 
+        // A skipped intro still has to leave the boot logo's palette behind as
+        // the game relies on those palette entries.
+        if skip {
+            self.load_boot_logo_palette();
+        }
+
         if !skip {
             self.intro_aborted = false;
             for (idx, stage) in INTRO_SCRIPT.iter().enumerate().skip(INTRO_SCRIPT_START) {
@@ -324,6 +330,16 @@ impl GameState {
             // SKYDN.HSQ until the in-game room view explicitly reselects it.
             self.remove_all_frame_tasks();
         }
+    }
+
+    // The palette VIRGIN.HNM's header carries, applied without decoding a frame
+    // — the same apply_palette_update hnm_read_header runs at seg000:c9a9, just
+    // without the playback that follows.
+    fn load_boot_logo_palette(&mut self) {
+        let Ok(bytes) = self.dat_file.read_raw("VIRGIN.HNM") else {
+            return;
+        };
+        self.apply_palette_update(&bytes[2..]);
     }
 
     // = seg000:0309 play_CREDITS_HNM. The second startup step (start calls it

@@ -16,7 +16,7 @@
 //! index — 0x0e selects entry 7 and 0x10 entry 8 (seg000:172f `mov bx,ax`
 //! then `jmp [array + bx]`).
 
-use crate::{GameState, TaskId, menu_defs::MenuRef};
+use crate::{GameState, TaskId, menu_defs::MenuRef, panel::MapPanelRef};
 
 // The script opcodes, as the byte offsets the DOS dispatcher consumes
 // (action index = byte / 2), named after their action callbacks.
@@ -397,8 +397,7 @@ impl GameState {
         // = seg000:13ad..13b3 si = troop_contact_text_panel_record; call
         //   loc_0c551 — repaint the contact popup's panel outline on screen.
         self.set_screen_as_active_framebuffer();
-        let r = self.map_contact_popup_rect;
-        self.draw_rect_outline(r.x0, r.y0, r.x1 - 1, r.y1 - 1, 0xf5);
+        self.draw_panel_outline(MapPanelRef::TroopContactText);
         // = falls into sequence_present_line_and_voice.
         self.sequence_present_line();
     }

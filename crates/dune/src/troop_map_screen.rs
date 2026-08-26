@@ -52,6 +52,7 @@ use crate::{
             MenuSelectTroopOccupation,
         },
     },
+    panel::{MapPanelRef, PanelRecord, panel},
     rect::rect,
 };
 
@@ -61,38 +62,41 @@ use crate::{
 // rows, 312 px wide.
 const FULL_MAP_VIEW_RECT: Rect = rect(4, 4, 316, 148);
 
-/// = seg001:194a data_0194a — the rallied-troops title popup's panel record:
-/// rect (10,10)-(190,64), frame colour 0xf5 (+8), fill colour 0xfb (+9). The
-/// record's seg001 offset doubles as the popup identity in map_popup_ptr.
-pub(crate) const MAP_POPUP_RALLIED: u16 = 0x194a;
-pub(crate) const RALLIED_POPUP_RECT: Rect = rect(10, 10, 190, 64);
+/// = seg001:1668 location_info_panel_record
+pub(crate) const LOCATION_INFO_PANEL: PanelRecord =
+    panel(MapPanelRef::LocationInfo, Rect::EMPTY, 0xf8, 0x10);
 
-/// = seg001:18df data_018df — the troop info panel record: the rect is
-/// written at open time (loc_05f25), frame colour 0xfb (+8), fill colour
-/// 0xf0 (+9). The record's seg001 offset is the popup identity.
-pub(crate) const MAP_POPUP_TROOP_INFO: u16 = 0x18df;
+/// = seg001:18df data_018df
+pub(crate) const TROOP_INFO_PANEL: PanelRecord =
+    panel(MapPanelRef::TroopInfo, Rect::EMPTY, 0xfb, 0xf0);
 
-/// = seg001:1668 data_01668 — the location info panel record (frame 0xf8,
-/// fill 0x10). The record's seg001 offset is the popup identity.
-pub(crate) const MAP_POPUP_LOCATION: u16 = 0x1668;
+/// = seg001:18e9
+pub(crate) const TROOP_CONTACT_POPUP_PANEL: PanelRecord = panel(
+    MapPanelRef::TroopContactText,
+    rect(5, 5, 232, 72),
+    0xf5,
+    0xfb,
+);
+
+/// = seg001:18f3
+pub(crate) const TROOP_CONTACT_HEAD_PANEL: PanelRecord =
+    panel(MapPanelRef::None, Rect::EMPTY, 0xf5, 0xe4);
+
+/// = seg001:1936
+pub(crate) const LOC_01936: PanelRecord =
+    panel(MapPanelRef::None, rect(40, 30, 267, 71), 0xf5, 0xfb);
+
+/// = seg001:1940
+pub(crate) const LOC_01940: PanelRecord =
+    panel(MapPanelRef::Loc01940, rect(40, 30, 267, 71), 0x19, 0x1e);
+
+/// = seg001:194a data_0194a
+pub(crate) const RALLIED_POPUP_PANEL: PanelRecord =
+    panel(MapPanelRef::Rallied, rect(10, 10, 190, 64), 0xf5, 0xfb);
 
 /// = seg001:11c1/11c3 data_011c1/data_011c3 — the spice-density overlay
 /// panel's screen origin (75, 15).
 const SPICE_OVERLAY_PANEL_POS: (i16, i16) = (75, 15);
-
-/// = seg001:4710 data_04710 — the overlay panel's rect doubles as its popup
-/// identity in map_popup_ptr (seg000:5535).
-pub(crate) const MAP_POPUP_SPICE_OVERLAY: u16 = 0x4710;
-
-/// = seg001:18e9 troop_contact_text_panel_record — the contact dialogue
-/// popup's panel record, frame colour 0xf5 (+8), fill 0xfb (+9). The record's
-/// seg001 offset is the popup identity in map_popup_ptr.
-pub(crate) const MAP_POPUP_TROOP_CONTACT: u16 = 0x18e9;
-
-/// = the compiled-in rect of that record: (5,5)-(232,72). Only the y pair is
-/// rewritten per open (map_draw_troop_contact_popup picks the half of the
-/// screen the troop's icon is not in).
-pub(crate) const TROOP_CONTACT_POPUP_RECT: Rect = rect(5, 5, 232, 72);
 
 /// = seg001:2248 — the contact subtitle descriptor's width (the descriptor is
 /// x@+0, y@+2, w@+4, h@+6; 153x63). The origin and height live in GameState
@@ -431,11 +435,12 @@ impl GameState {
         //   when it is free (or already the overlay's), else the secondary
         //   one — that is how the overlay coexists with the troop-contact
         //   popup during the prospector scene.
-        let secondary = self.map_popup_ptr != 0 && self.map_popup_ptr != MAP_POPUP_SPICE_OVERLAY;
+        let secondary =
+            self.map_popup != MapPanelRef::None && self.map_popup != MapPanelRef::SpiceOverlay;
         if secondary {
-            self.map_popup2_ptr = MAP_POPUP_SPICE_OVERLAY;
+            self.map_popup2 = MapPanelRef::SpiceOverlay;
         } else {
-            self.map_popup_ptr = MAP_POPUP_SPICE_OVERLAY;
+            self.map_popup = MapPanelRef::SpiceOverlay;
         }
         // = seg000:553c..554a consume the staged flourish source (data_04720):
         //   when a caller staged one, effect 6 (gfx::xor_rect_outline_anim)
@@ -879,7 +884,7 @@ impl GameState {
         }
         // = seg000:5933..5938 drop the overlay sub-mode bit and the popup.
         self.data_046eb &= 0xbf;
-        self.map_popup_ptr = 0;
+        self.map_popup = MapPanelRef::None;
         // = seg000:593e call set_zoomed_globe_pos_from_location (loc_05b55):
         //   centre on the marker location's +2/+4 map words.
         let li = location_index_from_ptr(marker);
@@ -941,10 +946,10 @@ impl GameState {
         // = seg000:5904 and data_046eb,0bfh.
         self.data_046eb &= 0xbf;
         // = seg000:5909..5917 clear whichever popup slot holds the panel.
-        if self.map_popup_ptr == MAP_POPUP_SPICE_OVERLAY {
-            self.map_popup_ptr = 0;
-        } else if self.map_popup2_ptr == MAP_POPUP_SPICE_OVERLAY {
-            self.map_popup2_ptr = 0;
+        if self.map_popup == MapPanelRef::SpiceOverlay {
+            self.map_popup = MapPanelRef::None;
+        } else if self.map_popup2 == MapPanelRef::SpiceOverlay {
+            self.map_popup2 = MapPanelRef::None;
         }
         // = seg000:5919 call troop_icons_update_dirty_rect — repaint the map
         //   under the panel.
@@ -1144,8 +1149,10 @@ impl GameState {
         //   seeds the overlay-open effect-6 flourish: the XOR outline grows
         //   from the portrait to the panel) and map_overlay_mode = 0 (the
         //   spice-density layer).
-        self.map_overlay_anim_src =
-            Some((self.map_contact_head_rect.x0, self.map_contact_head_rect.y0));
+        self.map_overlay_anim_src = Some((
+            self.map_troop_contact_head_panel.rect.x0,
+            self.map_troop_contact_head_panel.rect.y0,
+        ));
         self.map_overlay_mode = 0;
         // = seg000:8134 call map_enter_spice_density_overlay_in_place — the
         //   overlay comes up at the panel origin the contact popup staged,
@@ -1399,7 +1406,7 @@ impl GameState {
         // = seg000:82c1..82ca si = troop_contact_text_panel_record; call
         //   loc_0c551 — repaint the contact popup's panel outline on screen.
         self.set_screen_as_active_framebuffer();
-        let r = self.map_contact_popup_rect;
+        let r = self.map_troop_contact_text_panel.rect;
         self.draw_rect_outline(r.x0, r.y0, r.x1 - 1, r.y1 - 1, 0xf5);
         // = seg000:82cd/82d0 call contact_verb_troop; call loc_07be0 — for
         //   the live contact troop: a fresh resume cursor and the
@@ -1494,22 +1501,11 @@ impl GameState {
     fn map_show_rallied_troops_popup(&mut self) {
         // = seg000:5bb0 call set_screen_as_active_framebuffer.
         self.set_screen_as_active_framebuffer();
-        // = seg000:5bb3/5bb6 map_popup_ptr = data_0194a.
-        self.map_popup_ptr = MAP_POPUP_RALLIED;
-        // = seg000:5bba call loc_07b1b — fill the panel rect with its fill
-        //   colour ([rec+9] = 0xfb), then outline it in the frame colour
-        //   ([rec+8] = 0xf5) inset one pixel (loc_0c551 -> draw_rect_outline).
-        let r = RALLIED_POPUP_RECT;
-        gfx::vga_fill_rect(
-            self,
-            self.active_fb(),
-            r.x0 as u16,
-            r.y0 as u16,
-            r.x1 as u16,
-            r.y1 as u16,
-            0xfb,
-        );
-        self.draw_rect_outline(r.x0, r.y0, r.x1 - 1, r.y1 - 1, 0xf5);
+        // = seg000:5bb3/5bb6 si = data_0194a; map_popup_ptr = si — the record
+        //   is its own identity.
+        self.map_popup = self.data_0194a.popup;
+        // = seg000:5bba call loc_07b1b
+        self.map_draw_panel_record(self.data_0194a);
         // = seg000:5bbd call font_select_tall_font.
         self.font_select_tall_font();
         // = seg000:5bc0/5bc3 the title text.
@@ -1535,6 +1531,7 @@ impl GameState {
         // = seg000:5bd1..5be5 the pen: the panel origin + (10, 8); colour
         //   word 0x00f0 (fg 0xf0 on transparent bg).
         self.font_state.color = 0x00f0;
+        let r = self.data_0194a.rect;
         self.font_set_draw_position(r.x0 as u16 + 10, r.y0 as u16 + 8);
         self.font_draw_string(&text);
         // = seg000:5be8 jmp set_fb1_as_active_framebuffer.
@@ -1548,14 +1545,14 @@ impl GameState {
     // the rallied-troops title panel, close it and repaint the map beneath.
     pub(crate) fn map_close_rallied_troops_popup(&mut self) {
         // = seg000:5beb cmp map_popup_ptr,194ah; jnz ret.
-        if self.map_popup_ptr != MAP_POPUP_RALLIED {
+        if self.map_popup != MapPanelRef::Rallied {
             return;
         }
         // = seg000:5bf6/5bf8 xor si,si; xchg si,[map_popup_ptr].
-        self.map_popup_ptr = 0;
+        self.map_popup = MapPanelRef::None;
         // = seg000:5bfc call troop_icons_update_dirty_rect — repaint the map
         //   beneath the panel rect from the fb2 snapshot.
-        self.troop_icons_update_dirty_rect(RALLIED_POPUP_RECT);
+        self.troop_icons_update_dirty_rect(self.data_0194a.rect);
     }
 
     // = seg000:6314 map_draw_player_position_sprite — draw the "you are here"
@@ -1810,7 +1807,7 @@ impl GameState {
         //   ticks (~5 s) after game_clock_tick_base — the game loop re-stamps
         //   that on every mouse-button edge (seg000:d893), so the budget runs
         //   from the click that opened the view.
-        if self.map_popup_ptr == MAP_POPUP_RALLIED
+        if self.map_popup == MapPanelRef::Rallied
             && (self.game_ticks() as u16).wrapping_sub(self.game_clock_tick_base) >= 1000
         {
             // = seg000:5c19 call_restore_cursor; 5c1c the dismissal; 5c1f
@@ -1821,8 +1818,8 @@ impl GameState {
         }
         // = seg000:5c22..5c30 the rest only runs with the spice-density
         //   overlay panel open in either popup slot.
-        if self.map_popup_ptr != MAP_POPUP_SPICE_OVERLAY
-            && self.map_popup2_ptr != MAP_POPUP_SPICE_OVERLAY
+        if self.map_popup != MapPanelRef::SpiceOverlay
+            && self.map_popup2 != MapPanelRef::SpiceOverlay
         {
             return;
         }
@@ -1879,7 +1876,7 @@ impl GameState {
         //   spinners (loc_07e97, stubbed).
         if let Some(r) = self.map_open_popup_rect() {
             if r.in_rect(x, y) {
-                if self.map_popup_ptr == MAP_POPUP_SPICE_OVERLAY {
+                if self.map_popup == MapPanelRef::SpiceOverlay {
                     self.map_overlay_lmb();
                 }
                 return;
@@ -1887,8 +1884,8 @@ impl GameState {
         }
         // = seg000:5c95..5ca2 same for the secondary popup slot (loc_07eb8,
         //   stubbed).
-        if self.map_popup2_ptr != 0 {
-            if let Some(r) = self.map_popup_record_rect(self.map_popup2_ptr) {
+        if self.map_popup2 != MapPanelRef::None {
+            if let Some(r) = self.map_popup_record_rect(self.map_popup2) {
                 if r.in_rect(x, y) {
                     return;
                 }
@@ -1929,25 +1926,37 @@ impl GameState {
         }
     }
 
-    // = the open popup panel's rect (the record rect DOS reads through
-    // map_popup_ptr, e.g. seg000:5c7c rect_contains, loc_0c7d4): the
-    // rallied-troops title panel, the troop info panel, the location info
-    // panel, the troop contact dialogue panel or the spice-density overlay
-    // panel. None when no popup is up.
     pub(crate) fn map_open_popup_rect(&self) -> Option<Rect> {
-        self.map_popup_record_rect(self.map_popup_ptr)
+        self.map_popup_record_rect(self.map_popup)
     }
 
-    // = the popup record's rect field (the +0..+7 words at the pointer DOS
-    // keeps in map_popup_ptr / map_popup2_ptr).
-    pub(crate) fn map_popup_record_rect(&self, ptr: u16) -> Option<Rect> {
-        match ptr {
-            MAP_POPUP_RALLIED => Some(RALLIED_POPUP_RECT),
-            MAP_POPUP_TROOP_INFO => Some(self.map_info_panel_rect),
-            MAP_POPUP_LOCATION => Some(self.map_location_popup_rect),
-            MAP_POPUP_TROOP_CONTACT => Some(self.map_contact_popup_rect),
-            MAP_POPUP_SPICE_OVERLAY => Some(self.map_overlay_panel_rect),
-            _ => None,
+    pub(crate) fn map_panel_record(&self, panel: MapPanelRef) -> Option<PanelRecord> {
+        match panel {
+            MapPanelRef::None | MapPanelRef::SpiceOverlay => None,
+            MapPanelRef::LocationInfo => Some(self.map_location_info_panel),
+            MapPanelRef::TroopInfo => Some(self.map_troop_info_panel),
+            MapPanelRef::TroopContactText => Some(self.map_troop_contact_text_panel),
+            MapPanelRef::Loc01940 => Some(self.data_01940),
+            MapPanelRef::Rallied => Some(self.data_0194a),
+        }
+    }
+
+    fn map_panel_record_mut(&mut self, panel: MapPanelRef) -> Option<&mut PanelRecord> {
+        match panel {
+            MapPanelRef::None | MapPanelRef::SpiceOverlay => None,
+            MapPanelRef::LocationInfo => Some(&mut self.map_location_info_panel),
+            MapPanelRef::TroopInfo => Some(&mut self.map_troop_info_panel),
+            MapPanelRef::TroopContactText => Some(&mut self.map_troop_contact_text_panel),
+            MapPanelRef::Loc01940 => Some(&mut self.data_01940),
+            MapPanelRef::Rallied => Some(&mut self.data_0194a),
+        }
+    }
+
+    pub(crate) fn map_popup_record_rect(&self, panel: MapPanelRef) -> Option<Rect> {
+        match panel {
+            // The overlay panel's rect lives on its own, not in a record.
+            MapPanelRef::SpiceOverlay => Some(self.map_overlay_panel_rect),
+            other => self.map_panel_record(other).map(|p| p.rect),
         }
     }
 
@@ -1959,7 +1968,7 @@ impl GameState {
         // = seg000:5ce7 call open_onmap_resource.
         self.open_onmap_spritesheet();
         // = seg000:5cea..5cef a secondary popup open blocks the toggle.
-        if self.map_popup2_ptr != 0 {
+        if self.map_popup2 != MapPanelRef::None {
             return;
         }
         let x = self.mouse_pos_x as i16;
@@ -1967,11 +1976,11 @@ impl GameState {
         // = seg000:5cf1..5d02 with a popup open: only the info panel is
         //   toggleable — a click inside it closes it; any other open popup
         //   blocks; a click outside falls through to the icon hit-test.
-        if self.map_popup_ptr != 0 {
-            if self.map_popup_ptr != MAP_POPUP_TROOP_INFO {
+        if self.map_popup != MapPanelRef::None {
+            if self.map_popup != MapPanelRef::TroopInfo {
                 return;
             }
-            if self.map_info_panel_rect.in_rect(x, y) {
+            if self.map_troop_info_panel.rect.in_rect(x, y) {
                 // = seg000:5d02 jb loc_05d1a -> loc_079de.
                 self.map_close_troop_info_popup();
                 return;
@@ -2416,7 +2425,7 @@ impl GameState {
         self.map_contact_troop = Some(ti);
         // = seg000:79f2/79f8 call troop_find_icon; jnz loc_07a1e — without an
         //   icon on the map the record keeps whatever rect it last had.
-        let mut r = self.map_contact_popup_rect;
+        let mut r = self.map_troop_contact_text_panel.rect;
         let icon_pos = self
             .troop_find_icon(ti)
             .map(|i| (self.troop_icons[i].rect.x0, self.troop_icons[i].rect.y0));
@@ -2436,10 +2445,11 @@ impl GameState {
             //   (seg000:5c22, unported).
             self.map_overlay_panel_pos = (0x5c, if icon_y >= 0x4c { 0x1e } else { 0x0e });
         }
-        self.map_contact_popup_rect = r;
-        // = seg000:7a1e map_popup_ptr = si — this popup becomes the open one,
-        //   so a click inside it routes here, not to the map.
-        self.map_popup_ptr = MAP_POPUP_TROOP_CONTACT;
+        self.map_troop_contact_text_panel.rect = r;
+        // = seg000:7a1e map_popup_ptr = si — si is still the text panel
+        //   record, so this popup becomes the open one and a click inside it
+        //   routes here, not to the map.
+        self.map_popup = self.map_troop_contact_text_panel.popup;
         // = seg000:7a22/7a24 al = 2; call loc_07b0f — data_046d8 = 0, then the
         //   popup's open effect (run_vga_effect al=2 = xor_bracket_zoom_to_panel,
         //   ds:si = the icon rect after the xchg): the XOR box trail from the
@@ -2450,8 +2460,8 @@ impl GameState {
         if let Some(src) = icon_pos {
             self.xor_bracket_zoom_to_panel(r, src);
         }
-        // = the panel fill (0xfb) + frame (0xf5) from the record.
-        self.map_draw_panel_record(r, 0xfb, 0xf5);
+        // = seg000:7a67 loc_07b1b — the panel fill + frame from the record.
+        self.map_draw_panel_record(self.map_troop_contact_text_panel);
         // = seg000:7a32..7a50 the subtitle descriptor's origin (the panel
         //   origin + (0x49, 3)) and the popup's own text insets.
         self.map_contact_subtitle_pos = (r.x0 + 0x49, r.y0 + 3);
@@ -2462,8 +2472,8 @@ impl GameState {
         // = seg000:7a53..7a67 data_018f3 = the head box, the panel origin +
         //   (4, 3) and 0x3d square, filled 0xe4 and framed 0xf5.
         let head = rect(r.x0 + 4, r.y0 + 3, r.x0 + 4 + 0x3d, r.y0 + 3 + 0x3d);
-        self.map_contact_head_rect = head;
-        self.map_draw_panel_record(head, 0xe4, 0xf5);
+        self.map_troop_contact_head_panel.rect = head;
+        self.map_draw_panel_record(self.map_troop_contact_head_panel);
         // = seg000:7a6a..7b0c the head itself.
         self.map_draw_troop_contact_head(ti, head);
         // = seg000:7b0c jmp open_onmap_resource.
@@ -2529,10 +2539,9 @@ impl GameState {
         }
     }
 
-    // = seg000:7b1b loc_07b1b — paint a panel record: fill its rect with the
-    // record's fill colour ([rec+9]) and outline it one pixel in from the edge
-    // in its frame colour ([rec+8], loc_0c551).
-    pub(crate) fn map_draw_panel_record(&mut self, r: Rect, fill: u8, frame: u8) {
+    // = seg000:7b1b
+    pub(crate) fn map_draw_panel_record(&mut self, p: PanelRecord) {
+        let r = p.rect;
         gfx::vga_fill_rect(
             self,
             self.active_fb(),
@@ -2540,9 +2549,9 @@ impl GameState {
             r.y0 as u16,
             r.x1 as u16,
             r.y1 as u16,
-            fill,
+            p.fill_color,
         );
-        self.draw_rect_outline(r.x0, r.y0, r.x1 - 1, r.y1 - 1, frame);
+        self.draw_rect_outline(r.x0, r.y0, r.x1 - 1, r.y1 - 1, p.frame_color);
     }
 
     // = seg000:9719 map_present_troop_contact_line — pick and present one
@@ -2924,11 +2933,11 @@ impl GameState {
         // = seg000:7b8f..7b97 si = troop_contact_text_panel_record; clear
         //   map_popup_ptr and the dialogue resume cursor: the next contact
         //   starts its record over.
-        self.map_popup_ptr = 0;
+        self.map_popup = MapPanelRef::None;
         self.dialogue_resume_entry_ptr = 0;
         // = seg000:7b9a call troop_icons_update_dirty_rect — repaint the map
         //   and its icons over the popup's rect.
-        let r = self.map_contact_popup_rect;
+        let r = self.map_troop_contact_text_panel.rect;
         self.troop_icons_update_dirty_rect(r);
         // = seg000:7b9d/7b9f al = 4; call loc_07b2b — the popup's close effect
         //   (run_vga_effect al=4 = xor_bracket_zoom_from_panel) unless data_046d8
@@ -3065,9 +3074,9 @@ impl GameState {
             let r = self.troop_icons[icon_index].rect;
             (r.x0, r.y0)
         };
-        // = data_018df: fill 0xf0 (+9), frame 0xfb (+8).
-        self.map_info_panel_rect =
-            self.map_place_popup_panel(MAP_POPUP_TROOP_INFO, ix, iy, 0x64, 0xf0, 0xfb);
+        // = data_018df, the record's own colours; the placement writes its
+        //   rect.
+        self.map_place_popup_panel(MapPanelRef::TroopInfo, ix, iy, 0x64);
         // = seg000:78e4/78e6 data_01955 = the id (not modelled); falls into
         //   loc_078e9 — the panel content.
         self.map_draw_troop_info_panel_content(ti);
@@ -3079,53 +3088,35 @@ impl GameState {
         }
     }
 
-    // = seg000:5f25 loc_05f25 — place a popup panel record next to an icon /
-    // marker at (x, y): 106 px wide, `h` tall, vertically centred and clamped
-    // into the map window; on the right at x+15 unless that crosses x 210,
-    // then 130 px to the left. Registers the panel as map_popup_ptr, draws
-    // the comm-glow pointer arrow (not modelled) and the panel fill + frame,
-    // and returns the rect. `popup_id`/`fill`/`frame` come from the record
-    // (data_018df for the troop info panel, data_01668 for the location one).
-    fn map_place_popup_panel(
-        &mut self,
-        popup_id: u16,
-        x: i16,
-        y: i16,
-        h: i16,
-        fill: u8,
-        frame: u8,
-    ) -> Rect {
+    // = seg000:5f25 loc_05f25 — place the referenced popup panel record next
+    // to an icon / marker at (x, y): 106 px wide, `h` tall, vertically centred
+    // and clamped into the map window; on the right at x+15 unless that
+    // crosses x 210, then 130 px to the left.
+    fn map_place_popup_panel(&mut self, panel: MapPanelRef, x: i16, y: i16, h: i16) {
         // = seg000:5f29..5f42 the vertical clamp [4, 0x94 - h].
-        let py = (y - h / 2).clamp(4, 0x94 - h);
+        let py = (y - h / 2).clamp(4, 148 - h);
         // = seg000:5f42..5f4f the side pick.
-        let mut px = x + 0x0f;
-        if px >= 0xd2 {
-            px -= 0x82;
+        let mut px = x + 16;
+        if px >= 210 {
+            px -= 130;
         }
-        // = seg000:5f4f..5f5f the record rect (width 0x6a) + map_popup_ptr.
-        let r = rect(px, py, px + 0x6a, py + h);
-        self.map_popup_ptr = popup_id;
-        // = seg000:5f65..5f76 store the source point (the icon / marker
-        //   position, less 10) and the panel rect for the outline animation,
-        //   clear the suppress flag (data_046d8 = 0), then run the outline
-        //   scale-in (effect al=6, xor_rect_outline_advance).
+        // = seg000:5f4f..5f5c
+        let Some(record) = self.map_panel_record_mut(panel) else {
+            return;
+        };
+        record.rect = rect(px, py, px + 106, py + h);
+        let p = *record;
+        let r = p.rect;
+        // = seg000:5f5f mov [map_popup_ptr], si
+        self.map_popup = p.popup;
+        // = seg000:5f65..5f76
         self.map_popup_anim_src = (x, y);
         self.map_popup_anim_rect = r;
         self.map_popup_anim_suppress = false;
         self.animate_popup_outline(false);
         // = seg000:7b1b loc_07b1b — the panel fill + frame (fill [rec+9],
         //   frame [rec+8]).
-        gfx::vga_fill_rect(
-            self,
-            self.active_fb(),
-            r.x0 as u16,
-            r.y0 as u16,
-            r.x1 as u16,
-            r.y1 as u16,
-            fill,
-        );
-        self.draw_rect_outline(r.x0, r.y0, r.x1 - 1, r.y1 - 1, frame);
-        r
+        self.map_draw_panel_record(p);
     }
 
     // The popup's outline scale animation (effects al=6 / al=8,
@@ -3308,19 +3299,12 @@ impl GameState {
         self.troop_prepare_troop_data_for_condit(ti);
         self.string_subst_id_table[4] += 0xc;
         // = seg000:78fc/78ff the panel fill + frame again (the refresh entry).
-        let r = self.map_info_panel_rect;
-        gfx::vga_fill_rect(
-            self,
-            self.active_fb(),
-            r.x0 as u16,
-            r.y0 as u16,
-            r.x1 as u16,
-            r.y1 as u16,
-            0xf0,
-        );
-        self.draw_rect_outline(r.x0, r.y0, r.x1 - 1, r.y1 - 1, 0xfb);
+        let panel = self.map_troop_info_panel;
+        let r = panel.rect;
+        self.map_draw_panel_record(panel);
         // = seg000:7902 the small font; 7905..7916 the header pen (x0+12,
-        //   y0+4), colour 0x9a on the panel fill 0xf0 (ch = [data_018e8]).
+        //   y0+4), fg 0x9a over the panel's own fill colour (ch =
+        //   [data_018e8], the record's +9 byte).
         self.font_select_small_font();
         let header_x = (r.x0 + 12) as u16;
         let mut y = (r.y0 + 4) as u16;
@@ -3332,14 +3316,14 @@ impl GameState {
         } else {
             cmd::SETTLED_IN
         };
-        self.map_draw_interp_string(hdr, 0xf09a, header_x, y);
+        self.map_draw_interp_string(hdr, panel.text_color(0x9a), header_x, y);
         // = seg000:7929 sub dx,8 — the pen drops to x0+4 for the location
         //   name AND stays there for every following line.
         let x0 = header_x - 8;
         // = seg000:7927..7933 the location name at (x0+4, y+9), colour 0x96.
         y += 9;
         let li = location_index_from_ptr(self.troops[ti].offset_of_location);
-        self.draw_location_name(li, 0xf096, x0, y);
+        self.draw_location_name(li, panel.text_color(0x96), x0, y);
         // = seg000:7936..7938 back to 0x9a; y += 10.
         y += 10;
         if occ & 0x20 != 0 {
@@ -3350,12 +3334,12 @@ impl GameState {
             } else {
                 cmd::CAPTURED
             };
-            self.map_draw_interp_string(id, 0xf09a, x0, y);
+            self.map_draw_interp_string(id, panel.text_color(0x9a), x0, y);
             y += 0x11;
         } else {
             // = seg000:794c..794f the troop line: the 0x84 occupation caption
             //   (subst id 4) then "N men  Motiv. N%".
-            self.map_draw_interp_string(cmd::MEN_AND_MOTIVATION, 0xf09a, x0, y);
+            self.map_draw_interp_string(cmd::MEN_AND_MOTIVATION, panel.text_color(0x9a), x0, y);
             y += 0x0f;
             // = seg000:7955 occupation 2 skips the caption + status lines.
             if occ != 2 {
@@ -3366,7 +3350,12 @@ impl GameState {
                 //   troop_prepare_troop_data_for_condit.
                 let idx = 6 + (((occ & 0x0f) >> 2) & 3) as usize;
                 let phrase = self.string_subst_id_table[idx];
-                self.font_draw_phrase_or_command_string_with_color_at_pos(phrase, 0xf09a, x0, y);
+                self.font_draw_phrase_or_command_string_with_color_at_pos(
+                    phrase,
+                    panel.text_color(0x9a),
+                    x0,
+                    y,
+                );
                 y += 10;
                 // = seg000:7971..79b9 the status line (stationed troops only).
                 if occ & 0x40 == 0 {
@@ -3388,7 +3377,7 @@ impl GameState {
                         0
                     };
                     if id != 0 {
-                        self.map_draw_interp_string(id, 0xf09a, x0, y);
+                        self.map_draw_interp_string(id, panel.text_color(0x9a), x0, y);
                         y += 0x11;
                     }
                 }
@@ -3396,13 +3385,18 @@ impl GameState {
         }
         // = seg000:79bc..79c7 the "Equipment:" header, colour 0x96.
         y += 4;
-        self.font_draw_phrase_or_command_string_with_color_at_pos(cmd::EQUIPMENT, 0xf096, x0, y);
+        self.font_draw_phrase_or_command_string_with_color_at_pos(
+            cmd::EQUIPMENT,
+            panel.text_color(0x96),
+            x0,
+            y,
+        );
         y += 8;
         // = seg000:79ca..79d8 the equipment icon row: troop_unpack_equipment_
         //   flags (bitmask -> 0/1 per type) into the row, bottom = panel y1.
         let mask = self.troops[ti].equipment;
         let flags = std::array::from_fn(|slot| u8::from(mask & (0x80 >> slot) != 0));
-        let bottom = self.map_info_panel_rect.y1;
+        let bottom = self.map_troop_info_panel.rect.y1;
         self.map_draw_equipment_columns(&flags, bottom, x0 as i16, y as i16);
     }
 
@@ -3478,8 +3472,8 @@ impl GameState {
         //   map_popup_ptr, repaint the map under the panel, then the outline
         //   scale-out (loc_07b2b, effect al=8) unless suppressed.
         self.set_fb1_as_active_framebuffer();
-        self.map_popup_ptr = 0;
-        let r = self.map_info_panel_rect;
+        self.map_popup = MapPanelRef::None;
+        let r = self.map_troop_info_panel.rect;
         self.troop_icons_update_dirty_rect(r);
         if !self.map_popup_anim_suppress {
             self.animate_popup_outline(true);
@@ -3555,18 +3549,23 @@ impl GameState {
             self.active_fb = saved;
             return;
         }
-        let r = self.map_location_popup_rect;
+        let r = self.map_location_info_panel.rect;
         // = seg000:601a..6034 the location type header (0x9a) at (x0+12, y0+4)
         //   and the name (0x96) at (x0+4, +9).
         self.font_select_tall_font();
         let hx = (r.x0 + 12) as u16;
         let ty = (r.y0 + 4) as u16;
-        self.draw_string_location_type(li, 0x109a, hx, ty);
-        self.draw_location_name(li, 0x1096, hx - 8, ty + 9);
+        let panel = self.map_location_info_panel;
+
+        println!("panel: {panel:?}");
+
+        self.draw_string_location_type(li, panel.text_color(0x9a), hx, ty);
+        self.draw_location_name(li, panel.text_color(0x96), hx - 8, ty + 9);
         // = seg000:603f..6056 the class dispatch: class 2 (Atreides /
         //   undiscovered / plain) shows only the header; class 0 with the
         //   Paul-events 0x20 water flag draws the water/spice extra first.
         let class = self.location_class(li);
+        println!("map_draw_location_popup: class={class:02x}");
         if class != 2 {
             if self.bitfield_paul_events & 0x20 != 0 && class == 0 {
                 // = seg000:6052 call location_0605c — the water/spice line;
@@ -3600,15 +3599,15 @@ impl GameState {
         // = seg000:5eec/5ef1 the class + its panel height [class+11d0h].
         let class = self.location_class(li);
         self.map_location_popup_class = class + 1;
-        const HEIGHTS: [i16; 4] = [0x58, 0x3c, 0x1e, 0];
+        const HEIGHTS: [i16; 4] = [88, 60, 30, 0];
         let h = HEIGHTS[(class as usize).min(3)];
         // = seg000:5f1b..5f23 the marker position; bh sign-bit off-window bail.
         if m.y < 0 {
             return false;
         }
-        // = data_01668: fill 0x10 (+9), frame 0xf8 (+8).
-        self.map_location_popup_rect =
-            self.map_place_popup_panel(MAP_POPUP_LOCATION, m.x, m.y, h, 0x10, 0xf8);
+        // = location_info_panel_record's own colours; the placement writes its
+        //   rect.
+        self.map_place_popup_panel(MapPanelRef::LocationInfo, m.x, m.y, h);
         true
     }
 
@@ -3619,7 +3618,8 @@ impl GameState {
     fn map_draw_location_equipment_or_battle(&mut self, li: usize) {
         self.open_onmap_spritesheet();
         self.font_select_tall_font();
-        let r = self.map_location_popup_rect;
+        let panel = self.map_location_info_panel;
+        let r = panel.rect;
         let x0 = (r.x0 + 4) as u16;
         // = seg000:60b8 bx += 0xc — the section sits a header-height below the
         //   name; the port derives the pen from the panel top.
@@ -3629,7 +3629,7 @@ impl GameState {
             //   location's own equipment counts (record +0x14), bottom = y1.
             self.font_draw_phrase_or_command_string_with_color_at_pos(
                 cmd::EQUIPMENT,
-                0xf09a,
+                panel.text_color(0x9a),
                 x0,
                 y,
             );
@@ -3647,7 +3647,12 @@ impl GameState {
         } else {
             // = seg000:60d6..60f5 "Battle:" then the battle gauge sprite
             //   (0x8e + (gauge + 0xf) >> 5) at (x0+0x2f, y+6).
-            self.font_draw_phrase_or_command_string_with_color_at_pos(cmd::BATTLE, 0xf09a, x0, y);
+            self.font_draw_phrase_or_command_string_with_color_at_pos(
+                cmd::BATTLE,
+                panel.text_color(0x9a),
+                x0,
+                y,
+            );
             let gauge = self.location_battle_gauge(li);
             let sprite = 0x8e + ((gauge as u16 + 0x0f) >> 5);
             let clip = self.map_view_clip_rect();
@@ -3664,27 +3669,35 @@ impl GameState {
         }
     }
 
-    // = seg000:6252 location_06252 — the location's popup class (0 full,
-    // 1 battle, 2 header-only). Battle present -> 1; Atreides -> 2; else keyed
-    // on the location-type string (type 3 -> 0, type 2 -> 1, else 2);
-    // undiscovered (status bit 4 clear) or no type -> 2.
+    // = seg000:6252 location_popup_class — the location's popup class (0 full,
+    // 1 battle, 2 header-only), which indexes troop_icon_panel_heights for the
+    // panel height. Battle present -> 1; not friendly -> 2; friendly but
+    // undiscovered -> 2; else keyed on the location-type string offset (a
+    // sietch or a fort -> 0, a village -> 1, the palaces -> 2).
     fn location_class(&mut self, li: usize) -> u8 {
-        // = seg000:6252 call location_0627e; jb -> class 1.
+        // = seg000:6252 call location_has_battle; 6255 jb -> class 1.
         if self.location_has_battle(li) {
             return 1;
         }
-        // = seg000:6257 Atreides -> class 2.
-        if self.location_is_atreides(li) {
+        // = seg000:625a mov ax,2; 625d jb loc_06260 — the `jb` continues only
+        //   for a friendly location (carry set), so a hostile one returns the
+        //   2 at 625f. Only a friendly location can show more than a header.
+        if !self.location_is_atreides(li) {
             return 2;
         }
-        // = seg000:6260 status bit 4 (discovered) clear -> class 2.
+        // = seg000:6260/6264 test status,10h; jz loc_0627d — undiscovered
+        //   returns the same 2 still in ax.
         if self.locations[li].status & 0x10 == 0 {
             return 2;
         }
-        // = seg000:6266..6278 keyed on the location-type string offset.
+        // = seg000:6266..6278 keyed on the location-type string offset. A
+        //   sietch is offset 0, and 6269 `or ax,ax; jz loc_0627d` returns the
+        //   zero already in ax — a discovered sietch is class 0, not the 2 the
+        //   earlier exits carry. A fort (3) takes the explicit 6271 xor to 0, a
+        //   village (2) falls into the class-1 tail at 627a, and the palaces
+        //   keep the al = 2 from 6276.
         match self.get_location_type_string_offset(li) {
-            0 => 2,
-            3 => 0,
+            0 | 3 => 0,
             2 => 1,
             _ => 2,
         }
@@ -3765,8 +3778,8 @@ impl GameState {
         //   map_popup_ptr, repaint the map under the panel, then the outline
         //   scale-out (loc_07b2b, effect al=8) unless suppressed.
         self.set_fb1_as_active_framebuffer();
-        self.map_popup_ptr = 0;
-        let r = self.map_location_popup_rect;
+        self.map_popup = MapPanelRef::None;
+        let r = self.map_location_info_panel.rect;
         self.troop_icons_update_dirty_rect(r);
         if !self.map_popup_anim_suppress {
             self.animate_popup_outline(true);
@@ -3865,6 +3878,7 @@ mod tests {
         dat_file::DatFile,
         gfx,
         menu_defs::{CMD_GREY, MenuRef},
+        troop_map_screen::MapPanelRef,
     };
 
     // SEE DUNE MAP from the room screen: the full-planet map renders into the
@@ -3946,11 +3960,11 @@ mod tests {
         // The rallied-troops popup stays up across idle passes until 1000
         // ticks after game_clock_tick_base (stamped by the room present and
         // by every button edge in the live loop).
-        assert_eq!(game.map_popup_ptr, super::MAP_POPUP_RALLIED, "popup open");
+        assert_eq!(game.map_popup, MapPanelRef::Rallied, "popup open");
         game.dune_map_mouse_idle();
         assert_eq!(
-            game.map_popup_ptr,
-            super::MAP_POPUP_RALLIED,
+            game.map_popup,
+            MapPanelRef::Rallied,
             "popup survives an early idle pass"
         );
         // Simulate the timeout by rewinding the stamp: the next idle pass
@@ -3958,7 +3972,8 @@ mod tests {
         game.game_clock_tick_base = (game.game_ticks() as u16).wrapping_sub(1000);
         game.dune_map_mouse_idle();
         assert_eq!(
-            game.map_popup_ptr, 0,
+            game.map_popup,
+            MapPanelRef::None,
             "popup auto-dismissed after 1000 ticks"
         );
 
@@ -3993,14 +4008,18 @@ mod tests {
         game.mouse_pos_x = 207;
         game.mouse_pos_y = 29;
         game.dune_map_mouse_rmb();
-        assert_eq!(game.map_popup_ptr, 0, "no popup for an unrallied troop");
+        assert_eq!(
+            game.map_popup,
+            MapPanelRef::None,
+            "no popup for an unrallied troop"
+        );
         // RMB over the rallied worker icon opens the troop info panel.
         game.mouse_pos_x = 241;
         game.mouse_pos_y = 145;
         game.dune_map_mouse_rmb();
         assert_eq!(
-            game.map_popup_ptr,
-            super::MAP_POPUP_TROOP_INFO,
+            game.map_popup,
+            MapPanelRef::TroopInfo,
             "the troop info panel is open"
         );
         assert_eq!(game.map_info_popup_troop, Some(0));
@@ -4026,7 +4045,11 @@ mod tests {
             .unwrap();
         // A second RMB on the same icon toggles the panel closed.
         game.dune_map_mouse_rmb();
-        assert_eq!(game.map_popup_ptr, 0, "the info panel toggled closed");
+        assert_eq!(
+            game.map_popup,
+            MapPanelRef::None,
+            "the info panel toggled closed"
+        );
         assert_eq!(game.map_info_popup_troop, None);
         // LMB on the icon selects the troop: data_01954 + the rotating
         // highlight ring in the focused slot (flag 0x40, on top).
@@ -4061,7 +4084,7 @@ mod tests {
             Some(11),
             "the location popup is open"
         );
-        assert_eq!(game.map_popup_ptr, super::MAP_POPUP_LOCATION);
+        assert_eq!(game.map_popup, MapPanelRef::LocationInfo);
         assert_eq!(
             game.get_active_menu_ref(),
             MenuRef::MenuGoThereFlyingAnOrni,
@@ -4081,7 +4104,7 @@ mod tests {
         game.menu_callback_choice_exit_menu(0xa3, 0);
         while rx.try_recv().is_ok() {}
         assert_eq!(game.map_location_popup_loc, None, "location popup closed");
-        assert_eq!(game.map_popup_ptr, 0);
+        assert_eq!(game.map_popup, MapPanelRef::None);
         assert_eq!(
             game.get_active_menu_ref(),
             MenuRef::MenuMapTroops,
@@ -4094,7 +4117,7 @@ mod tests {
         game.current_room = 0x0a; // data_00008 is already 0x20
         game.dune_map_mouse_lmb();
         assert_eq!(game.map_location_popup_loc, Some(11), "the panel is open");
-        assert_eq!(game.map_popup_ptr, super::MAP_POPUP_LOCATION);
+        assert_eq!(game.map_popup, MapPanelRef::LocationInfo);
         assert_eq!(
             game.get_active_menu_ref(),
             MenuRef::MenuMapTroops,
@@ -4104,7 +4127,7 @@ mod tests {
 
         // A click INSIDE the open panel does not dismiss it (it routes to the
         // panel, whose controls are stubbed).
-        let pr = game.map_location_popup_rect;
+        let pr = game.map_location_info_panel.rect;
         game.mouse_pos_x = ((pr.x0 + pr.x1) / 2) as u16;
         game.mouse_pos_y = ((pr.y0 + pr.y1) / 2) as u16;
         game.dune_map_mouse_lmb();
@@ -4133,7 +4156,7 @@ mod tests {
             game.map_location_popup_loc, None,
             "a click on empty map space dismisses the popup"
         );
-        assert_eq!(game.map_popup_ptr, 0);
+        assert_eq!(game.map_popup, MapPanelRef::None);
         while rx.try_recv().is_ok() {}
 
         // Scroll one step north (the alt nav panel's up arrow, live only
@@ -4519,7 +4542,7 @@ mod tests {
         game.menu_callback_choice_map_main_see_spice_density(cmd::SEE_SPICE_DENSITY, 0);
         while rx.try_recv().is_ok() {}
         assert_ne!(game.data_046eb & 0x40, 0, "the overlay is up");
-        assert_eq!(game.map_popup_ptr, super::MAP_POPUP_SPICE_OVERLAY);
+        assert_eq!(game.map_popup, MapPanelRef::SpiceOverlay);
         let (ox, oy) = game.map_overlay_panel_pos;
         let yoff = game.y_offset;
         assert_eq!(game.map_overlay_hover_tick, 0xff, "no legend tick yet");
@@ -5024,13 +5047,16 @@ mod tests {
         // (troop 1's icon sits in the lower half, so the popup takes the top),
         // and one dialogue line has been presented into it.
         assert_eq!(game.map_contact_troop, Some(0), "the popup is troop 1's");
-        assert_eq!(game.map_popup_ptr, super::MAP_POPUP_TROOP_CONTACT);
+        assert_eq!(game.map_popup, MapPanelRef::TroopContactText);
         assert_eq!(
-            game.map_contact_popup_rect,
+            game.map_troop_contact_text_panel.rect,
             crate::rect::rect(5, 5, 232, 72),
             "the popup takes the half the icon is not in"
         );
-        assert_eq!(game.map_contact_head_rect, crate::rect::rect(9, 8, 70, 69));
+        assert_eq!(
+            game.map_troop_contact_head_panel.rect,
+            crate::rect::rect(9, 8, 70, 69)
+        );
         assert_ne!(game.current_subtitle_id, 0, "a line was presented");
         assert_ne!(
             game.dialogue_resume_entry_ptr, 0,
@@ -5047,7 +5073,7 @@ mod tests {
             Some(0x0f),
             "the generic Fremen head speaks for the troop"
         );
-        let box_rect = game.map_contact_head_rect;
+        let box_rect = game.map_troop_contact_head_panel.rect;
         let head_pixels = (box_rect.y0 + 1..box_rect.y1 - 1)
             .flat_map(|y| (box_rect.x0 + 1..box_rect.x1 - 1).map(move |x| (x, y)))
             .filter(|&(x, y)| game.screen.get(x as u16, (y + yoff as i16) as u16) != 0xe4)

@@ -8,7 +8,7 @@
 //! dispatch through `hit_test_ui_elements` + `dispatch_ui_click` from the
 //! game loop's LMB press path (game_loop_dispatch_lmb_press).
 
-use crate::{GameState, Rect, gfx, mouse::CursorShapeId};
+use crate::{GameState, MapPanelRef, Rect, gfx, mouse::CursorShapeId};
 
 const UI_ELEMENT_CLEAR_FLAG: u16 = 0x40;
 const UI_ELEMENT_SKIP_SPRITE_FLAG: u16 = 0x20;
@@ -749,8 +749,8 @@ impl GameState {
         self.troop_icon_focused = [None; 2];
         self.visible_location_markers.clear();
         // = seg000:5af0/5af3 map_popup_ptr / map_popup2_ptr = 0.
-        self.map_popup_ptr = 0;
-        self.map_popup2_ptr = 0;
+        self.map_popup = MapPanelRef::None;
+        self.map_popup2 = MapPanelRef::None;
         // The map popup gates cleared with the view (data_046f8/046fa).
         self.map_location_popup_loc = None;
         self.map_info_popup_troop = None;
