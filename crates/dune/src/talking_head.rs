@@ -1090,6 +1090,9 @@ impl GameState {
     // draws the matching speech frame (last animation, frame = mouth value).
     // When the clip's audio finishes the head reverts to idle.
     pub(crate) fn tick_talking_head_voc(&mut self) {
+        if !self.voc_pcm_playing {
+            return;
+        }
         // The mouth stream is stepped one value per SAMPLES_PER_LIP_FRAME of
         // audio, read off the PCM sample clock so it stays locked to what is
         // actually being heard.
