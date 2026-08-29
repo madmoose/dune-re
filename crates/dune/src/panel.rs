@@ -23,9 +23,9 @@ pub enum MapPanelRef {
     TroopInfo,
     /// = seg001:18e9 troop_contact_text_panel_record (seg000:7a1e).
     TroopContactText,
-    /// = seg001:1940 data_01940 (seg000:7de2) — the second slot only, from
-    /// leaf_fn_07dd9, which the port does not reach yet.
-    Loc01940,
+    /// = seg001:1940 map_equipment_location_strip (seg000:7de2) — the MODIFY EQUIPMENT
+    /// location strip, the second slot only (map_place_equipment_panels).
+    EquipmentLocationStrip,
     /// = seg001:194a data_0194a, the rallied-troops title popup (seg000:5bb6).
     Rallied,
     /// = seg001:4710 data_04710, the spice-density overlay panel: it takes the

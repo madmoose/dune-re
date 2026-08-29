@@ -973,11 +973,14 @@ pub struct GameState {
     // = seg001:18f3
     pub(crate) map_troop_contact_head_panel: PanelRecord,
 
-    // = seg001:1936
-    pub(crate) data_01936: PanelRecord,
+    // = seg001:1936 map_equipment_troop_row_box — the MODIFY EQUIPMENT troop-row box inside
+    // the contact popup; map_place_equipment_panels places it. Never in a popup slot.
+    pub(crate) map_equipment_troop_row_box: PanelRecord,
 
-    // = seg001:1940
-    pub(crate) data_01940: PanelRecord,
+    // = seg001:1940 map_equipment_location_strip — the MODIFY EQUIPMENT location strip
+    // (the location's unused equipment), placed by map_place_equipment_panels and held
+    // by the second popup slot while the spinners are up.
+    pub(crate) map_equipment_location_strip: PanelRecord,
 
     // = seg001:194a
     pub(crate) data_0194a: PanelRecord,
@@ -1452,6 +1455,19 @@ pub struct GameState {
     // line is presented with no popup up.
     pub(crate) map_contact_troop_pending: Option<usize>,
 
+    // = seg001:46f4 map_troop_equipment_row_up — 1 while the contact popup shows the troop's
+    // equipment row (a line whose event armed the hand-over drew it,
+    // seg000:7c47); map_open_troop_contact_dialogue,
+    // map_close_troop_contact_popup and troop_equipment_changed clear it.
+    pub(crate) map_troop_equipment_row_up: u8,
+
+    // = seg001:46f5 map_modify_equipment_mode — 1 while the MODIFY EQUIPMENT spinner
+    // sub-mode is up (menu_callback_choice_map_troop_dialogue_modify_
+    // equipment pushes the DONE strip; its cleanup map_modify_equipment_done
+    // clears it). Routes the popup clicks to the spinners and makes any other
+    // map click DONE.
+    pub(crate) map_modify_equipment_mode: u8,
+
     // = seg001:46f3 map_view_reentry_count — counts map-view re-entries within
     // one visit (loc_05a03 increments it when a troop dialogue path re-opens
     // the view); reset_room_scene_state zeroes it. While 0,
@@ -1484,6 +1500,21 @@ pub struct GameState {
 
     // = seg001:46ff
     pub(crate) available_equipment: Equipment,
+
+    // = seg001:4705 troop_equipment_flags_location_style_ds_4705 — a troop's
+    // equipment as 7 per-type 0/1 bytes (harvesters .. bulbs), the row the
+    // troop info panel draws and the MODIFY EQUIPMENT spinners edit; packed
+    // back by troop_update_troop_equipment_from_location_style_equipment.
+    pub(crate) troop_equipment_flags: [u8; 7],
+
+    // = seg001:4c60 the GLOBDATA-slot scratch draw_equipment_row fills: per
+    // equipment column the [x0, x1) it drew, for the spinner click test
+    // (equipment_column_at); (0, 0) for a column it did not draw.
+    pub(crate) map_equipment_column_x_ranges: [(i16, i16); 7],
+
+    // = seg001:4c7c map_equipment_troop_column_x_ranges — the troop row's copy of the scratch
+    // (seg000:7d1e), taken before the location row overwrites it.
+    pub(crate) map_equipment_troop_column_x_ranges: [(i16, i16); 7],
 
     // = seg001:4710/4712 data_04710/data_04712 — the shared popup-panel
     // origin the spice-density overlay draws at, and its rect (the rect
@@ -2492,8 +2523,8 @@ impl GameState {
             map_troop_info_panel: crate::troop_map_screen::TROOP_INFO_PANEL,
             map_troop_contact_text_panel: crate::troop_map_screen::TROOP_CONTACT_POPUP_PANEL,
             map_troop_contact_head_panel: crate::troop_map_screen::TROOP_CONTACT_HEAD_PANEL,
-            data_01936: crate::troop_map_screen::LOC_01936,
-            data_01940: crate::troop_map_screen::LOC_01940,
+            map_equipment_troop_row_box: crate::troop_map_screen::EQUIPMENT_TROOP_ROW_BOX,
+            map_equipment_location_strip: crate::troop_map_screen::EQUIPMENT_LOCATION_STRIP,
             data_0194a: crate::troop_map_screen::RALLIED_POPUP_PANEL,
             map_selected_troop_id: 0,
             map_last_selected_troop_id: 0,
@@ -2610,6 +2641,8 @@ impl GameState {
             spice_density_overlay_dirty: 0,
             current_main_view_drawing_function: None,
             map_contact_troop: None,
+            map_troop_equipment_row_up: 0,
+            map_modify_equipment_mode: 0,
             map_contact_troop_pending: None,
             map_view_reentry_count: 0,
             troop_icon_anim_phase: 0,
@@ -2618,6 +2651,9 @@ impl GameState {
             map_info_popup_troop: None,
             data_046fc: 0,
             available_equipment: Equipment::default(),
+            troop_equipment_flags: [0; 7],
+            map_equipment_column_x_ranges: [(0, 0); 7],
+            map_equipment_troop_column_x_ranges: [(0, 0); 7],
             map_overlay_panel_pos: (0, 0),
             map_overlay_panel_rect: Rect::default(),
             prospector_pick_queue: [0; 4],

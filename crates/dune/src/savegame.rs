@@ -297,6 +297,9 @@ impl GameState {
         w8(b, 0x003a, tc.ecology_skill);
         w8(b, 0x003b, tc.equipment);
         w8(b, 0x003c, tc.population);
+        w8(b, 0x003d, tc.equipment_added_by_modify);
+        w8(b, 0x003e, tc.equipment_removed_by_modify);
+        w8(b, 0x003f, tc.paul_orni_given);
         w8(b, 0x0040, tc.days_since_ralliement);
         w8(b, 0x0041, tc.game_days_since_ralliement);
         w16(b, 0x0042, tc.time_periods_since_ralliement);
@@ -565,6 +568,9 @@ impl GameState {
         tc.ecology_skill = r8(b, 0x003a);
         tc.equipment = r8(b, 0x003b);
         tc.population = r8(b, 0x003c);
+        tc.equipment_added_by_modify = r8(b, 0x003d);
+        tc.equipment_removed_by_modify = r8(b, 0x003e);
+        tc.paul_orni_given = r8(b, 0x003f);
         tc.days_since_ralliement = r8(b, 0x0040);
         tc.game_days_since_ralliement = r8(b, 0x0041);
         tc.time_periods_since_ralliement = r16(b, 0x0042);

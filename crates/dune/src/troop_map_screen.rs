@@ -33,8 +33,7 @@
 //!
 //! Still stubbed here: ESPIONAGE / ATTACK / GO & SEARCH FOR EQUIPMENT, which
 //! also MOVE the troop through the unported troop-command core
-//! (troop_location_082da / 084a6), MODIFY EQUIPMENT and MOVE TROOP with their
-//! equipment spinners, the
+//! (troop_location_082da / 084a6), MOVE TROOP's equipment pick, the
 //! GO THERE launch's CALL A WORM branch, the water/spice popup extra
 //! (loc_0605c), popup dragging, and the spice-density overlay (data_046eb bit
 //! 0x40).
@@ -83,12 +82,16 @@ pub(crate) const TROOP_CONTACT_HEAD_PANEL: PanelRecord =
     panel(MapPanelRef::None, Rect::EMPTY, 0xf5, 0xe4);
 
 /// = seg001:1936
-pub(crate) const LOC_01936: PanelRecord =
+pub(crate) const EQUIPMENT_TROOP_ROW_BOX: PanelRecord =
     panel(MapPanelRef::None, rect(40, 30, 267, 71), 0xf5, 0xfb);
 
 /// = seg001:1940
-pub(crate) const LOC_01940: PanelRecord =
-    panel(MapPanelRef::Loc01940, rect(40, 30, 267, 71), 0x19, 0x1e);
+pub(crate) const EQUIPMENT_LOCATION_STRIP: PanelRecord = panel(
+    MapPanelRef::EquipmentLocationStrip,
+    rect(40, 30, 267, 71),
+    0x19,
+    0x1e,
+);
 
 /// = seg001:194a data_0194a
 pub(crate) const RALLIED_POPUP_PANEL: PanelRecord =
@@ -1395,7 +1398,7 @@ impl GameState {
     // = seg000:82b7 move_troop_teardown — leave the destination-pick
     // overlay: while the overlay sub-mode (data_046eb bit 6) is up, exit it
     // (map_leave_spice_density_overlay), repaint the contact popup panel and
-    // re-present the contact dialogue (loc_07be0).
+    // re-present the contact dialogue (map_troop_contact_restart_dialogue).
     fn move_troop_teardown(&mut self) {
         // = seg000:82b7/82bc test data_046eb,40h; jz ret.
         if self.data_046eb & 0x40 == 0 {
@@ -1408,15 +1411,12 @@ impl GameState {
         self.set_screen_as_active_framebuffer();
         let r = self.map_troop_contact_text_panel.rect;
         self.draw_rect_outline(r.x0, r.y0, r.x1 - 1, r.y1 - 1, 0xf5);
-        // = seg000:82cd/82d0 call contact_verb_troop; call loc_07be0 — for
+        // = seg000:82cd/82d0 call contact_verb_troop; call map_troop_contact_restart_dialogue — for
         //   the live contact troop: a fresh resume cursor and the
         //   ask-for-more re-present (which rebuilds the popup and speaks the
         //   next line).
         if let Some(ti) = self.contact_verb_troop() {
-            if self.map_contact_troop == Some(ti) {
-                self.dialogue_resume_entry_ptr = 0;
-                self.menu_callback_choice_map_troop_dialogue_ask_for_more_information(0, 0);
-            }
+            self.map_troop_contact_restart_dialogue(ti);
         }
         // = seg000:82d3 back to fb1.
         self.set_fb1_as_active_framebuffer();
@@ -1872,27 +1872,34 @@ impl GameState {
         let y = self.mouse_pos_y as i16;
         // = seg000:5c7c..5c8f a click inside the open primary popup panel
         //   routes to the panel, not a dismiss: the spice-density overlay
-        //   (data_04710 -> map_overlay_lmb) or the info panel's equipment
-        //   spinners (loc_07e97, stubbed).
+        //   (data_04710 -> map_overlay_lmb) or, for any other popup, the
+        //   MODIFY EQUIPMENT troop row (map_equipment_troop_row_click).
         if let Some(r) = self.map_open_popup_rect() {
             if r.in_rect(x, y) {
                 if self.map_popup == MapPanelRef::SpiceOverlay {
                     self.map_overlay_lmb();
+                } else {
+                    self.map_equipment_troop_row_click(x, y);
                 }
                 return;
             }
         }
-        // = seg000:5c95..5ca2 same for the secondary popup slot (loc_07eb8,
-        //   stubbed).
+        // = seg000:5c95..5ca2 same for the secondary popup slot: the
+        //   location strip's row (map_equipment_location_row_click).
         if self.map_popup2 != MapPanelRef::None {
             if let Some(r) = self.map_popup_record_rect(self.map_popup2) {
                 if r.in_rect(x, y) {
+                    self.map_equipment_location_row_click(x, y);
                     return;
                 }
             }
         }
-        // = seg000:5ca5 cmp data_046f5,0 — with the spinner sub-mode armed
-        //   any other click exits the menu. Not ported (no spinners yet).
+        // = seg000:5ca5/5cac cmp map_modify_equipment_mode,0; jnz menu_callback_choice_
+        //   exit_menu — with the spinner sub-mode up any other click is DONE.
+        if self.map_modify_equipment_mode != 0 {
+            self.menu_callback_choice_exit_menu(0, 0);
+            return;
+        }
         // = seg000:5caf call loc_06946 (the icon hit-test); jb troop_0872c.
         if let Some((_, ti)) = self.troop_icon_hit_test(x, y) {
             self.map_click_troop_icon(ti);
@@ -1936,7 +1943,7 @@ impl GameState {
             MapPanelRef::LocationInfo => Some(self.map_location_info_panel),
             MapPanelRef::TroopInfo => Some(self.map_troop_info_panel),
             MapPanelRef::TroopContactText => Some(self.map_troop_contact_text_panel),
-            MapPanelRef::Loc01940 => Some(self.data_01940),
+            MapPanelRef::EquipmentLocationStrip => Some(self.map_equipment_location_strip),
             MapPanelRef::Rallied => Some(self.data_0194a),
         }
     }
@@ -1947,7 +1954,7 @@ impl GameState {
             MapPanelRef::LocationInfo => Some(&mut self.map_location_info_panel),
             MapPanelRef::TroopInfo => Some(&mut self.map_troop_info_panel),
             MapPanelRef::TroopContactText => Some(&mut self.map_troop_contact_text_panel),
-            MapPanelRef::Loc01940 => Some(&mut self.data_01940),
+            MapPanelRef::EquipmentLocationStrip => Some(&mut self.map_equipment_location_strip),
             MapPanelRef::Rallied => Some(&mut self.data_0194a),
         }
     }
@@ -2008,11 +2015,10 @@ impl GameState {
     fn map_click_troop_icon(&mut self, ti: usize) {
         // = seg000:872c si = [si+0ah]; 872f al = [si] — the troop id.
         let id = self.troops[ti].troop_id;
-        // = seg000:8731..873f while location_visibility_distance < 2, a troop
-        //   at the current location is handled in the room, not here.
+        // = seg000:8731..873f
         if self.location_visibility_distance < 2 {
             let li = location_index_from_ptr(self.troops[ti].offset_of_location);
-            if li == self.current_location_index as usize {
+            if li != self.current_location_index as usize {
                 return;
             }
         }
@@ -2039,10 +2045,13 @@ impl GameState {
         // = seg000:868d call map_close_troop_contact_popup — tear down the
         //   previous troop's contact dialogue popup.
         self.map_close_troop_contact_popup();
-        // = seg000:8690/8693/8696 close the location popup menu (loc_05f79,
-        //   not ported), the info panel (loc_079de) and the spice sub-mode
-        //   (loc_058fa, not ported).
+        // = seg000:8690..8696 close the open popups: the location popup menu
+        //   (map_close_location_troop_popup), the troop info panel
+        //   (map_close_troop_info_popup) and the spice-density overlay
+        //   (map_leave_spice_density_overlay).
+        self.map_close_location_troop_popup();
         self.map_close_troop_info_popup();
+        self.map_leave_spice_density_overlay();
         // = seg000:8699..86a3 a valid selected id resolves its troop; the
         //   carry get_address_of_troop_by_ID returns is "the troop is rallied"
         //   (occupation < 0x80), and jnb bails without one.
@@ -2107,13 +2116,22 @@ impl GameState {
         }
         // = seg000:7c36 call loc_09efd — load and play the line's voice.
         self.play_dialogue_voc();
-        // = seg000:7c3b data_046f4 = 0; 7c40..7c53 with the interrupt gate at
-        //   0x80 (a line whose event armed the equipment hand-over) the popup
-        //   also shows the equipment spinners: data_046f4 = 1,
-        //   troop_unpack_equipment_flags_to_location_style_equipment,
-        //   loc_07e1e. Not ported — the spinner
-        //   panel and its two mouse handlers (loc_07e97/loc_07eb8) are the
-        //   MODIFY EQUIPMENT verb's UI. TODO.
+        // = seg000:7c3b map_troop_equipment_row_up = 0 — no equipment row on the popup.
+        self.map_troop_equipment_row_up = 0;
+        // = seg000:7c40..7c53 with the interrupt gate at 0x80 (a line whose
+        //   event armed the equipment hand-over, callback 07) the popup also
+        //   shows the troop's equipment row: map_troop_equipment_row_up = 1, the flags
+        //   unpacked (troop_unpack_equipment_flags_to_location_style_
+        //   equipment), the row drawn (map_draw_troop_equipment_row).
+        if self.dialogue_interrupt_gate == 0x80 {
+            self.map_troop_equipment_row_up = 1;
+            self.troop_unpack_equipment_flags_to_location_style_equipment(ti);
+            self.map_draw_troop_equipment_row();
+            // The row drew into the screen buffer, so publish it.
+            if !self.front_buffer_is_fb1() {
+                self.send_frame_to_display();
+            }
+        }
         // = seg000:7c56..7c5d on the map view (data_046eb bit 7) drop the
         //   bubble layout pointer without restoring under it (loc_09901): the
         //   popup owns those pixels and takes them down itself.
@@ -2132,15 +2150,346 @@ impl GameState {
         _text_id: u16,
         _index: usize,
     ) {
-        // = seg000:7bed/7bf4 with the equipment spinners up (data_046f4) AND
-        //   the spinner sub-mode armed (data_046f5) the verb is a spinner
-        //   click instead (loc_07e97). Neither is ported, so the verb always
-        //   takes the dialogue path.
+        // = seg000:7bed..7bfb with the troop's equipment row up (map_troop_equipment_row_up)
+        //   AND the spinner sub-mode armed (map_modify_equipment_mode) the verb is a row
+        //   click instead (map_equipment_troop_row_click): HUD element 18 carries this handler
+        //   while the popup is up, so a click on the text box lands here.
+        if self.map_troop_equipment_row_up != 0 && self.map_modify_equipment_mode != 0 {
+            let (x, y) = (self.mouse_pos_x as i16, self.mouse_pos_y as i16);
+            self.map_equipment_troop_row_click(x, y);
+            return;
+        }
         // = seg000:7bfe si = [data_046ef]; falls into troop_07c02.
         let Some(ti) = self.map_contact_troop else {
             return;
         };
         self.map_open_troop_contact_dialogue(ti);
+    }
+
+    // = seg000:7be0 map_troop_contact_restart_dialogue — restart the contact dialogue for `ti` when it
+    // is the live contact (data_046ef): a fresh resume cursor, then the ASK
+    // FOR MORE INFORMATION path — one line into the popup.
+    pub(crate) fn map_troop_contact_restart_dialogue(&mut self, ti: usize) {
+        // = seg000:7be0/7be4 cmp si,[data_046ef]; jnz ret.
+        if self.map_contact_troop != Some(ti) {
+            return;
+        }
+        // = seg000:7be7 dialogue_resume_entry_ptr = 0; falls into 7bed.
+        self.dialogue_resume_entry_ptr = 0;
+        self.menu_callback_choice_map_troop_dialogue_ask_for_more_information(0, 0);
+    }
+
+    // = seg000:7cbb menu_callback_choice_map_troop_dialogue_modify_equipment —
+    // the order menu's MODIFY EQUIPMENT verb: arm the spinner sub-mode
+    // (map_modify_equipment_mode) under a DONE strip (cleanup map_modify_equipment_done),
+    // drive the dialogue on until a line's event puts the troop's equipment
+    // row up (map_troop_equipment_row_up), then place and draw the two spinner panels over
+    // the troop's row and the location's unused equipment.
+    pub(crate) fn menu_callback_choice_map_troop_dialogue_modify_equipment(
+        &mut self,
+        _text_id: u16,
+        _index: usize,
+    ) {
+        // = seg000:7cbb map_modify_equipment_mode = 1.
+        self.map_modify_equipment_mode = 1;
+        // = seg000:7cc0..7cc6 bp = menu_done; bx = map_modify_equipment_done; call loc_0d323.
+        self.menu_stack_push(
+            MenuRef::MenuDone,
+            Some(GameState::map_modify_equipment_done),
+        );
+        // = seg000:7cc9 call open_onmap_resource.
+        self.open_onmap_spritesheet();
+        // = seg000:7ccc..7cee without the troop's row up yet, present more
+        //   lines of the contact dialogue: map_troop_contact_restart_dialogue (a fresh resume cursor
+        //   and one line), a second line unconditionally, then a third and a
+        //   fourth while map_troop_equipment_row_up stays clear.
+        if self.map_troop_equipment_row_up == 0 {
+            if let Some(ti) = self.map_contact_troop {
+                self.map_troop_contact_restart_dialogue(ti);
+                self.map_open_troop_contact_dialogue(ti);
+                if self.map_troop_equipment_row_up == 0 {
+                    self.map_open_troop_contact_dialogue(ti);
+                    if self.map_troop_equipment_row_up == 0 {
+                        self.map_open_troop_contact_dialogue(ti);
+                    }
+                }
+            }
+        }
+        // = seg000:7cf1 loc_07cf1: call map_place_equipment_panels — place the panels.
+        self.map_place_equipment_panels();
+        // = seg000:7cf4 call contact_verb_troop.
+        let Some(ti) = self.contact_verb_troop() else {
+            return;
+        };
+        // = seg000:7cf7/7cfa ds:3d = troop->equipment — the mask before the
+        //   edit; troop_equipment_changed diffs the result against it.
+        self.troop_condit.equipment_added_by_modify = self.troops[ti].equipment;
+        // = seg000:7cfd call troop_unpack_equipment_flags_to_location_style_
+        //   equipment — the row the spinners edit.
+        self.troop_unpack_equipment_flags_to_location_style_equipment(ti);
+        // = seg000:7d00/7d03 di = troop->location; call compute_location_
+        //   available_equipment — what the location can hand over.
+        let li = location_index_from_ptr(self.troops[ti].offset_of_location);
+        self.compute_location_available_equipment(li);
+        // = seg000:7d06 ui_hud_elements[18].flags = 0 — the talking head goes
+        //   while the spinners are up.
+        self.ui_elements[18].flags = 0;
+        // = seg000:7d0c falls into map_draw_equipment_panels.
+        self.map_draw_equipment_panels();
+    }
+
+    // = seg000:7dd9 map_place_equipment_panels — place the two spinner panels off the
+    // contact popup's rect: map_equipment_troop_row_box, the troop's row box inside the popup
+    // (x from popup.x0 + 0x7d, y from popup.y0 + 0x2b, to the popup's far
+    // edges), and map_equipment_location_strip, the location strip (x from popup.x0 + 0x30,
+    // 0x28 tall, just below the popup — or 0x6c above the popup's bottom edge
+    // when that would start at y 0x70 or lower), which takes the second popup
+    // slot.
+    fn map_place_equipment_panels(&mut self) {
+        let p = self.map_troop_contact_text_panel.rect;
+        // = seg000:7de2 map_popup2_ptr = map_equipment_location_strip.
+        self.map_popup2 = MapPanelRef::EquipmentLocationStrip;
+        // = seg000:7de6..7e08 map_equipment_location_strip.x0 = popup.x0 + 0x30; map_equipment_troop_row_box.x0
+        //   = that + 0x4d; both x1 = popup.x1; map_equipment_troop_row_box.y0 = popup.y0 +
+        //   0x2b, .y1 = popup.y1.
+        self.map_equipment_troop_row_box.rect = rect(p.x0 + 0x30 + 0x4d, p.y0 + 0x2b, p.x1, p.y1);
+        // = seg000:7e0b..7e1a map_equipment_location_strip.y0 = popup.y1 + 1, less 0x6d when
+        //   that reaches 0x70; .y1 = .y0 + 0x28.
+        let mut y0 = p.y1 + 1;
+        if y0 >= 0x70 {
+            y0 -= 0x6d;
+        }
+        self.map_equipment_location_strip.rect = rect(p.x0 + 0x30, y0, p.x1, y0 + 0x28);
+    }
+
+    // = seg000:7e1e map_draw_troop_equipment_row — the troop's equipment row inside the contact
+    // popup: the 7 flag bytes at seg001:4705 in the tall font, colour 0xf0,
+    // from (popup.x0 + 0x80, popup.y0 + 0x2d) down to the popup's bottom
+    // edge. Falls into draw_equipment_row.
+    fn map_draw_troop_equipment_row(&mut self) {
+        // = seg000:7e1e call font_select_tall_font.
+        self.font_select_tall_font();
+        // = seg000:7e21..7e37 si = 4705; dx = popup.x0 + 0x80; bx = popup.y0
+        //   + 0x2d; bp = popup.y1; font_draw_fg_color = 0xf0.
+        let p = self.map_troop_contact_text_panel.rect;
+        self.font_state.color = 0xf0;
+        let flags = self.troop_equipment_flags;
+        self.map_draw_equipment_columns(&flags, p.y1, p.x0 + 0x80, p.y0 + 0x2d);
+    }
+
+    // = seg000:7d0c map_draw_equipment_panels — (re)draw the spinner panels on screen: both
+    // panel boxes, the troop's row (its column x-ranges copied to seg001:4c7c
+    // for the click test), then the location's unused equipment
+    // (location_available_equipment) in the strip's own colours with the
+    // "unused equipment" label beside it, and the pending panel fold.
+    fn map_draw_equipment_panels(&mut self) {
+        // = seg000:7d0c call set_screen_as_active_framebuffer.
+        self.set_screen_as_active_framebuffer();
+        // = seg000:7d0f..7d18 loc_07b1b for map_equipment_troop_row_box and map_equipment_location_strip.
+        let (box36, strip) = (
+            self.map_equipment_troop_row_box,
+            self.map_equipment_location_strip,
+        );
+        self.map_draw_panel_record(box36);
+        self.map_draw_panel_record(strip);
+        // = seg000:7d1b call map_draw_troop_equipment_row; 7d1e..7d29 copy the 14 scratch words
+        //   to map_equipment_troop_column_x_ranges.
+        self.map_draw_troop_equipment_row();
+        self.map_equipment_troop_column_x_ranges = self.map_equipment_column_x_ranges;
+        // = seg000:7d2b..7d48 the location row: bx = strip.y0 + 4, dx =
+        //   strip.x0 + 0x50, si = location_available_equipment, bp =
+        //   strip.y1, the colour word = the record's frame|fill bytes.
+        let r = strip.rect;
+        let color = strip.text_color(strip.frame_color);
+        self.font_state.color = color;
+        let counts: [u8; 7] = std::array::from_fn(|slot| self.available_equipment.slot(slot));
+        let y = r.y0 + 4;
+        self.map_draw_equipment_columns(&counts, r.y1, r.x0 + 0x50, y);
+        // = seg000:7d4b..7d59 the label (phrase 0x6f) at (strip.x0 + 8, bx)
+        //   — bx is still y0 + 4, or y0 + 9 after the "none" phrase moved it
+        //   (seg000:7e58 add bx,5).
+        let label_y = if counts.iter().all(|&c| c == 0) {
+            y + 5
+        } else {
+            y
+        };
+        self.font_draw_phrase_or_command_string_with_color_at_pos(
+            cmd::SIETCH_N_UNUSED_EQP,
+            color,
+            (r.x0 + 8) as u16,
+            label_y as u16,
+        );
+        // The panels drew into the screen buffer, so publish them.
+        if !self.front_buffer_is_fb1() {
+            self.send_frame_to_display();
+        }
+        // = seg000:7d5c..7d65 play_pending_panel_fold (registers saved around
+        //   it), then fb1 active again.
+        self.play_pending_panel_fold();
+        self.set_fb1_as_active_framebuffer();
+    }
+
+    // = seg000:7d68 map_modify_equipment_done — the DONE strip's cleanup: leave the spinner
+    // sub-mode, take the location strip out of the second popup slot and
+    // repaint the map under it, pack the edited flags back into the troop
+    // and run the change (troop_equipment_changed).
+    pub(crate) fn map_modify_equipment_done(&mut self) {
+        // = seg000:7d68 map_modify_equipment_mode = 0; 7d6f map_popup2_ptr = 0.
+        self.map_modify_equipment_mode = 0;
+        self.map_popup2 = MapPanelRef::None;
+        // = seg000:7d75/7d78 si = map_equipment_location_strip; call troop_icons_update_dirty_rect.
+        let r = self.map_equipment_location_strip.rect;
+        self.troop_icons_update_dirty_rect(r);
+        // = seg000:7d7b call contact_verb_troop.
+        let Some(ti) = self.contact_verb_troop() else {
+            return;
+        };
+        // = seg000:7d7e call troop_update_troop_equipment_from_location_
+        //   style_equipment.
+        self.troop_update_troop_equipment_from_location_style_equipment(ti);
+        // = seg000:7d81 falls into troop_equipment_changed.
+        self.troop_equipment_changed(ti);
+    }
+
+    // = seg000:7d81 troop_equipment_changed — the troop's equipment changed (MODIFY
+    // EQUIPMENT's DONE, or GO & SEARCH FOR EQUIPMENT finding it at the
+    // location, seg000:778f): refresh its icon, stage the added / removed
+    // masks for the reaction line's conditions (ds:3d/3e, diffed against the
+    // pre-edit mask ds:3d held), flag an orni handed over at the player's own
+    // location (ds:3f), re-test an irrigation troop's viability, speak the
+    // reaction (action 0x0c) and drop the equipment row; with no talking head
+    // up afterwards the contact dialogue restarts.
+    pub(crate) fn troop_equipment_changed(&mut self, ti: usize) {
+        // = seg000:7d81 call troop_refresh_icon.
+        self.troop_refresh_icon(ti);
+        // = seg000:7d84..7d96 ah = the new mask, al = the old (ds:3d); bl =
+        //   al ^ ah; ds:3d = ah & bl (added); ds:3e = al & bl (removed).
+        let new = self.troops[ti].equipment;
+        let old = self.troop_condit.equipment_added_by_modify;
+        let changed = old ^ new;
+        self.troop_condit.equipment_added_by_modify = new & changed;
+        self.troop_condit.equipment_removed_by_modify = old & changed;
+        // = seg000:7d99..7dac ds:3f = 0, then 0x40 when an ornithopter was
+        //   added and the troop stands at last_location_ptr (Paul's own orni).
+        self.troop_condit.paul_orni_given = 0;
+        if new & changed & 0x40 != 0 {
+            let li = location_index_from_ptr(self.troops[ti].offset_of_location);
+            if li == self.last_location_index {
+                self.troop_condit.paul_orni_given = 0x40;
+            }
+        }
+        // = seg000:7db1..7dba an irrigation troop (occupation nibble 8)
+        //   re-tests whether it can work now (troop_call_callback_according_
+        //   to_occupation).
+        if self.troops[ti].occupation & 0x0f == 8 {
+            self.troop_occupation_not_viable(ti);
+        }
+        // = seg000:7dbd/7dbf al = 0x0c; call troop_present_reaction_line.
+        self.map_present_troop_reaction_line(ti, 0x0c);
+        // = seg000:7dc2 map_troop_equipment_row_up = 0.
+        self.map_troop_equipment_row_up = 0;
+        // = seg000:7dc7..7dd5 cmp ui_hud_elements[18].flags,0; jnz ret — no
+        //   head up: si = data_046ef; map_troop_contact_restart_dialogue; map_open_troop_contact_
+        //   dialogue.
+        if self.ui_elements[18].flags == 0 {
+            if let Some(ct) = self.map_contact_troop {
+                self.map_troop_contact_restart_dialogue(ct);
+                self.map_open_troop_contact_dialogue(ct);
+            }
+        }
+    }
+
+    // = seg000:7ee2 equipment_column_at — which equipment column of a row the mouse x
+    // falls in: the 7 [x0, x1) ranges the row draw recorded; a column with
+    // x0 == 0 was not drawn and never matches. DOS returns carry = hit with
+    // di = the slot.
+    fn equipment_column_at(ranges: &[(i16, i16); 7], x: i16) -> Option<usize> {
+        ranges
+            .iter()
+            .position(|&(x0, x1)| x0 != 0 && x >= x0 && x < x1)
+    }
+
+    // = seg000:7e97 map_equipment_troop_row_click — an LMB click on the primary popup while the
+    // spinners are up: inside the troop's row box (map_equipment_troop_row_box), a hit on one
+    // of its columns (the seg001:4c7c ranges) hands that piece back to the
+    // location — the flag byte drops, the location's available count rises —
+    // and the panels redraw.
+    pub(crate) fn map_equipment_troop_row_click(&mut self, x: i16, y: i16) {
+        // = seg000:7e97 cmp map_modify_equipment_mode,0; jz ret.
+        if self.map_modify_equipment_mode == 0 {
+            return;
+        }
+        // = seg000:7e9e/7ea1 di = map_equipment_troop_row_box; call rect_contains; jnb ret.
+        if !self.map_equipment_troop_row_box.rect.in_rect(x, y) {
+            return;
+        }
+        // = seg000:7ea6/7ea9 si = map_equipment_troop_column_x_ranges; call equipment_column_at; jnb ret.
+        let Some(slot) = Self::equipment_column_at(&self.map_equipment_troop_column_x_ranges, x)
+        else {
+            return;
+        };
+        // = seg000:7eae/7eb2 dec 4705[di]; inc 46fe[di].
+        self.troop_equipment_flags[slot] = self.troop_equipment_flags[slot].wrapping_sub(1);
+        let c = self.available_equipment.slot_mut(slot);
+        *c = c.wrapping_add(1);
+        // = seg000:7eb6 jmp loc_07ede -> map_draw_equipment_panels.
+        self.map_draw_equipment_panels();
+    }
+
+    // = seg000:7eb8 map_equipment_location_row_click — an LMB click on the secondary popup (the
+    // location strip, map_equipment_location_strip) while the spinners are up: a hit on one of
+    // its columns (the seg001:4c60 ranges) gives the troop that piece, if it
+    // holds none of the type yet (one of each at most), and the panels
+    // redraw.
+    pub(crate) fn map_equipment_location_row_click(&mut self, x: i16, y: i16) {
+        // = seg000:7eb8 cmp map_modify_equipment_mode,0; jz ret.
+        if self.map_modify_equipment_mode == 0 {
+            return;
+        }
+        // = seg000:7ebf/7ec2 di = map_equipment_location_strip; call rect_contains; jnb ret.
+        if !self.map_equipment_location_strip.rect.in_rect(x, y) {
+            return;
+        }
+        // = seg000:7ec7/7eca si = RESOURCE_GLOBDATA; call equipment_column_at; jnb ret.
+        let Some(slot) = Self::equipment_column_at(&self.map_equipment_column_x_ranges, x) else {
+            return;
+        };
+        // = seg000:7ecf/7ed4 cmp 4705[di],0; jnz ret.
+        if self.troop_equipment_flags[slot] != 0 {
+            return;
+        }
+        // = seg000:7ed6/7eda inc 4705[di]; dec 46fe[di].
+        self.troop_equipment_flags[slot] += 1;
+        let c = self.available_equipment.slot_mut(slot);
+        *c = c.wrapping_sub(1);
+        // = seg000:7ede call map_draw_equipment_panels.
+        self.map_draw_equipment_panels();
+    }
+
+    // = seg000:7efb troop_unpack_equipment_flags_to_location_style_equipment —
+    // the troop's equipment bitmask MSB-first into the 7 per-type flag bytes
+    // at seg001:4705 (harvesters .. bulbs).
+    pub(crate) fn troop_unpack_equipment_flags_to_location_style_equipment(&mut self, ti: usize) {
+        // = seg000:7f01..7f0d ah = troop->equipment; 7 x (al = 0; rol ax,1;
+        //   stosb).
+        let mask = self.troops[ti].equipment;
+        self.troop_equipment_flags =
+            std::array::from_fn(|slot| u8::from(mask & (0x80 >> slot) != 0));
+    }
+
+    // = seg000:7f11 troop_update_troop_equipment_from_location_style_equipment
+    // — pack the 7 flag bytes back into the troop's bitmask: the std/lodsb
+    // walk from 4705[6] down rotates each byte's bit 0 in from the top, so
+    // slot 0 lands on bit 7.
+    pub(crate) fn troop_update_troop_equipment_from_location_style_equipment(&mut self, ti: usize) {
+        let mut mask = 0u8;
+        for (slot, &f) in self.troop_equipment_flags.iter().enumerate() {
+            if f & 1 != 0 {
+                mask |= 0x80 >> slot;
+            }
+        }
+        // = seg000:7f23 troop->equipment = ah.
+        self.troops[ti].equipment = mask;
     }
 
     // = seg000:69b3 menu_callback_choice_map_troop_dialogue_change_troop_
@@ -2895,39 +3244,36 @@ impl GameState {
     }
 
     // = seg000:7b58 map_close_troop_contact_popup — tear down the contacted
-    // troop's dialogue popup: drop its talking-head HUD element, then (for a
-    // live contact, data_046ef) mark the contact on the troop record and
-    // repaint the popup's panel rect.
+    // troop's dialogue popup: drop its talking-head HUD element and the
+    // equipment spinners, then (for a live contact, data_046ef) mark the
+    // contact on the troop record, stop its voice and repaint the popup's
+    // panel rect.
     pub(crate) fn map_close_troop_contact_popup(&mut self) {
         // = seg000:7b58 ui_hud_elements[18].flags = 0 — drop the contacted
         //   troop's talking head.
         self.ui_elements[18].flags = 0;
-        // = seg000:7b5e data_046f4 = 0 — the equipment spinners go with the
-        //   popup (not ported, see map_open_troop_contact_dialogue).
+        // = seg000:7b5e map_troop_equipment_row_up = 0 — the equipment spinners go with the
+        //   popup.
+        self.map_troop_equipment_row_up = 0;
         // = seg000:7b63..7b70 xor si,si; xchg si,[data_046ef]; jz ret — no
         //   live contact, nothing to take down. The ds:4c reset at 7b65 runs
         //   either way, BEFORE the exchange.
-        let was_out_of_contact = self.contacting_troops_ds_4c != 0;
         self.contacting_troops_ds_4c = 0;
         let Some(ti) = self.map_contact_troop.take() else {
             return;
         };
-        // = seg000:7b72 cmp related_to_contacting_troops_ds_4c,0; jnz — a
-        //   troop that answered from outside the visibility range was never
-        //   really reached, so the contact is not marked on it. (The compare
-        //   reads the byte 7b65 just cleared, so it tests the value the
-        //   contact ran with.)
-        if !was_out_of_contact {
-            // = seg000:7b79 call game_phase_set_to_64_if_conditions_met.
-            self.game_phase_set_to_64_if_conditions_met(ti);
-            // = seg000:7b7c/7b81 the spoken-to masks: bitfield_10 &= 0x3f0,
-            //   dissatisfaction_and_speech &= 0xe5ff — the per-contact speech
-            //   flags the dialogue conditions set are dropped again.
-            self.troops[ti].bitfield_10 &= 0x3f0;
-            self.troops[ti].dissatisfaction_and_speech &= 0xe5ff;
-            // = seg000:7b86/7b89 [si+14h] = the in-game day of this contact.
-            self.troops[ti].game_day_of_ralliement = self.get_ingame_day_in_ax() as u8;
-        }
+        // = seg000:7b72/7b77 cmp related_to_contacting_troops_ds_4c,0; jnz —
+        //   a dead test: 7b65 cleared the byte, so the contact is always
+        //   marked, out-of-range answers included.
+        // = seg000:7b79 call game_phase_set_to_64_if_conditions_met.
+        self.game_phase_set_to_64_if_conditions_met(ti);
+        // = seg000:7b7c/7b81 the spoken-to masks: bitfield_10 &= 0x3f0,
+        //   dissatisfaction_and_speech &= 0xe5ff — the per-contact speech
+        //   flags the dialogue conditions set are dropped again.
+        self.troops[ti].bitfield_10 &= 0x3f0;
+        self.troops[ti].dissatisfaction_and_speech &= 0xe5ff;
+        // = seg000:7b86/7b89 [si+14h] = the in-game day of this contact.
+        self.troops[ti].game_day_of_ralliement = self.get_ingame_day_in_ax() as u8;
         // = seg000:7b8c call lip_sync_stop — stop the troop's voice.
         self.lip_sync_stop();
         // = seg000:7b8f..7b97 si = troop_contact_text_panel_record; clear
@@ -3393,21 +3739,28 @@ impl GameState {
         );
         y += 8;
         // = seg000:79ca..79d8 the equipment icon row: troop_unpack_equipment_
-        //   flags (bitmask -> 0/1 per type) into the row, bottom = panel y1.
-        let mask = self.troops[ti].equipment;
-        let flags = std::array::from_fn(|slot| u8::from(mask & (0x80 >> slot) != 0));
+        //   flags_to_location_style_equipment (bitmask -> 0/1 per type) into
+        //   seg001:4705, bottom = panel y1.
+        self.troop_unpack_equipment_flags_to_location_style_equipment(ti);
+        let flags = self.troop_equipment_flags;
         let bottom = self.map_troop_info_panel.rect.y1;
         self.map_draw_equipment_columns(&flags, bottom, x0 as i16, y as i16);
     }
 
-    // = seg000:7e3d loc_07e3d — the equipment row: `counts` is 7 per-type
-    // ONMAP icon counts (the seg001:192f sprite table, harvesters..bulbs).
-    // Each nonzero type stacks `count` icons vertically within [y, bottom]
-    // (loc_061d3) and advances x by the icon width; an all-zero row draws the
-    // "none" phrase. The troop info panel passes 0/1 flags
-    // (troop_unpack_equipment_flags_to_location_style_equipment); the location
-    // popup passes real counts.
+    // = seg000:7e3d draw_equipment_row — the equipment row: `counts` is 7
+    // per-type ONMAP icon counts (the seg001:192f sprite table,
+    // harvesters..bulbs). Each nonzero type stacks `count` icons vertically
+    // within [y, bottom] (draw_equipment_column) and advances x by the icon
+    // width + 1; an all-zero row draws the "none" phrase. Every column's
+    // [x0, x1) lands in the seg001:4c60 scratch for the MODIFY EQUIPMENT
+    // click test. The troop info panel and the contact popup pass the 0/1
+    // flags (troop_unpack_equipment_flags_to_location_style_equipment); the
+    // location popup and the location strip pass real counts.
     fn map_draw_equipment_columns(&mut self, counts: &[u8; 7], bottom: i16, x0: i16, y: i16) {
+        // = seg000:7e3d call open_onmap_resource.
+        self.open_onmap_spritesheet();
+        // = seg000:7e43..7e4b clear the 14 scratch words.
+        self.map_equipment_column_x_ranges = [(0, 0); 7];
         // = seg000:7e4f..7e64 nothing owned: the "none" phrase 12 px in
         //   (add dx,0ch; add bx,5) in the current colour.
         if counts.iter().all(|&c| c == 0) {
@@ -3424,7 +3777,9 @@ impl GameState {
                 continue;
             }
             let sprite = crate::troop_icons::equipment_icon_sprite(slot);
-            // = seg000:61d3 loc_061d3 — read the sprite dims.
+            // = seg000:7e80 [di+4c60h] = dx — the column's left edge.
+            self.map_equipment_column_x_ranges[slot].0 = x;
+            // = seg000:61d3 draw_equipment_column — read the sprite dims.
             let (mut w, mut sh) = (0i16, 0i16);
             self.with_active_bank_sheet(|_, sheet| {
                 if let Some(sp) = sheet.get_sprite(sprite) {
@@ -3433,6 +3788,7 @@ impl GameState {
                 }
             });
             if w == 0 {
+                self.map_equipment_column_x_ranges[slot].1 = x;
                 continue;
             }
             // = seg000:61e2..620d the vertical spacing: fit `count` icons in
@@ -3456,8 +3812,10 @@ impl GameState {
                 });
                 iy += step;
             }
-            // = seg000:6224..622d advance x by the icon width.
-            x += w;
+            // = seg000:6224..622f advance x by the icon width + 1 (add dx,ax;
+            //   inc dx); 7e87 [di+4c62h] = dx — the column's right edge.
+            x += w + 1;
+            self.map_equipment_column_x_ranges[slot].1 = x;
         }
     }
 
@@ -3484,8 +3842,9 @@ impl GameState {
     // location info popup, and (unless it is the player's own location or an
     // in-room/desert case that cannot travel) push a GO THERE command menu.
     fn map_click_location_marker(&mut self, li: usize) {
-        // = seg000:5fb0 call loc_058fa — leave the spice-density sub-mode
-        //   (not ported). = seg000:5fb3 call map_dismiss_troop_popups.
+        // = seg000:5fb0 call map_leave_spice_density_overlay; 5fb3 call
+        //   map_dismiss_troop_popups.
+        self.map_leave_spice_density_overlay();
         self.map_dismiss_troop_popups();
         // = seg000:5fb6..6008 decide the GO THERE menu.
         let menu = if li == self.current_location_index as usize {
@@ -4051,8 +4410,14 @@ mod tests {
             "the info panel toggled closed"
         );
         assert_eq!(game.map_info_popup_troop, None);
-        // LMB on the icon selects the troop: data_01954 + the rotating
-        // highlight ring in the focused slot (flag 0x40, on top).
+        assert_eq!(game.location_visibility_distance, 1);
+        game.dune_map_mouse_lmb();
+        assert_eq!(
+            game.map_selected_troop_id, 0,
+            "a distant troop is not contactable before Paul's powers"
+        );
+        assert!(game.troop_icon_focused[0].is_none(), "no highlight ring");
+        game.location_visibility_distance = 2;
         game.dune_map_mouse_lmb();
         assert_eq!(game.map_selected_troop_id, 1, "troop 1 selected");
         let ring = game.troop_icon_focused[0].expect("the highlight ring icon");
@@ -5486,5 +5851,169 @@ mod tests {
         while rx.try_recv().is_ok() {}
         assert_eq!(game.data_046eb, 0, "back in the room view");
         assert_eq!(game.map_view_reentry_count, 0, "the detour is over");
+    }
+
+    // MODIFY EQUIPMENT (seg000:7cbb): from an open contact, the verb pushes
+    // the DONE strip and places the two spinner panels — the troop's row box
+    // inside the contact popup and the location strip below it. A click on a
+    // piece in the strip gives it to the troop, a click on the troop's row
+    // hands it back, a second copy of a type is refused, and DONE (any click
+    // on bare map) packs the row into the troop's equipment mask and stages
+    // the added/removed diff for the reaction line. Asset-gated:
+    //   cargo test -p dune --bin dune -- --ignored modify_equipment
+    #[test]
+    #[ignore = "needs assets/DUNE.DAT"]
+    fn modify_equipment_hands_a_piece_over_and_back() {
+        let dat_path = concat!(env!("CARGO_MANIFEST_DIR"), "/../../assets/DUNE.DAT");
+        let Ok(dat_file) = DatFile::open(dat_path) else {
+            eprintln!("skipping: {dat_path} not found");
+            return;
+        };
+        let (tx, rx) = mpsc::sync_channel(64);
+        let mut game = GameState::new(dat_file, tx);
+        game.set_headless();
+        game.start(true);
+        while rx.try_recv().is_ok() {}
+
+        // The contact preamble of move_troop_orders_a_contacted_troop_to_a_
+        // marker: troop 1 rallied and in range, contacted via the map menu.
+        game.troops[0].occupation = 0x01;
+        game.troops[0].motivation = 80;
+        game.number_of_rallied_troops = 1;
+        game.location_visibility_distance = 4;
+        game.ui_toggle_room_view();
+        while rx.try_recv().is_ok() {}
+        let (px, plat) = game.get_map_position();
+        game.troops[0].gps_coordinates_1 = px;
+        game.troops[0].gps_coordinates_2 = plat as u16;
+        // Two krys knives unused at the troop's location; the troop holds
+        // nothing.
+        let li = crate::locations::location_index_from_ptr(game.troops[0].offset_of_location);
+        game.locations[li].equipment.krys_knives = 2;
+        game.troops[0].equipment = 0;
+        game.menu_callback_choice_map_main_contact_fremen_troops(cmd::CONTACT_FREMEN_TROOPS, 0);
+        while rx.try_recv().is_ok() {}
+        assert_eq!(game.map_selected_troop_id, 1, "troop 1 contacted");
+        assert_eq!(game.get_active_menu_ref(), MenuRef::MenuTroopDialog);
+
+        // The verb: the DONE strip, the sub-mode, the strip in the second
+        // popup slot placed off the contact popup, both rows drawn.
+        game.menu_callback_choice_map_troop_dialogue_modify_equipment(cmd::MODIFY_EQUIPMENT, 0);
+        while rx.try_recv().is_ok() {}
+        assert_eq!(
+            game.get_active_menu_ref(),
+            MenuRef::MenuDone,
+            "the DONE strip is up"
+        );
+        assert_eq!(game.map_modify_equipment_mode, 1, "the spinner sub-mode");
+        assert_eq!(
+            game.map_popup2,
+            MapPanelRef::EquipmentLocationStrip,
+            "the strip holds the second popup slot"
+        );
+        let popup = game.map_troop_contact_text_panel.rect;
+        let strip = game.map_equipment_location_strip.rect;
+        assert_eq!((strip.x0, strip.x1), (popup.x0 + 0x30, popup.x1));
+        assert_eq!(strip.y1 - strip.y0, 0x28);
+        assert_eq!(
+            game.troop_equipment_flags, [0; 7],
+            "the troop's row is empty"
+        );
+        assert_eq!(game.available_equipment.krys_knives, 2, "two knives unused");
+        let (kx0, kx1) = game.map_equipment_column_x_ranges[2];
+        assert!(
+            kx0 != 0 && kx1 > kx0,
+            "the knives column in the strip: {kx0}..{kx1}"
+        );
+        assert!(strip.in_rect(kx0, strip.y0 + 4), "inside the strip");
+        assert_eq!(
+            game.map_equipment_troop_column_x_ranges,
+            [(0, 0); 7],
+            "no column in the troop's row"
+        );
+        game.screen
+            .write_png(&game.palette, "modify_equipment_strip.png")
+            .unwrap();
+
+        // A click on the strip's knives column hands one to the troop.
+        game.mouse_pos_x = kx0 as u16;
+        game.mouse_pos_y = (strip.y0 + 6) as u16;
+        game.dune_map_mouse_lmb();
+        while rx.try_recv().is_ok() {}
+        assert_eq!(
+            game.troop_equipment_flags[2], 1,
+            "the troop's row has the knife"
+        );
+        assert_eq!(
+            game.available_equipment.krys_knives, 1,
+            "one left at the location"
+        );
+        let (tx0, tx1) = game.map_equipment_troop_column_x_ranges[2];
+        assert!(
+            tx0 != 0 && tx1 > tx0,
+            "the knife column in the troop's row: {tx0}..{tx1}"
+        );
+        let row_y = popup.y0 + 0x2d + 2;
+        assert!(game.map_equipment_troop_row_box.rect.in_rect(tx0, row_y));
+        game.screen
+            .write_png(&game.palette, "modify_equipment_given.png")
+            .unwrap();
+
+        // A second knife is refused: one of each type at most.
+        let (kx0, _) = game.map_equipment_column_x_ranges[2];
+        game.mouse_pos_x = kx0 as u16;
+        game.mouse_pos_y = (strip.y0 + 6) as u16;
+        game.dune_map_mouse_lmb();
+        while rx.try_recv().is_ok() {}
+        assert_eq!(game.troop_equipment_flags[2], 1, "still one");
+        assert_eq!(game.available_equipment.krys_knives, 1, "still one left");
+
+        // A click on the troop's row hands it back.
+        game.mouse_pos_x = tx0 as u16;
+        game.mouse_pos_y = row_y as u16;
+        game.dune_map_mouse_lmb();
+        while rx.try_recv().is_ok() {}
+        assert_eq!(game.troop_equipment_flags[2], 0, "handed back");
+        assert_eq!(game.available_equipment.krys_knives, 2, "both unused again");
+        assert_eq!(game.map_equipment_troop_column_x_ranges[2], (0, 0));
+
+        // Give it once more, then DONE through a click on bare map
+        // (seg000:5ca5): the strip pops, its cleanup packs the row into the
+        // troop and stages the diff.
+        let (kx0, _) = game.map_equipment_column_x_ranges[2];
+        game.mouse_pos_x = kx0 as u16;
+        game.mouse_pos_y = (strip.y0 + 6) as u16;
+        game.dune_map_mouse_lmb();
+        while rx.try_recv().is_ok() {}
+        assert_eq!(game.troop_equipment_flags[2], 1);
+        game.mouse_pos_x = 300;
+        game.mouse_pos_y = 140;
+        game.dune_map_mouse_lmb();
+        while rx.try_recv().is_ok() {}
+        assert_eq!(game.map_modify_equipment_mode, 0, "the sub-mode is down");
+        assert_eq!(
+            game.map_popup2,
+            MapPanelRef::None,
+            "the strip left the slot"
+        );
+        assert_ne!(
+            game.get_active_menu_ref(),
+            MenuRef::MenuDone,
+            "the DONE strip popped"
+        );
+        assert_eq!(game.troops[0].equipment, 0x20, "krys knives = bit 5");
+        assert_eq!(
+            game.troop_condit.equipment_added_by_modify, 0x20,
+            "added: the knife"
+        );
+        assert_eq!(
+            game.troop_condit.equipment_removed_by_modify, 0,
+            "removed: nothing"
+        );
+        assert_eq!(game.troop_condit.paul_orni_given, 0);
+        assert_eq!(game.map_troop_equipment_row_up, 0);
+        game.screen
+            .write_png(&game.palette, "modify_equipment_done.png")
+            .unwrap();
     }
 }

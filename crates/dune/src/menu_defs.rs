@@ -326,7 +326,7 @@ pub(crate) const MENU_MAP_TROOPS: MenuDef = menu(0xff, &[
 pub(crate) const MENU_TROOP_DIALOG: MenuDef = menu(0xfc, &[
     item(cmd::ASK_FOR_MORE_INFORMATION, 0x7bed, GameState::menu_callback_choice_map_troop_dialogue_ask_for_more_information),
     item(cmd::CHANGE_TROOP_OCCUPATION,  0x69b3, GameState::menu_callback_choice_map_troop_dialogue_change_troop_occupation),
-    item(cmd::MODIFY_EQUIPMENT,         0x7cbb, |_, _, _| println!("menu: MODIFY EQUIPMENT (seg000:7cbb) not ported")),
+    item(cmd::MODIFY_EQUIPMENT,         0x7cbb, GameState::menu_callback_choice_map_troop_dialogue_modify_equipment),
     item(cmd::MOVE_TROOP,               0x8064, GameState::menu_callback_choice_multiple_move_troop),
     item(cmd::NO_MORE_ORDERS,           0x8763, GameState::menu_callback_choice_multiple_no_more_orders),
 ]);

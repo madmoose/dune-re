@@ -1571,6 +1571,18 @@ pub(crate) struct TroopCondit {
     pub(crate) ecology_skill: u8,
     pub(crate) equipment: u8,
     pub(crate) population: u8,
+    /// = seg001:003d for_condit_troop_equipment_added_by_modify_operation_
+    /// ds_3d — the equipment bits an edit added. Holds the pre-edit mask
+    /// while the edit runs (seg000:7cfa/77fc), diffed into added/removed by
+    /// troop_equipment_changed.
+    pub(crate) equipment_added_by_modify: u8,
+    /// = seg001:003e for_condit_troop_equipment_removed_by_modify_operation_
+    /// ds_3e — the bits the edit took away.
+    pub(crate) equipment_removed_by_modify: u8,
+    /// = seg001:003f for_condit_troop_equipment_Paul_orni_ds_3f — 0x40 when
+    /// the edit gave the troop an ornithopter at the player's own location
+    /// (the "Thanks for giving me your orni!" line), else 0.
+    pub(crate) paul_orni_given: u8,
     /// = seg001:0040 for_condit_troop_number_of_days_since_ralliement_ds_40.
     pub(crate) days_since_ralliement: u8,
     /// = seg001:0041 for_condit_game_days_since_ralliement_ds_41.
@@ -2661,7 +2673,7 @@ impl GameState {
     // "stopped working" bit the icon script reads — with the answer,
     // refreshing the icon and restarting the clocks when the troop starts
     // working again.
-    fn troop_occupation_not_viable(&mut self, ti: usize) -> bool {
+    pub(crate) fn troop_occupation_not_viable(&mut self, ti: usize) -> bool {
         let t = self.troops[ti];
         let li = locations::location_index_from_ptr(t.offset_of_location);
         let loc = self.locations[li];

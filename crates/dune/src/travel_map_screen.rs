@@ -512,15 +512,15 @@ impl GameState {
         if self.map_location_popup_loc.is_none() {
             return;
         }
-        // = seg000:5f83..5f8d the active element's priority byte: a locked base
-        //   (0xff, no menu) closes directly (loc_05f91); a menu exits.
-        if matches!(
-            self.get_active_menu_ref(),
-            MenuRef::MenuGoThereFlyingAnOrni | MenuRef::MenuGoThereRidingAWorm
-        ) {
-            self.menu_callback_choice_exit_menu(0, 0);
-        } else {
+        // = seg000:5f83..5f8d get_active_screen_element; al = [bp]; inc al;
+        //   jz — the active element's leading priority byte: a 0xff-locked
+        //   base (the panel-only case, no GO THERE menu) closes the panel
+        //   directly (map_close_location_popup); anything else is the GO
+        //   THERE menu, and exiting it runs the same close as its cleanup.
+        if self.menu_buffer(self.get_active_menu_ref()).priority == 0xff {
             self.map_close_location_popup();
+        } else {
+            self.menu_callback_choice_exit_menu(0, 0);
         }
     }
 

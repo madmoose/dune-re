@@ -39,6 +39,9 @@ fn condit_var_name(addr: u16) -> Option<(&'static str, bool)> {
         0x3a => ("troop.ecology_skill", false),
         0x3b => ("troop.equipment", false),
         0x3c => ("troop.population", false),
+        0x3d => ("troop.equipment_added_by_modify", false),
+        0x3e => ("troop.equipment_removed_by_modify", false),
+        0x3f => ("troop.paul_orni_given", false),
         0x40 => ("troop.days_since_ralliement", false),
         0x42 => ("troop.time_periods_since_ralliement", true),
         0x48 => ("troop.harvest_rate", true),
@@ -179,6 +182,11 @@ impl GameState {
             0x3a => self.troop_condit.ecology_skill,
             0x3b => self.troop_condit.equipment,
             0x3c => self.troop_condit.population,
+            // = seg001:003d..003f the MODIFY EQUIPMENT diff
+            // (troop_equipment_changed, troop_map_screen.rs).
+            0x3d => self.troop_condit.equipment_added_by_modify,
+            0x3e => self.troop_condit.equipment_removed_by_modify,
+            0x3f => self.troop_condit.paul_orni_given,
             0x40 => self.troop_condit.days_since_ralliement,
             0x41 => self.troop_condit.game_days_since_ralliement,
             // = seg001:004c related_to_contacting_troops_ds_4c — 0xff while
