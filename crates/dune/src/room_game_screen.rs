@@ -1244,15 +1244,15 @@ impl GameState {
     fn sal_open_resource(&mut self) {}
 
     // = seg000:2eb2 ui_draw_room_command_panel — draw the bottom command /
-    // dialogue panel. With a dialogue active (data_04774 != 0) it renders the
-    // dialogue (loc_0301a) and enqueues its render task; otherwise it builds and
-    // draws the verb menu for current_location_ptr. Run via the offscreen helper from
-    // draw_room_game_screen.
+    // dialogue panel. With a dialogue active (data_04774 != 0) it blanks the
+    // nav panel (loc_0301a) and pushes the scene's panel; otherwise it builds
+    // and draws the verb menu for current_location_ptr. Run via the offscreen
+    // helper from draw_room_game_screen.
     pub(crate) fn ui_draw_room_command_panel(&mut self) {
         // = seg000:2eb2 cmp data_04774,0; jnz -> the dialogue branch.
         if self.is_dialogue_active {
-            // = seg000:2eb9 call loc_0301a (render the dialogue panel).
-            self.draw_dialogue_panel();
+            // = seg000:2eb9 call loc_0301a — the blank nav panel.
+            self.ui_install_nav_panel(self.nav_panel_blank);
             // = seg000:2ebc call loc_098e6 (reset the per-scene lip-sync indices).
             self.reset_scene_lip_sync_state();
             // = seg000:2ebf loc_02ebf: bp = [data_02220] (the dialogue record
@@ -1280,9 +1280,9 @@ impl GameState {
         }
 
         // = seg000:2edd when the cursor sits over the command-panel area
-        // (mouse_pos_x >= 0x74) restore the hardware cursor (rect 0dbech) so the
+        // (mouse_pos_y >= 0x74) restore the hardware cursor (rect 0dbech) so the
         // about-to-be-redrawn verbs are not painted under a stale cursor image.
-        if self.input.lock().unwrap().mouse_x >= 0x74 {
+        if self.input.lock().unwrap().mouse_y >= 0x74 {
             // = seg000:2ee5 ax = 0dbech; push; call call_restore_cursor.
             self.restore_cursor_over_panel();
         }
@@ -2520,11 +2520,6 @@ impl GameState {
         // = seg000:3070 jmp loc_0d735 — fall into the panel redraw.
         self.ui_draw_nav_panel();
     }
-
-    // = seg000:301a loc_0301a — render the active dialogue into the command-panel
-    // area (the data_04774 != 0 branch).
-    // TODO: port the dialogue text system; no-op stub.
-    fn draw_dialogue_panel(&mut self) {}
 
     // = seg000:98e6 reset_scene_lip_sync_state — tear down the current scene's
     // talking head and its frame tasks before the room/panel is re-presented.

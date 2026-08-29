@@ -489,3 +489,59 @@ impl GameState {
         self.ui_hud_draw_companions();
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use std::sync::mpsc;
+
+    use crate::{GameState, dat_file::DatFile, game_ui::NAV_PANEL_RECORD_OFFSET};
+
+    // A scripted scene draws the room with the dialogue flag up, and
+    // ui_draw_room_command_panel then installs the blank nav panel
+    // (seg000:2eb9 -> loc_0301a): no compass arrows during the
+    // communication-room gather scene. Asset-gated:
+    //   cargo test -p dune --bin dune -- --ignored gather_scene_blanks
+    #[test]
+    #[ignore = "needs assets/DUNE.DAT"]
+    fn gather_scene_blanks_the_nav_panel() {
+        let dat_path = concat!(env!("CARGO_MANIFEST_DIR"), "/../../assets/DUNE.DAT");
+        let Ok(dat_file) = DatFile::open(dat_path) else {
+            eprintln!("skipping: {dat_path} not found");
+            return;
+        };
+        let (tx, rx) = mpsc::sync_channel(64);
+        let mut game = GameState::new(dat_file, tx);
+        game.set_headless();
+        game.start(true);
+        while rx.try_recv().is_ok() {}
+
+        let o = NAV_PANEL_RECORD_OFFSET;
+        let nav = |g: &GameState| -> Vec<(i16, u16)> {
+            (0..6)
+                .map(|i| (g.ui_elements[o + i].sprite_id, g.ui_elements[o + i].flags))
+                .collect()
+        };
+        assert!(
+            nav(&game)
+                .iter()
+                .any(|&(sprite, flags)| sprite != 0 && flags & 0x80 != 0),
+            "the room compass is up before the scene: {:?}",
+            nav(&game)
+        );
+
+        game.start_scripted_dialogue(&super::SCRIPT_PHASE_0C);
+        game.menu_callback_choice_continue_for_sequence(0, 0);
+        while rx.try_recv().is_ok() {}
+        assert_eq!(game.location_and_room & 0xff, 8, "the communication room");
+        assert!(
+            nav(&game)
+                .iter()
+                .all(|&(sprite, flags)| sprite == -1 && flags & 0x80 == 0),
+            "the nav panel is blank during the scene: {:?}",
+            nav(&game)
+        );
+        game.screen
+            .write_png(&game.palette, "gather_scene_nav_panel.png")
+            .unwrap();
+    }
+}
