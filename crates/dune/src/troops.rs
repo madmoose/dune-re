@@ -2316,7 +2316,13 @@ impl GameState {
         let total = old_total.wrapping_add(harvested);
         self.troops[ti].harvest_total = total;
 
-        println!("troop {} harvested {} (total {})", ti, harvested, total);
+        print!("troop {} harvested {} (total {})", ti, harvested, total);
+        if self.troops[ti].equipment & 0x80 != 0 {
+            print!(", with harvester");
+        } else {
+            print!(", without harvester");
+        }
+        println!();
 
         // = seg000:700b..7016 every time that total crosses a multiple of 128
         //   the troop gets better at mining (skill +1, marker 1).
@@ -2406,6 +2412,7 @@ impl GameState {
                 }
                 duration = (dividend / divisor as u16).min(0xff);
                 self.troops[ti].harvest_rate = duration;
+                println!("troop {ti} prospecting {li}: {duration} periods to cover");
             }
             // = seg000:70f7..70fe cx = periods elapsed since ralliement.
             let elapsed = self
@@ -2420,6 +2427,10 @@ impl GameState {
                 // = seg000:7104..710c dep_E = elapsed * 100 / duration — the
                 //   progress percent the info panel shows.
                 self.troops[ti].harvest_total = (elapsed as u32 * 100 / duration as u32) as u16;
+                println!(
+                    "troop {ti} prospecting {li}: {}% covered ({elapsed}/{duration} periods)",
+                    self.troops[ti].harvest_total
+                );
                 return;
             }
             // = seg000:7110..7114 prospecting complete: spice skill +2
@@ -2427,6 +2438,10 @@ impl GameState {
             self.troop_increase_spice_skill(ti, 2, 0);
             // = seg000:7117 the location is prospected now.
             self.locations[li].status |= 0x40;
+            println!(
+                "troop {ti} prospecting {li}: complete after {elapsed} periods, spice skill {}",
+                self.troops[ti].spice_skill
+            );
             // = seg000:711b..7122 with the spice overlay up, the new shade
             //   marks it for a repaint.
             if self.data_046eb & 0x40 != 0 {
@@ -3659,5 +3674,86 @@ mod tests {
         assert_eq!(game.troops[ti].occupation & 0x10, 0x10, "stopped working");
         assert_eq!(game.troops[ti].harvest_rate, 0, "no rate to show");
         assert_eq!(game.troops[ti].harvest_total, 0, "no total to average");
+    }
+
+    // Spice prospecting (seg000:70cc): the first working period fixes the
+    // job's duration, (spice_amount * 16) / (motivation + spice_skill)
+    // periods; each later period stores elapsed * 100 / duration as the
+    // progress percent; reaching the duration marks the area prospected,
+    // raises the spice skill by 2, stops the troop and reports in with
+    // message 0x0e. Asset-gated:
+    //   cargo test -p dune --bin dune -- --ignored spice_prospecting
+    #[test]
+    #[ignore = "needs assets/DUNE.DAT"]
+    fn spice_prospecting_times_the_job_and_marks_the_area() {
+        let dat_path = concat!(env!("CARGO_MANIFEST_DIR"), "/../../assets/DUNE.DAT");
+        let Ok(dat_file) = DatFile::open(dat_path) else {
+            eprintln!("skipping: {dat_path} not found");
+            return;
+        };
+        let (tx, rx) = mpsc::sync_channel(64);
+        let mut game = GameState::new(dat_file, tx);
+        game.set_headless();
+        game.start(true);
+        while rx.try_recv().is_ok() {}
+
+        let ti = 0;
+        let li = crate::locations::location_index_from_ptr(game.troops[ti].offset_of_location);
+        let loc_ptr = game.troops[ti].offset_of_location;
+        game.troops[ti].occupation = 1;
+        game.troops[ti].motivation = 40;
+        game.troops[ti].spice_skill = 10;
+        game.troops[ti].bitfield_10 = 0;
+        game.troops[ti].dissatisfaction_and_speech = 0;
+        game.troops[ti].harvest_rate = 0;
+        game.troops[ti].harvest_total = 0;
+        let start = game.game_time;
+        game.troops[ti].time_period_of_ralliement = start;
+        game.locations[li].status &= !0x43;
+        game.locations[li].spice_amount = 100;
+        game.bitfield_paul_events |= 1;
+        game.prospector_destinations[0] = 0;
+        game.map_contact_troop = None;
+        game.vision_messages.clear();
+
+        // The first period only fixes the duration: 1600 / 50 = 32 periods.
+        game.run_troop_occupation_events();
+        assert_eq!(game.troops[ti].harvest_rate, 32, "the duration");
+        assert_eq!(game.troops[ti].harvest_total, 0, "no progress yet");
+        assert_eq!(game.troops[ti].occupation & 0x10, 0, "working");
+
+        // Eight periods in: 8 * 100 / 32 = 25%.
+        game.game_time = start + 8;
+        game.run_troop_occupation_events();
+        assert_eq!(game.troops[ti].harvest_total, 25, "the progress percent");
+        assert_eq!(game.locations[li].status & 0x40, 0, "not prospected yet");
+
+        // The duration reached: prospected, skill +2, stopped, 100%, reported.
+        game.game_time = start + 32;
+        game.run_troop_occupation_events();
+        assert_ne!(
+            game.locations[li].status & 0x40,
+            0,
+            "the area is prospected"
+        );
+        assert_eq!(game.troops[ti].spice_skill, 12, "spice skill +2");
+        assert_ne!(game.troops[ti].occupation & 0x10, 0, "the troop stopped");
+        assert_eq!(
+            game.troops[ti].harvest_total, 100,
+            "progress pinned at 100%"
+        );
+        assert!(
+            game.vision_messages.contains(&(0x0f0e, loc_ptr)),
+            "message 0x0e queued for the location: {:x?}",
+            game.vision_messages
+        );
+
+        // A further period on a prospected area goes straight to the finish
+        // tail and reports nothing more (the troop was already stopped).
+        game.vision_messages.clear();
+        game.game_time = start + 33;
+        game.run_troop_occupation_events();
+        assert_eq!(game.troops[ti].spice_skill, 12, "no second raise");
+        assert!(game.vision_messages.is_empty(), "no second report");
     }
 }
