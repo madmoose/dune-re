@@ -2984,6 +2984,35 @@ impl GameState {
         self.map_select_troop();
     }
 
+    // = seg000:5b1e menu_callback_choice_map_main_find_prospectors — centre
+    // the view on the prospector troop (id 3) and, when it is reachable and
+    // the spice-density overlay is down, contact it.
+    pub(crate) fn menu_callback_choice_map_main_find_prospectors(
+        &mut self,
+        _text_id: u16,
+        _index: usize,
+    ) {
+        // = seg000:5b1e data_01955 = 3; si = troops[2].
+        self.map_last_selected_troop_id = 3;
+        let t = self.troops[2];
+        // = seg000:5b26..5b30 set_zoomed_globe_pos(gps); map_refresh_and_restore_overlay_nav.
+        self.zoomed_globe_longitude = t.gps_coordinates_1;
+        self.zoomed_globe_latitude = t.gps_coordinates_2 as i16;
+        self.map_refresh_main_view_restoring_overlay_nav();
+        // = seg000:5b34..5b48 at visibility 1 a moving troop, or one away from
+        //   the current location, is out of reach.
+        if self.location_visibility_distance <= 1
+            && (t.occupation & 0x40 != 0
+                || t.offset_of_location != self.current_location_ptr_word())
+        {
+            return;
+        }
+        // = seg000:5b4a..5b52 jmp menu_callback_choice_map_main_contact_fremen_troops unless the overlay is up.
+        if self.data_046eb & 0x40 == 0 {
+            self.menu_callback_choice_map_main_contact_fremen_troops(0, 0);
+        }
+    }
+
     // = seg000:86cc menu_callback_choice_map_main_contact_fremen_troops — the
     // map main menu's contact slot: "CONTACT FREMEN TROOPS" over the whole
     // planet, or "GIVE ORDERS TO TROOP" while location_visibility_distance is
@@ -6081,5 +6110,61 @@ mod tests {
             0,
             "nothing of the portrait survives the cut"
         );
+    }
+
+    // FIND PROSPECTORS (seg000:5b1e): centre the map on troop 3 and contact
+    // it. Asset-gated:
+    //   cargo test -p dune --bin dune -- --ignored find_prospectors
+    #[test]
+    #[ignore = "needs assets/DUNE.DAT"]
+    fn find_prospectors_centres_on_and_contacts_troop_3() {
+        let dat_path = concat!(env!("CARGO_MANIFEST_DIR"), "/../../assets/DUNE.DAT");
+        let Ok(dat_file) = DatFile::open(dat_path) else {
+            eprintln!("skipping: {dat_path} not found");
+            return;
+        };
+        let (tx, rx) = mpsc::sync_channel(64);
+        let mut game = GameState::new(dat_file, tx);
+        game.set_headless();
+        game.start(true);
+        while rx.try_recv().is_ok() {}
+
+        game.game_phase = 5;
+        game.troops[2].occupation = 0x01;
+        game.number_of_rallied_troops = 1;
+        game.location_visibility_distance = 4;
+        game.ui_toggle_room_view();
+        while rx.try_recv().is_ok() {}
+        assert_eq!(
+            game.menu_map_troops.records[4].text_id,
+            cmd::FIND_PROSPECTORS
+        );
+        let (gx, gy) = (
+            game.troops[2].gps_coordinates_1,
+            game.troops[2].gps_coordinates_2,
+        );
+        assert_ne!(
+            (gx, gy),
+            (
+                game.zoomed_globe_longitude,
+                game.zoomed_globe_latitude as u16
+            )
+        );
+
+        game.menu_callback_choice_map_main_find_prospectors(cmd::FIND_PROSPECTORS, 0);
+        while rx.try_recv().is_ok() {}
+        assert_eq!(
+            (
+                game.zoomed_globe_longitude,
+                game.zoomed_globe_latitude as u16
+            ),
+            (gx, gy)
+        );
+        assert_eq!(
+            game.map_selected_troop_id, 3,
+            "the prospectors are contacted"
+        );
+        // Out of visibility range, so the contact offers only the cycle menu.
+        assert_eq!(game.get_active_menu_ref(), MenuRef::MenuNextTroop);
     }
 }

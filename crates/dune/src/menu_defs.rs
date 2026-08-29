@@ -318,7 +318,7 @@ pub(crate) const MENU_MAP_TROOPS: MenuDef = menu(0xff, &[
     item(cmd::CONTACT_FREMEN_TROOPS, 0x86cc, GameState::menu_callback_choice_map_main_contact_fremen_troops),
     item(cmd::SEE_SPICE_DENSITY,     0x53f1, GameState::menu_callback_choice_map_main_see_spice_density),
     item(cmd::TAKE_AN_ORNITHOPTER,   0x42d9, GameState::menu_callback_choice_map_main_take_an_ornithopter),
-    item(cmd::FIND_PROSPECTORS,      0x5b1e, |_, _, _| println!("menu: FIND PROSPECTORS (seg000:5b1e) not ported")),
+    item(cmd::FIND_PROSPECTORS,      0x5b1e, GameState::menu_callback_choice_map_main_find_prospectors),
 ]);
 
 /// = seg001:210a menu_map_troop_dialog

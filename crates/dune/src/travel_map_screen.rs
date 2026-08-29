@@ -457,8 +457,7 @@ impl GameState {
     // recentre tail: redraw the main view; with the overlay sub-mode up the
     // recompose re-entered the overlay but its own tail leaves the nav rect
     // on the map window (seg000:5ad9), so put it back on the panel
-    // (loc_05575). Also the FIND PROSPECTORS verb's tail (seg000:5b30,
-    // unported).
+    // (loc_05575). Also the FIND PROSPECTORS verb's tail (seg000:5b30).
     pub(crate) fn map_refresh_main_view_restoring_overlay_nav(&mut self) {
         // = seg000:5b10 call map_refresh_main_view.
         self.map_refresh_main_view();
