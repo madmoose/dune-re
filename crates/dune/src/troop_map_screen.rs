@@ -2770,6 +2770,9 @@ impl GameState {
     // subtitle_setup_layout (seg000:8cee) when a line is presented with no
     // popup up.
     pub(crate) fn map_draw_troop_contact_popup(&mut self, ti: usize) {
+        // The panel fills follow the active framebuffer (seg000:7b1b) while
+        // the head is pinned to the screen buffer (seg000:9d6a), so callers
+        // make the screen active first (map_setup_troop_contact_popup).
         // = seg000:79ee data_046ef = si — the contact is live from here.
         self.map_contact_troop = Some(ti);
         // = seg000:79f2/79f8 call troop_find_icon; jnz loc_07a1e — without an
