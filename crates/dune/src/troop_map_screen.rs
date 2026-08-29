@@ -6019,4 +6019,67 @@ mod tests {
             .write_png(&game.palette, "modify_equipment_done.png")
             .unwrap();
     }
+
+    // Cutting a troop contact must leave nothing of the popup on the map:
+    // lip_sync_stop removes the lip-sync task from inside the dispatch, and a
+    // second entry outlives it (a line arms the voice twice, seg000:a0c9 and
+    // 7c36) but finds voc_pcm_playing clear. Asset-gated:
+    //   cargo test -p dune --bin dune -- --ignored contact_cut_leaves
+    #[test]
+    #[ignore = "needs assets/DUNE.DAT"]
+    fn contact_cut_leaves_no_portrait_on_the_map() {
+        let dat_path = concat!(env!("CARGO_MANIFEST_DIR"), "/../../assets/DUNE.DAT");
+        let Ok(dat_file) = DatFile::open(dat_path) else {
+            eprintln!("skipping: {dat_path} not found");
+            return;
+        };
+        let (tx, rx) = mpsc::sync_channel(64);
+        let mut game = GameState::new(dat_file, tx);
+        game.set_headless();
+        game.start(true);
+        while rx.try_recv().is_ok() {}
+
+        game.troops[0].occupation = 0x01;
+        game.locations[13].status |= 0x10;
+        game.number_of_rallied_troops = 2;
+        game.location_visibility_distance = 4;
+        game.ui_toggle_room_view();
+        while rx.try_recv().is_ok() {}
+
+        game.menu_callback_choice_map_main_contact_fremen_troops(cmd::CONTACT_FREMEN_TROOPS, 0);
+        while rx.try_recv().is_ok() {}
+        assert_eq!(game.map_contact_troop, Some(0), "the contact popup is up");
+        // Mid-word, so a stray stamp of the closed mouth would count as a
+        // change and draw.
+        game.talking_head.as_mut().expect("a head is up").mouth = 3;
+
+        let head_box = game.head_popup_box;
+        let yoff = game.y_offset as i16;
+        // The map window is drawn from the 0x10..0x20 palette bank.
+        let off_map_pixels = |g: &GameState| {
+            (head_box.y0..head_box.y1)
+                .flat_map(|y| (head_box.x0..head_box.x1).map(move |x| (x, y)))
+                .filter(|&(x, y)| {
+                    !(0x10..0x20).contains(&g.screen.get(x as u16, (y + yoff) as u16))
+                })
+                .count()
+        };
+        assert!(
+            off_map_pixels(&game) > 1000,
+            "the portrait fills the head box"
+        );
+
+        game.menu_callback_choice_map_troop_contact_no_more_orders(cmd::CUT_CONTACT, 0);
+        while rx.try_recv().is_ok() {}
+        assert!(game.map_contact_troop.is_none(), "the contact is cut");
+        for _ in 0..80 {
+            game.tick_one_frame();
+        }
+        while rx.try_recv().is_ok() {}
+        assert_eq!(
+            off_map_pixels(&game),
+            0,
+            "nothing of the portrait survives the cut"
+        );
+    }
 }

@@ -2160,6 +2160,14 @@ pub struct GameState {
     // entries). See add_frame_task / remove_frame_task / remove_all_frame_tasks.
     pub(crate) frame_tasks: Vec<FrameTask>,
 
+    // = seg001:dc66 frame_task_dispatch_sp — Some while process_frame_tasks
+    // is inside a callback: the array index the walk visits next. DOS
+    // publishes the loop's saved {si, cx} through this cell so
+    // remove_frame_task can shift the walk back when the compaction moves
+    // the entries at or before the cursor (seg000:da87); see
+    // process_frame_tasks for why the index alone carries that.
+    pub(crate) frame_task_walk_next: Option<usize>,
+
     // = seg001:dce4 data_0dce4 — the active menu's skip byte as sampled by
     // redraw_active_command_menu, with bit 0x80 OR'd in when more records
     // follow the visible window. read_command_menu_record_for_slot decides
@@ -2787,6 +2795,7 @@ impl GameState {
             last_task_tick: 0,
             game_clock_last_tick: 0,
             frame_tasks,
+            frame_task_walk_next: None,
             command_menu_more_state: 0,
             command_menu_more_slot: 0xff,
             in_transition: 0,
@@ -3410,18 +3419,45 @@ impl GameState {
         }
     }
 
-    // = seg000:da25 add_frame_task — append a per-frame callback.
+    // = seg000:da25 add_frame_task — append a per-frame callback. DOS never
+    // dedupes: the same callback can sit in the array twice (a troop-contact
+    // line arms the voice from both seg000:a0c9 and seg000:7c36), and
+    // remove_frame_task takes one entry per call.
     pub(crate) fn add_frame_task(&mut self, interval: u16, task_id: TaskId) {
+        // = seg000:da2a..da30 inc count; cmp ax,14h; ja ret — at most 20
+        //   entries; a full array drops the add.
+        if self.frame_tasks.len() >= 20 {
+            return;
+        }
         self.frame_tasks.push(FrameTask {
             interval,
             accumulator: 0,
             task_id,
-        })
+        });
+        // = seg000:da47..da4f inside a dispatch, inc the saved cx so the new
+        //   entry is reached this pass. The walk runs against the live length,
+        //   so nothing to patch here.
     }
 
-    // = seg000:da5f remove_frame_task — remove by id.
+    // = seg000:da5f remove_frame_task — drop the FIRST entry with this
+    // callback (seg000:da69 scans and stops at a match) and compact the tail
+    // down over it.
     pub(crate) fn remove_frame_task(&mut self, id: TaskId) {
-        self.frame_tasks.retain(|t| t.task_id != id);
+        let Some(idx) = self.frame_tasks.iter().position(|t| t.task_id == id) else {
+            return;
+        };
+        // = seg000:da76 dec count; da9b..daa0 rep movsw.
+        self.frame_tasks.remove(idx);
+        // = seg000:da7a..da8d inside a dispatch: an entry after the cursor
+        //   (`cmp di,[bp]; ja`) only shortens the saved cx, which the live
+        //   length already reflects; an entry at or before it (`sub [bp],6`)
+        //   shifted the rest down one slot, so the walk steps back to land on
+        //   the entry that moved into the cursor's slot.
+        if let Some(next) = &mut self.frame_task_walk_next {
+            if idx < *next {
+                *next -= 1;
+            }
+        }
     }
 
     pub(crate) fn has_frame_task(&self, id: TaskId) -> bool {
@@ -3478,85 +3514,103 @@ impl GameState {
         let elapsed = elapsed_raw.min(u16::MAX as u64) as u16;
         self.last_task_tick = now;
 
-        let mut due = Vec::new();
-        for task in &mut self.frame_tasks {
-            if task.interval == 0 {
-                due.push(task.task_id);
-                continue;
+        // = seg000:d9e3..da21 walk the LIVE array: si steps one entry per
+        // pass with cx = the entries left, and a callback runs with that pair
+        // published through frame_task_dispatch_sp so add_frame_task /
+        // remove_frame_task can patch it. Every patch keeps (walked + cx) equal
+        // to the live count — add bumps both (seg000:da4f), remove drops both
+        // (seg000:da8d, or da87 with the cursor) — so the bound is simply the
+        // live length, and the one patch that changes where the walk goes next
+        // is a removal at or before the cursor (frame_task_walk_next). A
+        // snapshot of the due ids would not do: a task removed from inside a
+        // callback (lip_sync_stop under a contact cut) still got one run.
+        let mut i = 0;
+        while i < self.frame_tasks.len() {
+            let task = &mut self.frame_tasks[i];
+            // = seg000:d9ee..d9f4 ax = elapsed + accumulator (wrapping); due
+            //   when it reaches the interval (>=). = seg000:da04 interval 0
+            //   fires every pass and keeps its accumulator.
+            let acc = elapsed.wrapping_add(task.accumulator);
+            if task.interval != 0 {
+                if acc < task.interval {
+                    // = seg000:d9f6..d9fb not due: store it, next entry.
+                    task.accumulator = acc;
+                    i += 1;
+                    continue;
+                }
+                // = seg000:da0a `div bp` — carry the remainder so the period
+                //   stays exact.
+                task.accumulator = acc % task.interval;
             }
-
-            // = seg000:d9f4 `cmp ax,bp; jnb` — fire when elapsed+accumulator
-            // reaches the interval (>=), not strictly past it. The modulo (=
-            // seg000:da0a `div bp`) carries the remainder so the period stays
-            // exact; when not firing acc < interval, so `acc % interval == acc`,
-            // matching DOS's plain `mov [si],ax` store on the not-due path.
-            let acc = elapsed + task.accumulator;
-            let fire = acc >= task.interval;
-            task.accumulator = acc % task.interval;
-
-            if fire {
-                due.push(task.task_id);
-            }
+            let task_id = task.task_id;
+            // = seg000:da11..da14 push {bx, cx, si}; frame_task_dispatch_sp =
+            //   sp. A dispatch nested through wait_processing_frame_tasks
+            //   republishes its own walk; DOS leaves the cell cleared when it
+            //   returns (seg000:d9fd), so the outer callback's later removals
+            //   go unpatched there — the port restores the outer walk instead.
+            let outer = self.frame_task_walk_next.replace(i + 1);
+            self.run_frame_task(task_id);
+            // = seg000:da1b..da21 pop {si, cx, bx} as patched; add si,6; loop.
+            i = self.frame_task_walk_next.take().unwrap_or(i + 1);
+            self.frame_task_walk_next = outer;
         }
+        // = seg000:d9fd frame_task_dispatch_sp = 0.
+    }
 
-        // Each task may call add/remove_frame_task during its callback (e.g. a
-        // task removing itself when its clip ends, = lip_sync_stop's
-        // remove_frame_task(0a7c2)); `due` was collected above so the mutation
-        // doesn't disturb the in-flight scan.
-        for task_id in due {
-            match task_id {
-                TaskId::HnmDoFrame => {
-                    // = seg000:0070c
-                    if self.hnm_do_frame() {
-                        self.gfx_copy_whole_framebuf_to_screen();
-                        self.send_frame_to_display();
-                    }
+    // = seg000:da18 `call word ptr [si+4]` — the task's callback.
+    fn run_frame_task(&mut self, task_id: TaskId) {
+        match task_id {
+            TaskId::HnmDoFrame => {
+                // = seg000:0070c
+                if self.hnm_do_frame() {
+                    self.gfx_copy_whole_framebuf_to_screen();
+                    self.send_frame_to_display();
                 }
-                TaskId::IntroNightAttack => {
-                    self.tick_intro_night_attack();
-                }
-                TaskId::TalkingHeadIdle => {
-                    self.tick_talking_head_idle();
-                }
-                TaskId::TalkingHeadVoc => {
-                    self.tick_talking_head_voc();
-                }
-                TaskId::SkyPaletteCycler => {
-                    self.tick_sky_palette_cycler();
-                }
-                TaskId::SkyFade => {
-                    self.tick_sky_fade();
-                }
-                TaskId::Room => {
-                    self.tick_room();
-                }
-                TaskId::PcmVoiceMusicRestore => {
-                    self.tick_pcm_voice_music_restore();
-                }
-                TaskId::MapCaption => {
-                    self.tick_map_caption();
-                }
-                TaskId::MapPlayerMarker => {
-                    self.tick_map_player_marker();
-                }
-                TaskId::GlobeRotation => {
-                    self.tick_globe_rotation();
-                }
-                TaskId::ResultsGauges => {
-                    self.tick_results_gauges();
-                }
-                TaskId::TroopIconAnim => {
-                    self.tick_troop_icon_anim();
-                }
-                TaskId::CreditsScroll => {
-                    self.credits_scroll_frame_task();
-                }
-                TaskId::SequenceBlink => {
-                    self.tick_sequence_blink();
-                }
-                TaskId::VisionShimmer => {
-                    self.tick_vision_shimmer();
-                }
+            }
+            TaskId::IntroNightAttack => {
+                self.tick_intro_night_attack();
+            }
+            TaskId::TalkingHeadIdle => {
+                self.tick_talking_head_idle();
+            }
+            TaskId::TalkingHeadVoc => {
+                self.tick_talking_head_voc();
+            }
+            TaskId::SkyPaletteCycler => {
+                self.tick_sky_palette_cycler();
+            }
+            TaskId::SkyFade => {
+                self.tick_sky_fade();
+            }
+            TaskId::Room => {
+                self.tick_room();
+            }
+            TaskId::PcmVoiceMusicRestore => {
+                self.tick_pcm_voice_music_restore();
+            }
+            TaskId::MapCaption => {
+                self.tick_map_caption();
+            }
+            TaskId::MapPlayerMarker => {
+                self.tick_map_player_marker();
+            }
+            TaskId::GlobeRotation => {
+                self.tick_globe_rotation();
+            }
+            TaskId::ResultsGauges => {
+                self.tick_results_gauges();
+            }
+            TaskId::TroopIconAnim => {
+                self.tick_troop_icon_anim();
+            }
+            TaskId::CreditsScroll => {
+                self.credits_scroll_frame_task();
+            }
+            TaskId::SequenceBlink => {
+                self.tick_sequence_blink();
+            }
+            TaskId::VisionShimmer => {
+                self.tick_vision_shimmer();
             }
         }
     }
@@ -4708,5 +4762,61 @@ impl GameState {
     // draw_location_room.
     pub fn get_location_and_room(&self) -> u16 {
         self.location_and_room
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::mpsc;
+
+    use crate::{GameState, TaskId, dat_file::DatFile};
+
+    // = seg000:da87 — a task that removes itself from inside its callback
+    // shifts the walk back one slot, so the entry that moved into its slot
+    // still runs this pass and the entry after it is neither skipped nor run
+    // twice. tick_sky_fade with the fade disarmed is such a task; the map
+    // caption task with a long interval is the marker: its accumulator shows
+    // whether the walk reached it. Asset-gated:
+    //   cargo test -p dune --bin dune -- --ignored frame_task_walk
+    #[test]
+    #[ignore = "needs assets/DUNE.DAT"]
+    fn frame_task_walk_survives_removals_from_inside_a_callback() {
+        let dat_path = concat!(env!("CARGO_MANIFEST_DIR"), "/../../assets/DUNE.DAT");
+        let Ok(dat_file) = DatFile::open(dat_path) else {
+            eprintln!("skipping: {dat_path} not found");
+            return;
+        };
+        let (tx, rx) = mpsc::sync_channel(64);
+        let mut game = GameState::new(dat_file, tx);
+        game.set_headless();
+        game.start(true);
+        while rx.try_recv().is_ok() {}
+
+        game.remove_all_frame_tasks();
+        game.sky_fade_active = false;
+        game.add_frame_task(0, TaskId::SkyFade);
+        game.add_frame_task(0, TaskId::SkyFade);
+        game.add_frame_task(1000, TaskId::MapCaption);
+        game.add_frame_task(0, TaskId::SkyFade);
+        game.add_frame_task(1000, TaskId::MapCaption);
+        // Five ticks elapsed since the last pass (a little more by the time
+        // the walk reads the clock).
+        game.last_task_tick = game.game_ticks().saturating_sub(5);
+        game.process_frame_tasks();
+
+        let left: Vec<(TaskId, u16)> = game
+            .frame_tasks
+            .iter()
+            .map(|t| (t.task_id, t.accumulator))
+            .collect();
+        assert_eq!(left.len(), 2, "every self-removing task went: {left:?}");
+        for (id, acc) in left {
+            assert_eq!(id, TaskId::MapCaption);
+            assert!(
+                (5..100).contains(&acc),
+                "the marker was visited once: {acc}"
+            );
+        }
+        assert_eq!(game.frame_task_walk_next, None, "the dispatch is over");
     }
 }
