@@ -872,6 +872,40 @@ mod tests {
 
     use crate::{GameState, dat_file::DatFile};
 
+    // The first demand (loc_02090 from Paul's first vision) announces as the
+    // fresh-demand sighting 0x20b: ds:be starts at 0x80 (nothing paid yet),
+    // so seg000:2125 `js` keeps ah = 2. Only once a shipment has been paid
+    // (bit 7 clear) does a new demand post 0x30b, "Your last shipment
+    // wasn't what I demanded".
+    #[test]
+    #[ignore = "needs assets/DUNE.DAT"]
+    fn first_spice_demand_announces_as_a_fresh_demand() {
+        let dat_path = concat!(env!("CARGO_MANIFEST_DIR"), "/../../assets/DUNE.DAT");
+        let Ok(dat_file) = DatFile::open(dat_path) else {
+            eprintln!("skipping: {dat_path} not found");
+            return;
+        };
+        let (tx, _rx) = mpsc::sync_channel(64);
+        let mut game = GameState::new(dat_file, tx);
+        game.set_headless();
+        game.start(true);
+        assert_eq!(game.spice_shipment_fulfilment, 0x80, "= seg001:00be db 80h");
+        game.spice_shipment_roll_new_demand();
+        assert_eq!(
+            game.comm_sightings.last().copied(),
+            Some(0x020b),
+            "= seg000:2122"
+        );
+        // A paid history flips the announcement to the reproach.
+        game.spice_shipment_fulfilment = 0x40;
+        game.spice_shipment_roll_new_demand();
+        assert_eq!(
+            game.comm_sightings.last().copied(),
+            Some(0x030b),
+            "= seg000:212c"
+        );
+    }
+
     // One full in-game day through the event pump: the desert-walk countdown,
     // the new-day bookkeeping (phase-change day counter, production stats,
     // area percentages, smuggler restock), the ecology walk, the Harkonnen
@@ -982,16 +1016,17 @@ mod tests {
             "a shipment demand is pending"
         );
         assert_eq!(game.spice_shipment_sequence_number, 1);
-        // The first demand: base 100 * (224..288)/256, then the fulfilment
-        // scaling (ds:be = 0, bit 7 clear) multiplies by 0x1ff/256.
+        // The first demand: base 100 * (224..288)/256; the fulfilment
+        // scaling is skipped while ds:be still carries its static 0x80
+        // (nothing paid yet, seg000:2101 jb).
         assert!(
-            (170..=225).contains(&game.spice_shipment_quantity),
-            "the first demand is ~2 * 100 * (224..288)/256 spice (got {})",
+            (87..=112).contains(&game.spice_shipment_quantity),
+            "the first demand is ~100 * (224..288)/256 spice (got {})",
             game.spice_shipment_quantity
         );
         assert!(
-            game.comm_sightings.contains(&0x030b),
-            "the demand's COMM sighting was posted (got {:x?})",
+            game.comm_sightings.contains(&0x020b),
+            "the fresh-demand COMM sighting was posted (got {:x?})",
             game.comm_sightings
         );
     }

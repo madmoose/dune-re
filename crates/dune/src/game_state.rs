@@ -592,9 +592,12 @@ pub struct GameState {
 
     // = seg001:00bc/00be/00bf the Emperor's spice-shipment demand state:
     // ds:bc the demanded quantity, ds:be the fulfilment fraction (bit 7 =
-    // none paid), ds:bf the flags (bit 7 = the shipment plot armed, bit 4 =
-    // a demand pending). actions_time_in_day_3 (seg000:20a4) rolls the
-    // demands; the payment flow (Duncan/CHOAM dialogue) is unported.
+    // none paid; static init 0x80, so the first demand announces as the
+    // fresh-demand sighting 0x20b rather than the "last shipment wasn't
+    // what I demanded" 0x30b), ds:bf the flags (bit 7 = the shipment plot
+    // armed, bit 4 = a demand pending). actions_time_in_day_3 (seg000:20a4)
+    // rolls the demands; the payment flow (Duncan/CHOAM dialogue) is
+    // unported.
     pub(crate) spice_shipment_quantity: u16,
     pub(crate) spice_shipment_fulfilment: u8,
     pub(crate) spice_shipment_flags: u8,
@@ -2470,7 +2473,7 @@ impl GameState {
             spice_production_better_than_previous_day: 0,
             spice_production_lower_than_previous_day: 0,
             spice_shipment_quantity: 0,
-            spice_shipment_fulfilment: 0,
+            spice_shipment_fulfilment: 0x80,
             spice_shipment_flags: 0,
             spice_shipment_arguing_ds_b4: [0; 4],
             for_condit_smuggler_dialogue_related_ds_9d: 0,
