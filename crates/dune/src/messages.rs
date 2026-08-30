@@ -301,6 +301,219 @@ impl GameState {
 
     // ---- The full-screen vision dream -------------------------------------
 
+    // ---- The spice-shipment report scene ----------------------------------
+
+    // = seg001:15aa shipment_ship_rect — the fb1 rect the shipment scene
+    // grabs behind the ship and re-presents per frame: x 0x7e..0x140, y
+    // 0x4c..0x98.
+    const SHIPMENT_SHIP_RECT: Rect = Rect {
+        x0: 0x7e,
+        y0: 0x4c,
+        x1: 0x140,
+        y1: 0x98,
+    };
+    // = seg001:15b2 shipment_ship_frames — the ship's flight, one (STARS
+    // sprite, x, y) per 0x0c-tick frame; 0xffff-terminated in DOS.
+    const SHIPMENT_SHIP_FRAMES: [(u16, i16, i16); 30] = [
+        (0x2e, 0x81, 0x4d),
+        (0x2f, 0x81, 0x4d),
+        (0x2e, 0x80, 0x4d),
+        (0x2f, 0x80, 0x4d),
+        (0x2e, 0x7f, 0x4d),
+        (0x2f, 0x7f, 0x4d),
+        (0x2e, 0x7e, 0x4d),
+        (0x2f, 0x7e, 0x4d),
+        (0x2e, 0x7e, 0x4d),
+        (0x2f, 0x7f, 0x4d),
+        (0x2e, 0x7f, 0x4d),
+        (0x2f, 0x80, 0x4d),
+        (0x2e, 0x80, 0x4d),
+        (0x30, 0x80, 0x4d),
+        (0x30, 0x81, 0x4d),
+        (0x31, 0x81, 0x4d),
+        (0x30, 0x82, 0x4e),
+        (0x30, 0x83, 0x4e),
+        (0x32, 0x84, 0x4d),
+        (0x32, 0x85, 0x4d),
+        (0x33, 0x87, 0x4d),
+        (0x34, 0x8a, 0x4e),
+        (0x35, 0x8c, 0x4e),
+        (0x36, 0x8f, 0x4e),
+        (0x37, 0x96, 0x50),
+        (0x38, 0x9a, 0x51),
+        (0x39, 0xac, 0x54),
+        (0x3a, 0xc5, 0x5b),
+        (0x3b, 0xfc, 0x6a),
+        (0x3c, 0x133, 0x7d),
+    ];
+    // = seg000:264d cmp si, data_0161e — the frame after which the SN1
+    // engine loop is released (the table entry at seg001:161e).
+    const SHIPMENT_SN1_LOOP_END_FRAME: usize = 18;
+
+    // = seg000:2566 comm_shipment_report_scene — Duncan reports the spice
+    // shipment in the communication room (finish_room_screen_setup, room 8,
+    // with Duncan present and an accepted figure pending). He leaves the
+    // party, the figure leaves the stock, and the fulfilment ratio figure /
+    // demand (ds:be, 1..0xff) sets the next demand's day (data_0118d +=
+    // 7/6/5/4 by ratio bracket + rand_masked((seq >> 1) & 3)) and ds:bf
+    // (0xc0 / 0x80 / 0x88; an under-delivery with bit 3 already set zeroes
+    // ds:be). Then the console lights up, STARS.HSQ zooms in through the
+    // planet callback, the narration (clip 0x27) and the SN1 engine loop
+    // play under the ship's flight (shipment_ship_frames), the stars zoom
+    // back out, and the room returns through the planet and a fb2 restore.
+    pub(crate) fn comm_shipment_report_scene(&mut self, figure: u16) {
+        // = seg000:2566/256a Duncan (room_persons[3]) leaves the party.
+        self.npc_travel_detach_companion(3);
+        // = seg000:2570 loc_02524 — the figure leaves the stock.
+        self.spice_in_stock = self.spice_in_stock.wrapping_sub(figure);
+        self.spice_spent_today = self.spice_spent_today.wrapping_add(figure);
+        // = seg000:2573..258d dx:ax = figure * 256; div ds:bc; clamp 0x1ff;
+        //   >> 1; floor 1 -> ds:be. (A zero demand would fault in DOS.)
+        let demand = self.spice_shipment_quantity;
+        let mut ratio = if demand == 0 {
+            0x1ff
+        } else {
+            ((figure as u32) << 8) / demand as u32
+        };
+        if ratio >= 0x200 {
+            ratio = 0x1ff;
+        }
+        let mut be = (ratio >> 1) as u8;
+        if be == 0 {
+            be = 1;
+        }
+        self.spice_shipment_fulfilment = be;
+        // = seg000:2590..25b6 the ratio brackets: (ah, bx) = (0x40, 7) from
+        //   0xc0, (0x40, 6) above 0x80, (0, 5) at 0x80, else (8, 4) — and an
+        //   under-delivery with ds:bf bit 3 already set zeroes ds:be. ds:bf
+        //   = ah | 0x80.
+        let (ah, bx): (u8, u16) = if be >= 0xc0 {
+            (0x40, 7)
+        } else if be > 0x80 {
+            (0x40, 6)
+        } else if be == 0x80 {
+            (0, 5)
+        } else {
+            if self.spice_shipment_flags & 8 != 0 {
+                self.spice_shipment_fulfilment = 0;
+            }
+            (8, 4)
+        };
+        self.spice_shipment_flags = ah | 0x80;
+        // = seg000:25ba..25d4 data_0118d += bx + rand_masked((seq >> 1) & 3);
+        //   days_left = data_0118d - today.
+        self.ingame_day_of_last_spice_shipment_event = self
+            .ingame_day_of_last_spice_shipment_event
+            .wrapping_add(bx);
+        let mask = ((self.spice_shipment_sequence_number >> 1) & 3) as u16;
+        let roll = self.rand_masked(mask);
+        self.ingame_day_of_last_spice_shipment_event = self
+            .ingame_day_of_last_spice_shipment_event
+            .wrapping_add(roll);
+        let day = self.get_ingame_day();
+        self.days_left_until_spice_shipment = self
+            .ingame_day_of_last_spice_shipment_event
+            .wrapping_sub(day) as u8;
+        // = seg000:25d7 the scene is consumed.
+        self.shipment_report_scene_mask = 0;
+        // = seg000:25dd/25e0 the console lights up and the glow fades in.
+        self.comm_show_incoming_call();
+        self.comm_fade_in_glow();
+        // = seg000:25e3 gfx_copy_screen_to_framebuffer_1 — fb1 = the screen.
+        let screen = self.screen.pixels().to_vec();
+        self.framebuffer.pixels_mut().copy_from_slice(&screen);
+        // = seg000:25e6..25ec STARS.HSQ (its palette goes live).
+        self.open_sprite_bank(sprite_bank::STARS);
+        self.update_screen_palette();
+        // = seg000:25ef..25f4 transition 8 through the planet callback.
+        self.transition(8, 0, Self::comm_shipment_planet_callback);
+        // = seg000:25f7 wait_interruptable(0x64).
+        self.wait_interruptable(0x64);
+        // = seg000:25fd..2605 cx = 0x18; transition 6 with draw_stars.
+        self.transition(6, 0, |s| s.intro_floppy_draw_stars(0x18));
+        // = seg000:2608..2617 zoom in: draw_stars for 0x17 down to 0, 0x0c
+        //   ticks each.
+        for pan in (0..0x18u16).rev() {
+            self.wait_processing_frame_tasks_interruptable(0x0c, |s| {
+                s.intro_floppy_draw_stars(pan)
+            });
+        }
+        // = seg000:2619 the narration (clip 0x27).
+        self.start_narration_voice_clip(0x27);
+        // = seg000:261f..2629 grab the ship area from fb1 into the GLOBDATA
+        //   scratch.
+        let backdrop = gfx::vga_grab_rect(&self.framebuffer, Self::SHIPMENT_SHIP_RECT);
+        // = seg000:262d/2633 wait 0xc8 ticks, then out the narration.
+        self.wait_interruptable(0xc8);
+        self.wait_for_narration_voice_clip();
+        // = seg000:2636 SN1 — the ship's engine loop.
+        self.audio_start_voc("SN1.HSQ");
+        // = seg000:263b..265f one pass over the frame table (cx = 1), 0x0c
+        //   ticks per frame; the loop is released after frame 18.
+        for (i, &frame) in Self::SHIPMENT_SHIP_FRAMES.iter().enumerate() {
+            self.wait_processing_frame_tasks_interruptable(0x0c, |s| {
+                s.comm_shipment_ship_frame(&backdrop, Some(frame))
+            });
+            if i == Self::SHIPMENT_SN1_LOOP_END_FRAME {
+                // = seg000:2653 call_pcm_vtable_end_loop.
+                self.pcm_player.end_loop();
+            }
+        }
+        // = seg000:2661 the terminator pass: restore the area, no ship.
+        self.comm_shipment_ship_frame(&backdrop, None);
+        // = seg000:2664..2675 zoom out: draw_stars for 1 up to 0x18.
+        for pan in 1..=0x18u16 {
+            self.wait_processing_frame_tasks_interruptable(0x0c, |s| {
+                s.intro_floppy_draw_stars(pan)
+            });
+        }
+        // = seg000:2677..267f the room with the console lit (message person
+        //   1) rendered into fb1.
+        self.comm_displayed_message_person = 1;
+        self.gfx_call_bp_with_front_buffer_as_screen(GameState::draw_room_game_screen);
+        // = seg000:2682..268d STARS again; transition 6 through the planet.
+        self.open_sprite_bank(sprite_bank::STARS);
+        self.transition(6, 0, Self::comm_shipment_planet_callback);
+        // = seg000:2690..2696 the plain room into fb1.
+        self.gfx_call_bp_with_front_buffer_as_screen(GameState::draw_room_game_screen);
+        self.comm_displayed_message_person = 0;
+        // = seg000:269b..26a0 transition 8 through callback_transition_026a6:
+        //   the game area back from fb2 and the HUD head.
+        self.transition(8, 0, |s| {
+            s.copy_game_area_fb2_to_fb1();
+            s.ui_hud_head_draw();
+        });
+        // = seg000:26a3 jmp comm_fade_out_glow.
+        self.comm_fade_out_glow();
+    }
+
+    // = seg000:2555 callback_transition_02555 — the shipment scene's planet
+    // frame: SNA plays and STARS sprite 0x1b lands at (0x8c, 0x27).
+    fn comm_shipment_planet_callback(&mut self) {
+        self.audio_start_voc("SNA.HSQ");
+        self.draw_active_bank_sprite(0x1b, 0x8c, 0x27);
+    }
+
+    // = seg000:26ac comm_shipment_ship_frame — one ship frame: put the
+    // grabbed backdrop back into fb1, draw the frame's STARS sprite at its
+    // (x, y) (none at the table terminator), and present the rect fb1 ->
+    // screen (loc_0c526).
+    fn comm_shipment_ship_frame(&mut self, backdrop: &[u8], frame: Option<(u16, i16, i16)>) {
+        // = seg000:26ad..26b7 vga_put_rect into fb1.
+        gfx::vga_put_rect(&mut self.framebuffer, backdrop, Self::SHIPMENT_SHIP_RECT);
+        // = seg000:26bc..26c8 lodsw; js — a sprite id draws at (x, y).
+        if let Some((sprite, x, y)) = frame {
+            self.draw_active_bank_sprite(sprite, x, y);
+        }
+        // = seg000:26cb..26d7 copy the rect fb1 -> screen and show it.
+        gfx::vga_copy_rect(
+            &mut self.screen,
+            &self.framebuffer,
+            Self::SHIPMENT_SHIP_RECT,
+        );
+        self.send_frame_to_display();
+    }
+
     // = seg000:2bd2 present_vision_dream — the full-screen "Paul hears a
     // voice" presentation: transition into the VIS.HSQ backdrop, present the
     // head-of-queue message with its sender as the talking head, shimmer the
@@ -1070,6 +1283,48 @@ mod tests {
         // The in-room presenter's explicit install is what animates it.
         game.install_talking_head_idle_animator();
         assert!(game.has_frame_task(crate::TaskId::TalkingHeadIdle));
+    }
+
+    // The shipment report scene (seg000:2566): the accepted figure leaves
+    // the stock, ds:be becomes the fulfilment ratio (figure * 256 / demand,
+    // halved, 1..0xff), ds:bf the bracket flags, the next demand's day moves
+    // on, the scene mask is consumed, and the console returns to idle.
+    #[test]
+    #[ignore = "needs assets/DUNE.DAT"]
+    fn shipment_report_scene_settles_the_delivery() {
+        let Some(mut game) = asset_game() else { return };
+        game.location_and_room = (game.location_and_room & 0xff00) | 8;
+        game.current_room = 8;
+        game.spice_in_stock = 500;
+        game.spice_shipment_quantity = 200;
+        game.spice_shipment_sequence_number = 1;
+        game.spice_shipment_flags = 0x90;
+        game.game_time = 10 << 4;
+        game.ingame_day_of_last_spice_shipment_event = 10;
+        game.for_condit_spice_shipment_ds_c0 = 150;
+        game.shipment_report_scene_mask = 0xffff;
+        game.comm_shipment_report_scene(150);
+        assert_eq!(game.spice_in_stock, 350, "= seg000:2524");
+        assert_eq!(game.spice_spent_today, 150, "= seg000:2528");
+        // 150 * 256 / 200 = 192 = 0xc0, halved = 0x60: the under-delivery
+        // bracket (8, 4).
+        assert_eq!(game.spice_shipment_fulfilment, 0x60, "= seg000:258d");
+        assert_eq!(game.spice_shipment_flags, 0x88, "= seg000:25b6");
+        // seq 1: (1 >> 1) & 3 = 0 -> rand_masked(0) = 0; the event day moved
+        // by exactly the bracket's 4 days.
+        assert_eq!(
+            game.ingame_day_of_last_spice_shipment_event, 14,
+            "= seg000:25bd"
+        );
+        assert_eq!(game.days_left_until_spice_shipment, 4, "= seg000:25d4");
+        assert_eq!(game.shipment_report_scene_mask, 0, "= seg000:25d7");
+        assert_eq!(game.comm_displayed_message_person, 0, "= seg000:2696");
+        // A full delivery with the bit-3 flag set does not zero ds:be.
+        game.spice_shipment_flags = 0x88;
+        game.spice_shipment_quantity = 100;
+        game.comm_shipment_report_scene(250);
+        assert_eq!(game.spice_shipment_fulfilment, 0xff, "= seg000:2584 clamp");
+        assert_eq!(game.spice_shipment_flags, 0xc0);
     }
 
     // The full-screen vision dream (loc_02b2a -> present_vision_dream): with

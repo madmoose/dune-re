@@ -2852,10 +2852,16 @@ impl GameState {
         }
         // = seg000:35c4 inc — mark the scan pass live for the arguing logic.
         self.related_to_arguing_ds_1a = 1;
-        // = seg000:35c8..35e0 dining hall (room 8) special: with spice-shipment
-        //   state pending (ds:c0 masked by data_01158) and Duncan present
-        //   (persons_in_room bit 3), loc_02566 runs the shipment-report scene
-        //   first. Not ported.
+        // = seg000:35c8..35e0 the communication room (room 8) special: with
+        //   an accepted shipment figure pending (ds:c0 masked by
+        //   shipment_report_scene_mask) and Duncan present (persons_in_room
+        //   bit 3), comm_shipment_report_scene runs first.
+        if self.current_room == 8 {
+            let figure = self.for_condit_spice_shipment_ds_c0 & self.shipment_report_scene_mask;
+            if figure != 0 && self.persons_in_room & 8 != 0 {
+                self.comm_shipment_report_scene(figure);
+            }
+        }
         // = seg000:35e3/35e6 bp = npc_auto_dialogue; jmp
         //   scan_matching_room_person_entries — the room-entry scan.
         self.scan_current_room_npcs(Self::npc_auto_dialogue);

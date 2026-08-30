@@ -1485,7 +1485,7 @@ impl GameState {
     // = seg000:40e6 NPC_travel_detach_companion — room-person scan callback
     // for a travel departure: a companion in the room (flags 0x40 and 2 both
     // set) loses the companion flag and its HUD slot updates.
-    fn npc_travel_detach_companion(&mut self, index: u8) {
+    pub(crate) fn npc_travel_detach_companion(&mut self, index: u8) {
         let entry = &self.room_persons[index as usize];
         // = seg000:40e6/40ec both flag bits gate the detach.
         if entry.flags & NPC_COMPANION == 0 || entry.flags & NPC_DETACH_ON_TRAVEL == 0 {

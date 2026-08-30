@@ -332,6 +332,35 @@ impl GameState {
     // Returns true if a keypress interrupted the wait (= seg000:de01
     // any_key_pressed; CF=1), which play_intro treats as a request to abort the
     // whole intro (05fb jnb -> exit tail).
+    // = seg000:e353 wait_processing_frame_tasks_interruptable — run `render`
+    // once (DOS bp), then wait until `ticks` PIT ticks have passed since
+    // entry. With suppress_sky_240_255 (data_0227d) set — the intro /
+    // cutscene state — each spin polls any_key_pressed, which services the
+    // frame tasks and lets input break the wait; in-game (0) it is a plain
+    // timed spin: no task servicing, no input break.
+    pub(crate) fn wait_processing_frame_tasks_interruptable<F: FnOnce(&mut Self)>(
+        &mut self,
+        ticks: u64,
+        render: F,
+    ) {
+        // = seg000:e354 push [pit] — the deadline counts from before bp.
+        let start = self.game_ticks();
+        // = seg000:e358 call bp.
+        render(self);
+        if self.data_0227d != 0 {
+            // = seg000:e363..e386 the servicing spin.
+            while self.game_ticks().wrapping_sub(start) < ticks {
+                if self.any_key_pressed() {
+                    break;
+                }
+                self.tick_one_frame();
+            }
+        } else {
+            // = seg000:e378..e384 the plain spin.
+            self.sleep_ticks(start, ticks);
+        }
+    }
+
     // = seg000:e387 wait_a_bit — wait `ticks` PIT ticks, uninterruptible.
     // DOS spins on the PIT counter; the port yields a frame per tick.
     pub(crate) fn wait_a_bit(&mut self, ticks: u64) {

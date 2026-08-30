@@ -417,11 +417,11 @@ impl GameState {
 
     // = seg000:02e0 draw_stars -> seg000:0a44 loc_00a44. Open STARS.HSQ, clip to
     // the game area, clear it, then tile three full-width starfield sprites
-    // (0,1,2) horizontally from a `count`-derived scroll offset, and overlay the
-    // three moon sprites (loc_0c343, centered). `count` (DOS cx) is 0 for the
+    // (0,1,2) horizontally from a `pan`-derived scroll offset, and overlay the
+    // three moon sprites (loc_0c343, centered). `pan` (DOS cx) is 0 for the
     // plain starfield and 0x20 for the globe scenes' parallax pan. DOS register
     // convention here: dx = X, bx = Y (see seg000:d230).
-    fn intro_floppy_draw_stars(&mut self, count: u16) {
+    pub(crate) fn intro_floppy_draw_stars(&mut self, pan: u16) {
         const BG_SPRITE_WIDTH: i16 = 304;
         // = seg000:0a44 ax=0x2c; open_spritesheet — STARS.HSQ. This also
         // applies STARS.HSQ's embedded palette (= seg000:c172 apply_sprite_sheet_
@@ -443,8 +443,8 @@ impl GameState {
         // = seg000:0a51 clear_game_area.
         self.clear_game_area();
 
-        // = seg000:0a56 mul al; shr ax,1; neg dx — scroll = -((count&0xff)^2 / 2).
-        let sq = (count as i16) * (count as i16);
+        // = seg000:0a56 mul al; shr ax,1; neg dx — scroll = -((pan&0xff)^2 / 2).
+        let sq = (pan as i16) * (pan as i16);
         let scroll = -(sq / 2);
 
         // = seg000:0a5f..0aca draw the starfield + moons from the active bank.
@@ -464,24 +464,28 @@ impl GameState {
             // = seg000:0a7a..0a8a moon 1: sprite 0x24 centered at (4*scroll+0x45, 0x4e).
             s.draw_sprite_centered_clipped(sheet, 0x24, 4 * scroll + 69, 78, clip);
 
-            // = seg000:0a92..0aaf moon 2: sprite count/4 + 0x25 at y = 0x67; x
-            // clamps its parallax once count exceeds 0x14 (= seg000:0a96 cmp/ja).
-            let x = if count > 20 {
+            // = seg000:0a92..0aaf moon 2: sprite pan/4 + 0x25 at y = 0x67; x
+            // clamps its parallax once pan exceeds 0x14 (= seg000:0a96 cmp/ja).
+            let x = if pan > 20 {
                 scroll * 2 + 994
             } else {
-                (count as i16) * 4 + 242
+                (pan as i16) * 4 + 242
             };
-            s.draw_sprite_centered_clipped(sheet, 0x25 + (count / 4), x, 103, clip);
+            s.draw_sprite_centered_clipped(sheet, 0x25 + (pan / 4), x, 103, clip);
 
-            // = seg000:0ab4..0ac7 moon 3: sprite count + 3 centered at
-            // (x = (count^2 / 32) + 0x80, y = 0x4f).
+            // = seg000:0ab4..0ac7 moon 3: sprite pan + 3 centered at
+            // (x = (pan^2 / 32) + 0x80, y = 0x4f).
             let x = sq / 32 + 0x80;
-            s.draw_sprite_centered_clipped(sheet, count + 3, x, 79, clip);
+            s.draw_sprite_centered_clipped(sheet, pan + 3, x, 79, clip);
         });
 
-        // = seg000:0aca jmp present_game_area — restore cursor + update the game-area
-        // screen rect. Here the scene composes offscreen (front buffer = fb1) and
-        // is revealed by the following 0x3a transition, so that copy is superseded.
+        // = seg000:0aca jmp present_game_area — restore the cursor and push
+        // the game-area rect fb1 -> screen. Inside a transition (front buffer
+        // = fb1: the intro scenes, the shipment scene's zoom-in entry) the
+        // push is a no-op and the transition reveals the frame; the shipment
+        // scene's zoom frames (seg000:260b/2666) run outside one and show
+        // through this present.
+        self.present_game_area();
     }
 
     // = seg000:0301 — the bp callback for the night-sky reveal transition.
