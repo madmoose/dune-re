@@ -30,6 +30,9 @@ const OFS_MAP: usize = 0;
 const OFS_LOG: usize = OFS_MAP + MAP_CELLS / 4; // 0x317f
 const OFS_DIALOGUE: usize = OFS_LOG + 0xa2; // 0x3221
 const OFS_STATE: usize = OFS_DIALOGUE + 0x11f8; // 0x4419
+/// = seg001:1225..1261 atreides_palace_rooms: the scene records inside the
+/// state block (the 0x1261 cut lands exactly on the end of the 12th record).
+const PALACE_ROOM_COUNT: usize = 12;
 const STATE_LEN: usize = 0x1261;
 
 /// = seg000:b4ea `mov dl, 0f7h` — the RLE escape byte.
@@ -524,6 +527,16 @@ impl GameState {
         for (k, id) in self.string_subst_id_table.iter().enumerate() {
             w16(b, 0x11eb + 2 * k, *id);
         }
+
+        // = seg001:1225 atreides_palace_rooms — the 12 palace scene records
+        // (background byte + 4 exit bytes each).
+        for (k, rec) in self.scene_records[..PALACE_ROOM_COUNT].iter().enumerate() {
+            let o = 0x1225 + 5 * k;
+            w8(b, o, rec.background);
+            for (i, exit) in rec.exits.iter().enumerate() {
+                w8(b, o + 1 + i, *exit);
+            }
+        }
     }
 
     // The inverse of write_state_block: restore exactly the fields it wrote.
@@ -754,6 +767,17 @@ impl GameState {
 
         for (k, id) in self.string_subst_id_table.iter_mut().enumerate() {
             *id = r16(b, 0x11eb + 2 * k);
+        }
+
+        for (k, rec) in self.scene_records[..PALACE_ROOM_COUNT]
+            .iter_mut()
+            .enumerate()
+        {
+            let o = 0x1225 + 5 * k;
+            rec.background = r8(b, o);
+            for (i, exit) in rec.exits.iter_mut().enumerate() {
+                *exit = r8(b, o + 1 + i);
+            }
         }
     }
 
@@ -1136,6 +1160,13 @@ mod tests {
         // A spoken-line flag inside the DIALOGUE buffer.
         let spoken_ofs = container::entry_offset(&game.dialogue, 4) as usize;
         game.dialogue[spoken_ofs] |= 0x80;
+        // The palace scene records the phase callbacks patch: the stillsuit
+        // room's background (callback 4) and its unlocked west door
+        // (callback 8).
+        assert_eq!(game.scene_records[1].background, 0x3a);
+        assert_eq!(game.scene_records[1].exits[3], 0x8c);
+        game.scene_records[1].background = 0x39;
+        game.scene_records[1].exits[3] = 0x0c;
 
         let image = game.create_save_in_memory();
         assert_eq!(image.len(), IMAGE_LEN);
@@ -1143,6 +1174,11 @@ mod tests {
         assert_eq!(r16(&image, OFS_STATE + 0x0002), 0x123);
         assert_eq!(r16(&image, OFS_STATE + 0x08a8), 0xffff);
         assert_eq!(r8(&image, OFS_STATE + 0x08aa), game.troops[0].troop_id);
+        // palace_rooms[1] at seg001:122a: background, then the N/E/S/W exits.
+        assert_eq!(
+            &image[OFS_STATE + 0x122a..OFS_STATE + 0x122f],
+            &[0x39, 0x07, 0x00, 0x01, 0x0c]
+        );
         // The packed vegetation mark: cell 0x1000 is group 0x400, slot 0
         // (bits 7-6).
         assert_eq!(image[0x1000 / 4] >> 6 & 3, 1);
@@ -1184,6 +1220,8 @@ mod tests {
         assert_eq!(fresh.data_000c8, 1);
         assert_eq!(fresh.vision_messages, vec![(0x105, 0)]);
         assert_eq!(fresh.map[0x1000] & 0x30, 0x10);
+        assert_eq!(fresh.scene_records[1].background, 0x39, "stillsuits shown");
+        assert_eq!(fresh.scene_records[1].exits[3], 0x0c, "west door unlocked");
         assert_eq!(fresh.dialogue[spoken_ofs] & 0x80, 0x80);
         // The whole dialogue buffer survives the relocate/unrelocate pair.
         assert_eq!(fresh.dialogue, game.dialogue);
