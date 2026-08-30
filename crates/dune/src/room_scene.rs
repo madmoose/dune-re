@@ -1191,14 +1191,27 @@ impl GameState {
     // char_to_sprite_player (id >= 0x11 -> sprite 0x2d) is unreachable through
     // this path precisely because of that fold; it serves character_id_to_
     // sprite's other callers (loc_091b8, seg000:a72e).
-    pub(crate) fn character_sprite_map(&self) -> Vec<u16> {
+    //
+    // Each entry is (sprite pair, y shift). The two sal_draw_character folds
+    // that follow character_id_to_sprite apply here:
+    // = seg000:3d5b..3d62 is_Gurney_Halleck_and_between_game_phases_15_and_20
+    //   -> al = 0x11, bx += 0x35: the wounded Gurney lies on the floor (the
+    //   lying sprite pair, drawn 0x35 lower than his standing marker);
+    // = seg000:3d65..3d70 id 0x0c with room_persons[12].flags bit 4 -> al =
+    //   0x12: the overpowered Harkonnen captain's sprite.
+    pub(crate) fn character_sprite_map(&self) -> Vec<(u16, i16)> {
         (0..0x17u8)
             .map(|id| match id {
+                4 if self.is_gurney_between_phases_15_and_20(id) => (0x11, 0x35),
+                0x0c if self.room_persons[12].flags & 0x10 != 0 => (0x12, 0),
                 // = seg000:3d4f jb loc_03d58 — ids below 0x0f leave the global
                 //   alone, and 0x0e ignores it anyway (it reads fremen1_troop).
-                0x0e => self.walk_facing_sprite(id, self.selected_fremen2).0 as u16,
-                0x0f.. => self.walk_facing_sprite(0x0f, id - 0x0f).0 as u16,
-                _ => id as u16,
+                0x0e => (
+                    self.walk_facing_sprite(id, self.selected_fremen2).0 as u16,
+                    0,
+                ),
+                0x0f.. => (self.walk_facing_sprite(0x0f, id - 0x0f).0 as u16, 0),
+                _ => (id as u16, 0),
             })
             .collect()
     }

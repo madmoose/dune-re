@@ -4498,9 +4498,10 @@ impl GameState {
     }
 
     // = seg000:127c is_Gurney_Halleck_and_between_game_phases_15_and_20 — true
-    // when `npc` is Gurney (4) and the story phase is in [0x15, 0x20). The
-    // PALACE PLAN tally drops Gurney during those phases (he is not yet a palace
-    // resident).
+    // when `npc` is Gurney (4) and the story phase is in [0x15, 0x20): the
+    // wounded Gurney, found lying in a sietch. The PALACE PLAN tally drops him
+    // (seg000:196a), sal_draw_character draws the lying sprite (seg000:3d5b)
+    // and his talking head gets no idle animator (seg000:9940).
     pub(crate) fn is_gurney_between_phases_15_and_20(&self, npc: u8) -> bool {
         // = seg000:127c cmp npc,4; jnz clc/ret.
         if npc != 4 {

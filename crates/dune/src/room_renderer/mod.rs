@@ -21,11 +21,12 @@ pub struct RoomRenderer {
     sprite_sheet: Option<SpriteSheet>,
     character_sheet: Option<SpriteSheet>,
     position_markers: Vec<i8>,
-    // = character_id_to_sprite (seg000:9123) resolved per person id by the
-    // caller (GameState::character_sprite_map): the PERS.HSQ sprite-pair
-    // index for each drawable id. Empty = identity (ids 0..0xd map to
-    // themselves; the walk/facing persons 0x0e.. need game state).
-    character_sprite_map: Vec<u16>,
+    // = character_id_to_sprite (seg000:9123) plus the sal_draw_character
+    // folds (seg000:3d5b..3d70), resolved per person id by the caller
+    // (GameState::character_sprite_map): the PERS.HSQ sprite-pair index and
+    // the y shift for each drawable id. Empty = identity (ids 0..0xd map to
+    // themselves, no shift; the walk/facing persons 0x0e.. need game state).
+    character_sprite_map: Vec<(u16, i16)>,
     y_offset: i16,
 }
 
@@ -87,7 +88,7 @@ impl RoomRenderer {
 
     /// = character_id_to_sprite (seg000:9123) — the per-id PERS sprite-pair
     /// map (see the field note).
-    pub fn set_character_sprite_map(&mut self, map: Vec<u16>) {
+    pub fn set_character_sprite_map(&mut self, map: Vec<(u16, i16)>) {
         self.character_sprite_map = map;
     }
 
@@ -258,20 +259,23 @@ impl RoomRenderer {
             return Ok(());
         };
 
-        // = seg000:3d58 call character_id_to_sprite — resolved by the caller's
-        // sprite map; identity (id < 0x0d) when none was provided.
-        let sprite = self
+        // = seg000:3d58 call character_id_to_sprite, then the 3d5b..3d70
+        // folds — resolved by the caller's sprite map (sprite pair, y shift);
+        // identity (id < 0x0d, no shift) when none was provided. The shift
+        // is applied after the marker position was recorded (seg000:3d3c),
+        // so the recorded anchor stays the unshifted one.
+        let (sprite, dy) = self
             .character_sprite_map
             .get(id as usize)
             .copied()
-            .unwrap_or(id as u16);
+            .unwrap_or((id as u16, 0));
 
         for sprite_id in [sprite * 2, sprite * 2 + 1] {
             let Some(sprite) = sheet.get_sprite(sprite_id) else {
                 continue;
             };
             sprite_blitter(sprite, framebuffer)
-                .at(character.x as i16, character.y as i16 + self.y_offset)
+                .at(character.x as i16, character.y as i16 + dy + self.y_offset)
                 .flip_x(character.flip_x)
                 .flip_y(character.flip_y)
                 .scale(character.scale)

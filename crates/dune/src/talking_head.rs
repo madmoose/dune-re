@@ -654,7 +654,14 @@ impl GameState {
         // the init render; because transitions don't run frame tasks, it first
         // fires in the post-transition wait loop (so the head is revealed by the
         // transition, then animates).
-        self.add_frame_task(0x10, crate::TaskId::TalkingHeadIdle);
+        // = seg000:9936..9943 the install is skipped while a vision message is
+        //   mid-presentation (ds:ea > 0; the vision presenters install it
+        //   themselves at seg000:2b17, which the port folds into this call)
+        //   and for the wounded Gurney (is_Gurney_Halleck_and_between_game_
+        //   phases_15_and_20): his lying portrait stays still.
+        if !self.is_gurney_between_phases_15_and_20(lip_sync_resource_id) {
+            self.add_frame_task(0x10, crate::TaskId::TalkingHeadIdle);
+        }
     }
 
     /// = seg000:91a0 setup_lip_sync_data_from_sprite_sheet on its own — open

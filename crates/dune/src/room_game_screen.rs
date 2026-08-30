@@ -3611,6 +3611,62 @@ mod tests {
     //      the event/spoken-mark/advance (seg000:94ee -> a049..a0a7).
     // Asset-gated; run with:
     //   cargo test -p dune -- --ignored gurney_multi_part
+    // The wounded Gurney (phases 0x15..0x20, seg000:127c): sal_draw_character
+    // swaps his sprite pair for the lying figure 0x11 drawn 0x35 lower
+    // (seg000:3d5b..3d62); outside that window he stands (pair 4, no shift).
+    // The overpowered Harkonnen captain (room_persons[12] flag 0x10) draws
+    // pair 0x12 (seg000:3d65..3d70).
+    #[test]
+    #[ignore = "needs assets/DUNE.DAT"]
+    fn wounded_gurney_lies_on_the_floor() {
+        let dat_path = concat!(env!("CARGO_MANIFEST_DIR"), "/../../assets/DUNE.DAT");
+        let Ok(dat_file) = DatFile::open(dat_path) else {
+            eprintln!("skipping: {dat_path} not found");
+            return;
+        };
+        let (tx, _rx) = mpsc::sync_channel(64);
+        let mut game = GameState::new(dat_file, tx);
+        game.set_headless();
+        game.start(true);
+
+        game.game_phase = 0x14;
+        assert_eq!(
+            game.character_sprite_map()[4],
+            (4, 0),
+            "standing before 0x15"
+        );
+        game.game_phase = 0x1c;
+        assert_eq!(
+            game.character_sprite_map()[4],
+            (0x11, 0x35),
+            "= seg000:3d60/3d62"
+        );
+        game.game_phase = 0x20;
+        assert_eq!(
+            game.character_sprite_map()[4],
+            (4, 0),
+            "standing again from 0x20"
+        );
+
+        assert_eq!(game.character_sprite_map()[0x0c], (0x0c, 0));
+        game.room_persons[12].flags |= 0x10;
+        assert_eq!(
+            game.character_sprite_map()[0x0c],
+            (0x12, 0),
+            "= seg000:3d70"
+        );
+
+        // His talking head gets no idle animator while he lies wounded
+        // (seg000:9940 jb loc_0994e).
+        game.game_phase = 0x1c;
+        game.remove_frame_task(crate::TaskId::TalkingHeadIdle);
+        game.setup_talking_head(4, 0);
+        assert!(
+            !game.has_frame_task(crate::TaskId::TalkingHeadIdle),
+            "= seg000:9943 no idle animator for the wounded Gurney"
+        );
+    }
+
     #[test]
     #[ignore = "needs assets/DUNE.DAT"]
     fn gurney_multi_part_line_resumes_on_talk_to_me() {
@@ -4568,7 +4624,7 @@ mod tests {
         assert_eq!(chief.handler, 0x9373, "ui_dialogue_related_to_Fremen1");
         // The room draw resolves him through char_to_sprite_walk_facing:
         // troop_id 1 -> PERS pair 0x0e + 1 % 3 = 0x0f.
-        assert_eq!(game.character_sprite_map()[14], 0x0f);
+        assert_eq!(game.character_sprite_map()[14].0, 0x0f);
 
         // Talk to him: the trampoline stages his troop CONDIT block and runs
         // the common dialogue entry with the FRM head.
@@ -4848,8 +4904,8 @@ mod tests {
         // = seg000:3d51 each slot resolves its own troop: troop_id 8 -> sprite
         //   0x0e + 8 % 3 = 0x10, troop_id 3 -> 0x0e + 3 % 3 = 0x0e.
         let sprites = game.character_sprite_map();
-        assert_eq!(sprites[0x0f], 0x10, "slot 0x0f draws the chief");
-        assert_eq!(sprites[0x10], 0x0e, "slot 0x10 draws the prospector");
+        assert_eq!(sprites[0x0f].0, 0x10, "slot 0x0f draws the chief");
+        assert_eq!(sprites[0x10].0, 0x0e, "slot 0x10 draws the prospector");
 
         // Hovering either figure lights up its own verb: the chief's record
         // keeps text id 0x78 + 0x0f = 0x87, while the prospector's is the
