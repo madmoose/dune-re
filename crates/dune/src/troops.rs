@@ -3351,14 +3351,12 @@ impl GameState {
             t.game_day_of_ralliement = day;
         }
         // = seg000:6704..6711 a location without a discovery phase gets
-        //   discoverable_at_phase = 2 and the map influence spread
-        //   (location_0644e). TODO: the spread (self-modifying map walk) is
-        //   not ported.
+        //   discoverable_at_phase = 2 and the Atreides zone stamped around it.
         let loc_index = locations::location_index_from_ptr(t.offset_of_location);
         if loc_index < self.locations.len() && self.locations[loc_index].discoverable_at_phase == 0
         {
             self.locations[loc_index].discoverable_at_phase = 2;
-            println!("troop_rally_troop: location_0644e (map influence spread) unported");
+            self.location_stamp_atreides_zone_on_map(loc_index);
         }
     }
 }

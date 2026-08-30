@@ -397,8 +397,9 @@ impl GameState {
             w8(b, o + 0x09, l.troop_id);
             w8(b, o + 0x0a, l.status);
             w8(b, o + 0x0b, l.discoverable_at_phase as u8);
-            w16(b, o + 0x0c, l.field_c);
-            w16(b, o + 0x0e, l.field_e);
+            w16(b, o + 0x0c, l.vegetation_x as u16);
+            w8(b, o + 0x0e, l.vegetation_y as u8);
+            w8(b, o + 0x0f, l.vegetation_growth);
             w8(b, o + 0x10, l.spice_field_id);
             w8(b, o + 0x11, l.spice_amount);
             w8(b, o + 0x12, l.spice_density);
@@ -667,8 +668,9 @@ impl GameState {
             l.troop_id = r8(b, o + 0x09);
             l.status = r8(b, o + 0x0a);
             l.discoverable_at_phase = r8(b, o + 0x0b) as i8;
-            l.field_c = r16(b, o + 0x0c);
-            l.field_e = r16(b, o + 0x0e);
+            l.vegetation_x = r16(b, o + 0x0c) as i16;
+            l.vegetation_y = r8(b, o + 0x0e) as i8;
+            l.vegetation_growth = r8(b, o + 0x0f);
             l.spice_field_id = r8(b, o + 0x10);
             l.spice_amount = r8(b, o + 0x11);
             l.spice_density = r8(b, o + 0x12);
