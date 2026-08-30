@@ -4354,7 +4354,7 @@ impl GameState {
     pub(crate) fn draw_debug_overlay(&self, fb: &mut FrameBuffer) {
         use crate::font::TextSize;
 
-        // let day = self.get_ingame_day_3_periods_later();
+        // let day = self.get_ingame_day();
         // (label, value) rows. The value column is placed at a fixed pixel x
         // past the widest label, so the values line up even though the glyph
         // font is proportional (space-padding would not align them).

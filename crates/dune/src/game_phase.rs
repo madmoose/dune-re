@@ -182,7 +182,7 @@ impl GameState {
         self.contact_distance_related_ds_d5 = 0xff;
         // = seg000:1096 call loc_02090 — stamp today as the shipment event
         //   day and roll the first demand.
-        self.ingame_day_of_last_spice_shipment_event = self.get_ingame_day_3_periods_later();
+        self.ingame_day_of_last_spice_shipment_event = self.get_ingame_day();
         self.spice_shipment_roll_new_demand();
         // = seg000:1099 or [bitfield_Paul_events], 1 — visions enabled.
         self.bitfield_paul_events |= 1;
@@ -366,8 +366,7 @@ impl GameState {
         self.worm_event_likelihood_by_region[0] =
             self.worm_event_likelihood_by_region[0].wrapping_add(1);
         // = seg000:11bd..11c3 data_01156 = get_ingame_day + 3.
-        self.illness_plot_armed_after_ingame_day =
-            self.get_ingame_day_3_periods_later().wrapping_add(3);
+        self.illness_plot_armed_after_ingame_day = self.get_ingame_day().wrapping_add(3);
     }
 
     // = seg000:11cb callback_game_phase_change_60_go_find_chani — Chani is

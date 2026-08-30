@@ -295,7 +295,7 @@ impl GameState {
     // "strange disease" vision message.
     fn illness_pick_location_phase_5c(&mut self) {
         // = seg000:1e43..1e51 the day and phase gates.
-        if self.get_ingame_day_3_periods_later() < self.illness_plot_armed_after_ingame_day
+        if self.get_ingame_day() < self.illness_plot_armed_after_ingame_day
             || self.game_phase != 0x5c
         {
             return;
@@ -644,7 +644,7 @@ impl GameState {
             return;
         }
         // = seg000:20ab call get_ingame_day.
-        let day = self.get_ingame_day_3_periods_later();
+        let day = self.get_ingame_day();
         let event_day = self.ingame_day_of_last_spice_shipment_event;
         // = seg000:20ae/20b3 during the final attack only the days_left
         //   counter is maintained (loc_02098).

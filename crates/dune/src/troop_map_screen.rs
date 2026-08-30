@@ -3305,7 +3305,7 @@ impl GameState {
         self.troops[ti].bitfield_10 &= 0x3f0;
         self.troops[ti].dissatisfaction_and_speech &= 0xe5ff;
         // = seg000:7b86/7b89 [si+14h] = the in-game day of this contact.
-        self.troops[ti].game_day_of_ralliement = self.get_ingame_day_3_periods_later() as u8;
+        self.troops[ti].game_day_of_ralliement = self.get_ingame_day() as u8;
         // = seg000:7b8c call lip_sync_stop — stop the troop's voice.
         self.lip_sync_stop();
         // = seg000:7b8f..7b97 si = troop_contact_text_panel_record; clear
