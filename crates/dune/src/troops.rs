@@ -2264,6 +2264,147 @@ impl GameState {
         }
     }
 
+    // = seg000:6e20 troop_location_new_day_upkeep — the per-day upkeep an
+    // occupation callback runs for its troop; a no-op unless new_day_flag.
+    fn troop_location_new_day_upkeep(&mut self, ti: usize) {
+        if self.new_day_flag == 0 {
+            return;
+        }
+        let li = locations::location_index_from_ptr(self.troops[ti].offset_of_location);
+        let day = self.get_ingame_day_in_ax() as u8;
+        // = seg000:6e28..6e47 a captured fortress (status bit 3) becomes a
+        //   sietch two days after the battle (discoverable_at_phase = day + 2);
+        //   before that day nothing else runs.
+        if self.locations[li].status & 8 != 0 {
+            if day.wrapping_sub(self.locations[li].discoverable_at_phase as u8) >= 0xfe {
+                return;
+            }
+            let loc = &mut self.locations[li];
+            loc.status &= !8;
+            loc.appearance &= 7;
+            self.discovered_sietch_count = self.discovered_sietch_count.wrapping_add(1);
+            self.location_converted_to_sietch_fixups(li);
+            self.locations[li].discoverable_at_phase = 5;
+        }
+        // = seg000:6e4b.
+        self.location_grow_sietch_zone(li);
+        // = seg000:6e4e..6e5a rallied more than 8 days ago: -1 motivation.
+        if day.wrapping_sub(self.troops[ti].game_day_of_ralliement) > 8 {
+            self.troop_decrease_motivation(ti, 1);
+        }
+        // = seg000:6e5d..6e7f the chain's head troop checks the mood.
+        if self.troops[ti].troop_id != self.locations[li].troop_id {
+            return;
+        }
+        let mut bits = 0u8;
+        self.for_each_hired_troop_in_location(li, |g, tj| {
+            bits |= g.callback_troop_collect_low_motivation_bits(tj, li);
+        });
+        if bits != 3 {
+            return;
+        }
+        self.for_each_hired_troop_in_location(li, |g, tj| {
+            g.callback_troop_stop_working_if_low_motivation(tj);
+        });
+        // = seg000:6e77 message 0x302 "Nothing coming from ... I wonder what's
+        //   going on there!".
+        self.queue_vision_message(0x302, locations::location_ptr_from_index(li));
+    }
+
+    // = seg000:6cfc location_grow_sietch_zone — a sietch without a vegetation
+    // program grows its Atreides zone by one.
+    fn location_grow_sietch_zone(&mut self, li: usize) {
+        let loc = self.locations[li];
+        if loc.appearance >= 0x20 || loc.discoverable_at_phase as u8 >= 0x0c || loc.status & 1 != 0
+        {
+            return;
+        }
+        self.locations[li].discoverable_at_phase += 1;
+        self.location_stamp_atreides_zone_on_map(li);
+    }
+
+    // = seg000:6dbb location_converted_to_sietch_fixups — the fortress just
+    // became a sietch: move its parked named NPCs (and the player, if there)
+    // to the new appearance scene, room 1 stays, other rooms become room 2.
+    fn location_converted_to_sietch_fixups(&mut self, li: usize) {
+        let (dx, slot) = self.location_entry_room_codes(li);
+        let scene = (dx >> 8) as u8;
+        let rewrite = |code: u16| {
+            let room = if code as u8 == 1 { 1 } else { 2 };
+            (scene as u16) << 8 | room
+        };
+        // = seg000:6dc2..6dd9 room_persons[0..12].
+        for rp in self.room_persons.iter_mut().take(12) {
+            if rp.location_appearance == slot {
+                rp.location_and_room = rewrite(rp.location_and_room);
+            }
+        }
+        // = seg000:6ddb..6df7 the player is there: request the full re-present.
+        if self.location_appearance == slot {
+            self.room_redraw_request |= 0x80;
+            self.location_and_room = rewrite(self.location_and_room);
+            self.current_room = self.location_and_room as u8;
+            self.data_00008 = scene;
+        }
+        // = seg000:6dfc callback_troop_battle_flag_to_sietch_speech — a troop
+        //   that fought the won battle (bitfield_10 bit 5) gets speech bit 12.
+        self.for_each_troop_in_location(li, |g, tj| {
+            let t = &mut g.troops[tj];
+            if t.bitfield_10 & 0x20 != 0 {
+                t.bitfield_10 &= !0x20;
+                t.dissatisfaction_and_speech |= 0x1000;
+            }
+        });
+        self.location_evict_unhired_harkonnen_troops(li);
+    }
+
+    // = seg000:6e02 location_evict_unhired_harkonnen_troops — remove every
+    // unhired Harkonnen troop; the chain walk stops at a removal, so repeat.
+    fn location_evict_unhired_harkonnen_troops(&mut self, li: usize) {
+        loop {
+            let mut removed = 0;
+            // = seg000:764d callback_troop_evict_unhired_harkonnen.
+            self.for_each_troop_in_location(li, |g, tj| {
+                let t = g.troops[tj];
+                if t.occupation >= 0x80 && t.bitfield_10 & 0x80 != 0 {
+                    g.troop_remove_from_play(tj);
+                    removed += 1;
+                }
+            });
+            if removed == 0 {
+                return;
+            }
+        }
+    }
+
+    // = seg000:6e82 callback_troop_collect_low_motivation_bits — 1 for a
+    // low-motivation idle spice troop at a sietch/palace the player is not
+    // at, 2 when it also has speech bit 7.
+    fn callback_troop_collect_low_motivation_bits(&self, ti: usize, li: usize) -> u8 {
+        let t = self.troops[ti];
+        if li == self.current_location_index as usize
+            || self.locations[li].appearance >= 0x21
+            || t.motivation >= 0x28
+            || t.occupation & 0x2f != 0
+        {
+            return 0;
+        }
+        if t.dissatisfaction_and_speech & 0x80 != 0 {
+            2
+        } else {
+            1
+        }
+    }
+
+    // = seg000:6ea8 callback_troop_stop_working_if_low_motivation.
+    fn callback_troop_stop_working_if_low_motivation(&mut self, ti: usize) {
+        let t = self.troops[ti];
+        if t.motivation < 0x28 && t.occupation & 0x2b == 0 {
+            self.troop_make_stop_working(ti);
+            self.troops[ti].dissatisfaction_and_speech |= 0x10;
+        }
+    }
+
     // = seg000:7693 callback_troop_location_for_troop_occupation_irrigation —
     // one time period of irrigation: the first period starts the location's
     // vegetation program, later ones grow it (irrigation_grow).
@@ -2290,10 +2431,10 @@ impl GameState {
             return;
         }
         // = seg000:76cb irrigation_grow.
-        // = seg000:76cb call troop_location_do_stuff_upon_new_day_06e20 — not
-        //   ported (as in spice mining).
+        self.troop_location_new_day_upkeep(ti);
         // = seg000:76ce..76d8 ecology_skill / 4, at least 1.
         let step = (self.troops[ti].ecology_skill >> 2).max(1);
+        let loc = &mut self.locations[li];
         let (growth, overflow) = loc.vegetation_growth.overflowing_add(step);
         loc.vegetation_growth = growth;
         if !overflow {
@@ -2331,9 +2472,8 @@ impl GameState {
     // total, pay it into the player's stock (in the stock's 10 kg batches) and
     // take the matching bite out of the location's spice density.
     fn troop_occupation_event_spice_mining(&mut self, ti: usize) {
-        // = seg000:6fe5 call troop_location_do_stuff_upon_new_day_06e20 — the
-        //   per-day location discovery countdown and motivation decay. Not
-        //   ported.
+        // = seg000:6fe5.
+        self.troop_location_new_day_upkeep(ti);
         // = seg000:6fe8 test bitfield_10,200h; jnz — a damaged harvester mines
         //   nothing until it is repaired.
         if self.troops[ti].bitfield_10 & 0x200 != 0 {
@@ -3890,5 +4030,94 @@ mod tests {
         // Stopped and dry: nothing happens, and no troop irrigated.
         game.run_troop_occupation_events();
         assert_eq!(game.vegetation_started_on_dune, 0);
+    }
+
+    // = seg000:6e20 troop_location_new_day_upkeep: the captured-fortress
+    // conversion, the sietch zone growth, the motivation decay and the head
+    // troop's mood check.
+    #[test]
+    #[ignore = "needs assets/DUNE.DAT"]
+    fn new_day_upkeep_converts_fortress_grows_zone_and_checks_mood() {
+        let dat_path = concat!(env!("CARGO_MANIFEST_DIR"), "/../../assets/DUNE.DAT");
+        let Ok(dat_file) = DatFile::open(dat_path) else {
+            eprintln!("skipping: {dat_path} not found");
+            return;
+        };
+        let (tx, rx) = mpsc::sync_channel(64);
+        let mut game = GameState::new(dat_file, tx);
+        game.set_headless();
+        game.start(true);
+        while rx.try_recv().is_ok() {}
+        game.new_day_flag = 1;
+        game.bitfield_paul_events |= 1;
+        let day = game.get_ingame_day_in_ax() as u8;
+
+        // Troop 0 heads its location's chain; rallied 9 days ago.
+        let ti = 0;
+        let li = crate::locations::location_index_from_ptr(game.troops[ti].offset_of_location);
+        assert_eq!(game.locations[li].troop_id, game.troops[ti].troop_id);
+        assert_ne!(li, game.current_location_index as usize);
+        game.troops[ti].occupation = 0;
+        game.troops[ti].motivation = 0x50;
+        game.troops[ti].game_day_of_ralliement = day.wrapping_sub(9);
+        // Chain a troop in right after the head.
+        fn chain_after_head(game: &mut GameState, tj: usize, li: usize) {
+            game.troop_unlink_from_location_chain(tj);
+            game.troops[tj].occupation &= !0x40;
+            game.troops[tj].offset_of_location = crate::locations::location_ptr_from_index(li);
+            let head = (game.locations[li].troop_id - 1) as usize;
+            game.troops[tj].next_troop_id = game.troops[head].next_troop_id;
+            game.troops[head].next_troop_id = game.troops[tj].troop_id;
+        }
+
+        // A fortress captured two days ago, no vegetation program, an unhired
+        // Harkonnen troop parked in it and a battle-flagged hired one.
+        game.locations[li].appearance = 0x2a;
+        game.locations[li].status = 8;
+        game.locations[li].discoverable_at_phase = day as i8;
+        let hk = 5;
+        chain_after_head(&mut game, hk, li);
+        game.troops[hk].occupation = 0x80;
+        game.troops[hk].bitfield_10 = 0x80;
+        game.troops[ti].bitfield_10 |= 0x20;
+        let sietches = game.discovered_sietch_count;
+
+        game.troop_location_new_day_upkeep(ti);
+
+        let loc = game.locations[li];
+        assert_eq!(loc.status & 8, 0);
+        assert_eq!(loc.appearance, 2, "fortress appearance 0x2a & 7");
+        assert_eq!(game.discovered_sietch_count, sietches + 1);
+        assert_eq!(
+            loc.discoverable_at_phase, 6,
+            "5, then the sietch zone growth"
+        );
+        assert_eq!(game.troops[ti].bitfield_10 & 0x1020, 0);
+        assert_eq!(game.troops[ti].dissatisfaction_and_speech & 0x1000, 0x1000);
+        assert_eq!(game.troops[hk].occupation, 0xa0, "the Harkonnen troop left");
+        assert_eq!(game.troops[ti].motivation, 0x4f, "9 days since the rally");
+        assert!(
+            game.vision_messages.is_empty(),
+            "one mood bit is not enough"
+        );
+
+        // The next day: a second demotivated troop with speech bit 7 makes
+        // the head troop's mood check fire.
+        let t2 = 6;
+        chain_after_head(&mut game, t2, li);
+        game.troops[t2].occupation = 0;
+        game.troops[t2].bitfield_10 = 0;
+        game.troops[t2].motivation = 0x10;
+        game.troops[t2].dissatisfaction_and_speech = 0x80;
+        game.troops[ti].motivation = 0x10;
+        game.troop_location_new_day_upkeep(ti);
+        assert_eq!(game.troops[ti].occupation, 0x10);
+        assert_eq!(game.troops[t2].occupation, 0x10);
+        assert_eq!(game.troops[t2].dissatisfaction_and_speech & 0x10, 0x10);
+        assert_eq!(
+            game.vision_messages,
+            vec![(0x302, crate::locations::location_ptr_from_index(li))]
+        );
+        assert_eq!(game.locations[li].discoverable_at_phase, 7);
     }
 }
