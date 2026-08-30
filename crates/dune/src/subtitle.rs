@@ -285,6 +285,9 @@ impl GameState {
                     let addr = cur.get(pos).copied().unwrap_or(0) as u16;
                     pos += 1;
                     let value = self.condit_ds_read(addr, b == 0x92);
+                    // = seg000:89f8 call subtitle_pick_voice_variant_from_number
+                    //   — the spoken variant follows the number.
+                    self.subtitle_pick_voice_variant_from_number(addr, value);
                     let mut started = false;
                     for div in [10000u16, 1000, 100, 10, 1] {
                         let digit = (value / div % 10) as u8;
@@ -361,6 +364,37 @@ impl GameState {
     // fly-over "It looks like a <type>, there ..." line speak the recording that
     // matches its location-type caption (placeholder 0x84 = subst_id_04 =
     // 0x48 + type: sietch/palace -> O, village -> OB, fortress -> OC).
+    // = seg000:8acc subtitle_pick_voice_variant_from_number — for a voiced
+    // line (dialogue_line_word0 bit 4) whose live-number placeholder reads
+    // ds:`addr`, pick the spoken variant from the number itself and consume
+    // the flag: ds:cf (days until the next spice shipment) -> min(n, 8);
+    // ds:55 / ds:61 (the location equipment counts) -> min(n - 1, 4); ds:44
+    // (the troop occupation figure, only when the line's event id is 1) ->
+    // min(n - 1, 8). Other addresses leave the flag for the terminator's
+    // rand_masked fallback. The `dec` wraps: a 0 reads as 0xff and clamps.
+    fn subtitle_pick_voice_variant_from_number(&mut self, addr: u16, value: u16) {
+        // = seg000:8acc test dialogue_line_word0,10h; jz ret.
+        if self.dialogue_line_word0 & 0x10 == 0 {
+            return;
+        }
+        let n = value as u8;
+        let al: Option<u8> = match addr {
+            // = seg000:8ad9/8aff cmp al,8; jbe; mov al,8.
+            0xcf => Some(n.min(8)),
+            // = seg000:8adf..8ae9 -> 8b07 dec ax; cmp al,4; jbe; mov al,4.
+            0x55 | 0x61 => Some(n.wrapping_sub(1).min(4)),
+            // = seg000:8aeb..8afe only with the event id == 1: dec ax, then
+            //   the 8aff clamp.
+            0x44 if self.dialogue_line_word0 & 0x0f == 1 => Some(n.wrapping_sub(1).min(8)),
+            _ => None,
+        };
+        if let Some(al) = al {
+            // = seg000:8abe call subtitle_set_voice_variant.
+            self.data_047e0 = al;
+            self.dialogue_line_word0 &= 0xef;
+        }
+    }
+
     fn subtitle_pick_voice_variant(&mut self, placeholder: u8, subst_id: u16) {
         // = seg000:8a3b test dialogue_line_word0,10h; jz ret.
         if self.dialogue_line_word0 & 0x10 == 0 {
@@ -1173,5 +1207,47 @@ mod tests {
             0x10,
             "flag left for the fallback"
         );
+    }
+
+    // The live-number placeholders pick the spoken variant from the number
+    // (seg000:8acc): the Emperor's "in N days" (ds:cf) speaks N, capped at 8;
+    // an equipment count (ds:55) speaks n - 1 capped at 4 (0 wraps to the
+    // cap); other addresses leave the voiced flag for the fallback.
+    #[test]
+    #[ignore = "needs assets/DUNE.DAT"]
+    fn number_placeholder_voice_variant_follows_the_number() {
+        let dat_path = concat!(env!("CARGO_MANIFEST_DIR"), "/../../assets/DUNE.DAT");
+        let Ok(dat_file) = DatFile::open(dat_path) else {
+            eprintln!("skipping: {dat_path} not found");
+            return;
+        };
+        let (tx, _rx) = mpsc::sync_channel(64);
+        let mut game = GameState::new(dat_file, tx);
+        game.set_headless();
+        game.start(true);
+
+        let pick = |game: &mut GameState, src: &[u8]| {
+            game.dialogue_line_word0 = 0x10;
+            game.data_047e0 = 0xff;
+            let text = game.format_interpolated_string(src);
+            (text, game.data_047e0, game.dialogue_line_word0 & 0x10)
+        };
+        game.days_left_until_spice_shipment = 5;
+        let (text, variant, flag) = pick(&mut game, b"in \x91\xcf days\xff");
+        assert_eq!(text, b"in 5 days\xff");
+        assert_eq!((variant, flag), (5, 0), "= seg000:8aff/8abe");
+        game.days_left_until_spice_shipment = 12;
+        let (text, variant, _) = pick(&mut game, b"\x91\xcf\xff");
+        assert_eq!(text, b"12\xff");
+        assert_eq!(variant, 8, "= seg000:8b03 cap");
+        game.location_condit.equipment[0] = 0;
+        let (_, variant, _) = pick(&mut game, b"\x91\x55\xff");
+        assert_eq!(variant, 4, "= seg000:8b07 dec wraps, 8b0c cap");
+        // An address the pick ignores (ds:a0) leaves the flag to the
+        // terminator's rand_masked fallback (seg000:89dd), which consumes it
+        // with a random variant.
+        let (_, variant, flag) = pick(&mut game, b"\x92\xa0\xff");
+        assert_ne!(variant, 0xff, "= seg000:89dd fallback ran");
+        assert_eq!(flag, 0);
     }
 }
