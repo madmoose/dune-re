@@ -185,9 +185,9 @@ pub(crate) const MENU_COMMS_ROOM_MESSAGES_VIEWED: MenuDef = menu(0xfb, &[
 /// = seg001:1ffe menu_argue_accept_refuse
 #[rustfmt::skip]
 pub(crate) const MENU_ARGUE_ACCEPT_REFUSE: MenuDef = menu(0xfb, &[
-    item(cmd::ARGUE,  0x2453, |_, _, _| println!("menu: ARGUE (seg000:2453) not ported")),
-    item(cmd::ACCEPT, 0x241a, |_, _, _| println!("menu: ACCEPT (seg000:241a) not ported")),
-    item(cmd::REFUSE, 0x2432, |_, _, _| println!("menu: REFUSE (seg000:2432) not ported")),
+    item(cmd::ARGUE,  0x2453, GameState::menu_callback_choice_argue),
+    item(cmd::ACCEPT, 0x241a, GameState::menu_callback_choice_accept),
+    item(cmd::REFUSE, 0x2432, GameState::menu_callback_choice_refuse),
     item(cmd::WHAT,   0x9ed5, GameState::menu_callback_choice_what),
 ]);
 

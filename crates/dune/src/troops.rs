@@ -1780,10 +1780,10 @@ impl GameState {
         if self.locations[loc_index].appearance == 0x21 {
             self.room_persons[13].location_and_room = self.location_and_room;
             self.room_persons[13].location_appearance = self.location_appearance;
-            // = seg000:3166 call loc_02318 — the smuggler-encounter staging
-            //   (the Smuggler table walk, days-since-encounter, the condit
-            //   smuggler fields). TODO: the smuggler data model is not
-            //   ported.
+            // = seg000:3166 call smuggler_stage_encounter — stage the den's
+            //   smuggler for the talk (his record, bill, days since the last
+            //   visit, the offered equipment slot).
+            self.smuggler_stage_encounter(loc_index);
         }
         // = seg000:316a call prepare_location_data_for_condit.
         self.prepare_location_data_for_condit(loc_index);

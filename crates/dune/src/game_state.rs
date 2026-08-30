@@ -486,6 +486,12 @@ pub struct GameState {
     pub(crate) current_smuggler_willingness_to_haggle_ds_1d: u8,
     pub(crate) related_to_paying_smuggler_bills_ds_1f: u8,
     pub(crate) current_smuggler_bill_value_ds_20: u16,
+    // = seg001:001e current_smuggler_number_of_days_since_previous_encounter_
+    // ds_1e — days since the den's last visit (1 on the first, seg000:2327..
+    // 2339); 0022 smuggler_bills_count_ds_22 — how many smugglers hold an
+    // open bill.
+    pub(crate) current_smuggler_number_of_days_since_previous_encounter_ds_1e: u8,
+    pub(crate) smuggler_bills_count_ds_22: u8,
 
     // = seg001:001b related_to_stay_here_come_with_me_ds_1b — counts the
     // COME WITH ME / STAY HERE verb uses since the last TALK TO ME (which
@@ -616,6 +622,15 @@ pub struct GameState {
     pub(crate) for_condit_smuggler_dialogue_related_ds_9d: u8,
     pub(crate) for_condit_smuggler_arguing_count_ds_9e: u8,
     pub(crate) accept_refuse_argue_choice_ds_9f: u8,
+    // = seg001:476d argue_menu_with_smuggler — which talk the ACCEPT/REFUSE/
+    // ARGUE menu belongs to: 0 = Duncan's shipment offer (dialogue event
+    // 0x04), 1 = the smuggler's bill (event 0x05). Event 0x09 reads it.
+    pub(crate) argue_menu_with_smuggler: u8,
+    // = seg001:1158 shipment_report_scene_mask — 0xffff once Paul has
+    // answered Duncan's offer (seg000:2510); the room-entry scan masks ds:c0
+    // with it to run the dining-hall shipment-report scene (seg000:35cf,
+    // unported).
+    pub(crate) shipment_report_scene_mask: u16,
 
     // = seg001:00c0 for_condit_spice_shipment_related_ds_c0 — Duncan's
     // shipment-mission report state: zeroed when his dialogue-line event
@@ -2451,6 +2466,8 @@ impl GameState {
             current_smuggler_willingness_to_haggle_ds_1d: 0,
             related_to_paying_smuggler_bills_ds_1f: 0,
             current_smuggler_bill_value_ds_20: 0,
+            current_smuggler_number_of_days_since_previous_encounter_ds_1e: 0,
+            smuggler_bills_count_ds_22: 0,
             data_0001b: 0,
             pending_room_action: 0,
             for_dialogue_enemies_ds_24: 0,
@@ -2479,6 +2496,8 @@ impl GameState {
             for_condit_smuggler_dialogue_related_ds_9d: 0,
             for_condit_smuggler_arguing_count_ds_9e: 0,
             accept_refuse_argue_choice_ds_9f: 0,
+            argue_menu_with_smuggler: 0,
+            shipment_report_scene_mask: 0,
             for_condit_spice_shipment_ds_c0: 0,
             final_attack_stage: 0,
             spice_shipment_sequence_number: 0,

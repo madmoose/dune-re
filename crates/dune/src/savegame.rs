@@ -278,7 +278,13 @@ impl GameState {
         w8(b, 0x001c, self.related_to_paying_smuggler_bills_ds_1c);
         w8(b, 0x001d, self.current_smuggler_willingness_to_haggle_ds_1d);
         w8(b, 0x001f, self.related_to_paying_smuggler_bills_ds_1f);
+        w8(
+            b,
+            0x001e,
+            self.current_smuggler_number_of_days_since_previous_encounter_ds_1e,
+        );
         w16(b, 0x0020, self.current_smuggler_bill_value_ds_20);
+        w8(b, 0x0022, self.smuggler_bills_count_ds_22);
         w8(b, 0x0023, self.pending_room_action);
         w8(b, 0x0025, self.number_of_sietches_visited);
         w8(b, 0x0026, self.entering_new_sietch);
@@ -473,6 +479,8 @@ impl GameState {
         }
         // = seg001:113f current_smuggler_ptr.
         w16(b, 0x113f, self.current_smuggler_ptr);
+        // = seg001:1158 shipment_report_scene_mask.
+        w16(b, 0x1158, self.shipment_report_scene_mask);
 
         w16(
             b,
@@ -575,7 +583,9 @@ impl GameState {
         self.related_to_paying_smuggler_bills_ds_1c = r8(b, 0x001c);
         self.current_smuggler_willingness_to_haggle_ds_1d = r8(b, 0x001d);
         self.related_to_paying_smuggler_bills_ds_1f = r8(b, 0x001f);
+        self.current_smuggler_number_of_days_since_previous_encounter_ds_1e = r8(b, 0x001e);
         self.current_smuggler_bill_value_ds_20 = r16(b, 0x0020);
+        self.smuggler_bills_count_ds_22 = r8(b, 0x0022);
         self.pending_room_action = r8(b, 0x0023);
         self.number_of_sietches_visited = r8(b, 0x0025);
         self.entering_new_sietch = r8(b, 0x0026);
@@ -751,6 +761,7 @@ impl GameState {
             s.bill_day = r8(b, o + 0x10);
         }
         self.current_smuggler_ptr = r16(b, 0x113f);
+        self.shipment_report_scene_mask = r16(b, 0x1158);
 
         self.current_location_index = location_index_from_ptr(r16(b, 0x114e));
         self.last_location_index = location_index_from_ptr(r16(b, 0x1150)) as usize;

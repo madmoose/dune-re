@@ -31,7 +31,10 @@ use std::io::Cursor;
 
 use bytes_ext::ReadBytesExt;
 
-use crate::{GameState, Rect, container, gfx, room_game_screen::NPC_COMPANION};
+use crate::{
+    GameState, Rect, container, gfx, menu_defs::MenuRef, room_game_screen::NPC_COMPANION,
+    smugglers::smuggler_index_from_ptr,
+};
 
 impl GameState {
     // = seg000:cfb9 build_per_person_voc_base_table .
@@ -1254,15 +1257,196 @@ impl GameState {
                 3 => self.dialogue_event_0f_duncan_idaho(),
                 _ => {}
             },
+            // = seg000:a244/a248 callback_event_dialogue_line_04/05_
+            //   acceptrefuseargue — Duncan's shipment offer (al = 0) / the
+            //   smuggler's bill (al = 1).
+            0x04 => self.dialogue_event_04_05_accept_refuse_argue(0),
+            0x05 => self.dialogue_event_04_05_accept_refuse_argue(1),
             // = seg000:a125 callback_event_dialogue_line_08_speaker_
             //   dependent_effect_1.
             0x08 => self.dialogue_event_08_speaker_dependent(),
-            // = a244/a248 (0x04/0x05) the accept/refuse/argue menu, a1ed
-            //   (0x0e) increase_final_attack_stage, a157 (0x09) the second
-            //   speaker-dependent effect, a28e (0x0d) the command-menu/
-            //   PALPLAN redraw — all unported.
+            // = seg000:a157 callback_event_dialogue_line_09_speaker_
+            //   dependent_effect_2.
+            0x09 => self.dialogue_event_09_speaker_dependent(),
+            // = a1ed (0x0e) increase_final_attack_stage, a28e (0x0d) the
+            //   command-menu/PALPLAN redraw — unported.
             _ => println!("dispatch_dialogue_line_event: unported event 0x{event:02x}"),
         }
+    }
+
+    // = seg000:a24a callback_event_dialogue_line_04_05_acceptrefuseargue_
+    // common_code — dialogue events 0x04 (Duncan's shipment offer, al = 0)
+    // and 0x05 (the smuggler's bill, al = 1): remember whose talk it is,
+    // reset the choice byte, push the ACCEPT/REFUSE/ARGUE verb panel
+    // (loc_0d323: overlay transition, stack push, panel fold, hover
+    // highlight), then fall into event 0x0a — the speaker holds up the sign
+    // with the figures.
+    fn dialogue_event_04_05_accept_refuse_argue(&mut self, with_smuggler: u8) {
+        // = seg000:a24a [argue_menu_with_smuggler] = al.
+        self.argue_menu_with_smuggler = with_smuggler;
+        // = seg000:a24d ds:9f = 0.
+        self.accept_refuse_argue_choice_ds_9f = 0;
+        // = seg000:a252..a258 bp = menu_argue_accept_refuse; bx = nullsub;
+        //   call loc_0d323.
+        self.screen_overlay_request_transition();
+        self.menu_stack_push(MenuRef::MenuArgueAcceptRefuse, None);
+        self.play_pending_panel_fold();
+        let _ = self.highlight_hovered_text_action_item();
+        // = seg000:a25b falls into callback_event_dialogue_line_0a_hold_up_sign.
+        self.head_sign_arm_for_current_line();
+    }
+
+    // = seg000:a157 callback_event_dialogue_line_09_speaker_dependent_effect_2
+    // — dialogue event 0x09, keyed on the speaker: Duncan (the negotiation
+    // outcome), Stilgar (the final-attack troop select, unported), the
+    // Smugglers (a null callback).
+    fn dialogue_event_09_speaker_dependent(&mut self) {
+        match self.current_lip_sync_resource_id {
+            // = seg000:a15f jmp callback_event_dialogue_line_09_Duncan_Idaho.
+            3 => self.dialogue_event_09_duncan_idaho(),
+            // = seg000:a167 jmp callback_event_dialogue_line_09_Stilgar_final_
+            //   attack_select_troops (seg000:2d2c) — unported.
+            5 => println!(
+                "dialogue event 0x09: Stilgar final-attack troop select (seg000:2d2c) not ported"
+            ),
+            // = seg000:a16f jmp null_callback_event_dialogue_line_09_Smugglers.
+            0x0d => {}
+            _ => {}
+        }
+    }
+
+    // = seg000:24ee callback_event_dialogue_line_09_Duncan_Idaho — the line
+    // that answers Paul's ACCEPT / REFUSE / ARGUE (ds:9f), for both talks
+    // (argue_menu_with_smuggler picks which): accepted (ds:9f < 2) Duncan's
+    // offer commits the shipment figure the argument reached (ds:b4 table
+    // entry (ds:1a - 1) & 3) into ds:c0 and arms the dining-hall report;
+    // accepted with the smuggler pays his whole bill from the spice stock;
+    // REFUSE (2) / ARGUE (3) with the smuggler stamps state bit 6 / bit 5 on
+    // his record, and are no-ops for Duncan.
+    pub(crate) fn dialogue_event_09_duncan_idaho(&mut self) {
+        let choice = self.accept_refuse_argue_choice_ds_9f;
+        let smuggler = smuggler_index_from_ptr(self.room_persons[13].field_c);
+        // = seg000:24ee cmp ds:9f,2; jz loc_02541; jnb loc_0252d.
+        match choice {
+            2 => {
+                // = seg000:2541..2554 REFUSE: bits 5/6 -> bit 6.
+                if self.argue_menu_with_smuggler != 0
+                    && let Some(i) = smuggler
+                {
+                    self.smugglers[i].field_2 = (self.smugglers[i].field_2 & 0x9f) | 0x40;
+                }
+            }
+            3.. => {
+                // = seg000:252d..2540 ARGUE: bits 5/6 -> bit 5.
+                if self.argue_menu_with_smuggler != 0
+                    && let Some(i) = smuggler
+                {
+                    self.smugglers[i].field_2 = (self.smugglers[i].field_2 & 0x9f) | 0x20;
+                }
+            }
+            _ => {
+                if self.argue_menu_with_smuggler == 0 {
+                    // = seg000:24fe..2516 Duncan: ax = (ds:1a - 1) & 3; ds:c0 =
+                    //   ds:b4[ax]; shipment_report_scene_mask = 0xffff.
+                    let idx = (self.related_to_arguing_ds_1a.wrapping_sub(1) & 3) as usize;
+                    self.for_condit_spice_shipment_ds_c0 = self.spice_shipment_arguing_ds_b4[idx];
+                    self.shipment_report_scene_mask = 0xffff;
+                } else if let Some(i) = smuggler {
+                    // = seg000:2517..252c the smuggler: ax = xchg(bill, 0);
+                    //   ds:22 -= 1; spice_in_stock -= ax; spice_spent_today
+                    //   += ax.
+                    let bill = std::mem::take(&mut self.smugglers[i].bill_value);
+                    self.smuggler_bills_count_ds_22 =
+                        self.smuggler_bills_count_ds_22.wrapping_sub(1);
+                    self.spice_in_stock = self.spice_in_stock.wrapping_sub(bill);
+                    self.spice_spent_today = self.spice_spent_today.wrapping_add(bill);
+                }
+            }
+        }
+    }
+
+    // = seg000:241a menu_callback_choice_accept — the ACCEPT verb. With the
+    // smuggler (speaker 0x0d) the sale goes through (smuggler_sell_equipment
+    // on room_persons[13].field_c); either way the choice commits as 1.
+    pub(crate) fn menu_callback_choice_accept(&mut self, _text_id: u16, _index: usize) {
+        // = seg000:241a..2423.
+        if self.current_lip_sync_resource_id == 0x0d
+            && let Some(i) = smuggler_index_from_ptr(self.room_persons[13].field_c)
+        {
+            // = seg000:2426/242a di = field_c; call smuggler_sell_equipment.
+            self.smuggler_sell_equipment(i);
+        }
+        self.accept_refuse_argue_commit(1);
+    }
+
+    // = seg000:2432 menu_callback_choice_refuse — the REFUSE verb. Duncan
+    // just takes the 2; the smuggler rolls rand_masked(7): zero and he
+    // insists (ds:9e |= 0x10, the choice becomes an ARGUE 3), otherwise the
+    // offer is withdrawn (ds:9d = 0) and the 2 stands.
+    pub(crate) fn menu_callback_choice_refuse(&mut self, _text_id: u16, _index: usize) {
+        let choice = if self.current_lip_sync_resource_id == 0x0d {
+            // = seg000:243e..2451 / 246b..2472.
+            if self.rand_masked(7) == 0 {
+                self.for_condit_smuggler_arguing_count_ds_9e |= 0x10;
+                3
+            } else {
+                self.for_condit_smuggler_dialogue_related_ds_9d = 0;
+                2
+            }
+        } else {
+            // = seg000:2439 al = 2.
+            2
+        };
+        self.accept_refuse_argue_commit(choice);
+    }
+
+    // = seg000:2453 menu_callback_choice_argue — the ARGUE verb, always a 3.
+    // With the smuggler: rand_masked(3) == 0 and he digs in (ds:9e |= 0x10);
+    // otherwise one more haggling round (ds:9e = (ds:9e + 1) & 3) and the
+    // roll's low bit plus the round count ds:1a, measured against his
+    // willingness_to_haggle, decides: below it the price drops an eighth
+    // (smuggler_haggle_price_down), at or above it he withdraws the offer
+    // (ds:9d = 0).
+    pub(crate) fn menu_callback_choice_argue(&mut self, _text_id: u16, _index: usize) {
+        if self.current_lip_sync_resource_id == 0x0d
+            && let Some(i) = smuggler_index_from_ptr(self.room_persons[13].field_c)
+        {
+            // = seg000:245f..2469 bx = 3; call rand_masked; jnz loc_02474.
+            let roll = self.rand_masked(3) as u8;
+            if roll == 0 {
+                // = seg000:246b.
+                self.for_condit_smuggler_arguing_count_ds_9e |= 0x10;
+            } else {
+                // = seg000:2474..2486.
+                self.for_condit_smuggler_arguing_count_ds_9e =
+                    (self.for_condit_smuggler_arguing_count_ds_9e.wrapping_add(1)) & 3;
+                let al = (roll & 1).wrapping_add(self.related_to_arguing_ds_1a);
+                if al < self.smugglers[i].willingness_to_haggle {
+                    // = seg000:2491 call smuggler_haggle_price_down.
+                    self.smuggler_haggle_price_down();
+                } else {
+                    // = seg000:2488 ds:9d = 0.
+                    self.for_condit_smuggler_dialogue_related_ds_9d = 0;
+                }
+            }
+        }
+        // = seg000:245a / 2470 / 248d / 2494 al = 3.
+        self.accept_refuse_argue_commit(3);
+    }
+
+    // = seg000:2496 accept_refuse_argue_commit — the shared tail of the
+    // three verbs: ds:9f = the choice, one more negotiation round (ds:1a),
+    // drop the verb panel (menu_callback_choice_exit_menu) and re-run TALK
+    // TO ME so the speaker answers the choice (the answer line's event 0x09
+    // applies it).
+    pub(crate) fn accept_refuse_argue_commit(&mut self, choice: u8) {
+        // = seg000:2496/2499.
+        self.accept_refuse_argue_choice_ds_9f = choice;
+        self.related_to_arguing_ds_1a = self.related_to_arguing_ds_1a.wrapping_add(1);
+        // = seg000:249d call menu_callback_choice_exit_menu; 24a0 jmp
+        //   menu_callback_choice_talk_to_me.
+        self.menu_callback_choice_exit_menu(0, 0);
+        self.menu_callback_choice_talk_to_me(0, 0);
     }
 
     // = seg000:a125 callback_event_dialogue_line_08_speaker_dependent_effect_1
@@ -1927,7 +2111,7 @@ mod tests {
 mod event_08_tests {
     use std::sync::mpsc;
 
-    use crate::{GameState, dat_file::DatFile};
+    use crate::{GameState, dat_file::DatFile, menu_defs::MenuRef};
 
     fn asset_game() -> Option<GameState> {
         let dat_path = concat!(env!("CARGO_MANIFEST_DIR"), "/../../assets/DUNE.DAT");
@@ -1974,6 +2158,121 @@ mod event_08_tests {
             0xffce_u16.wrapping_add(0x14)
         );
         assert_eq!(game.contact_distance_related_ds_d5, 0);
+    }
+
+    // Duncan's shipment negotiation: event 0x04 pushes the ACCEPT/REFUSE/
+    // ARGUE panel (seg000:a24a..a258) and his answer line's event 0x09
+    // (seg000:24ee) commits the figure the rounds reached — ds:b4 entry
+    // (ds:1a - 1) & 3 — into ds:c0 and arms the dining-hall report.
+    #[test]
+    #[ignore = "needs assets/DUNE.DAT"]
+    fn duncan_negotiation_commits_the_argued_figure() {
+        let Some(mut game) = asset_game() else { return };
+        game.current_lip_sync_resource_id = 3;
+        game.spice_shipment_quantity = 100;
+        game.stage_spice_argue_amounts_with_duncan(120); // [100, 120, 90, 60]
+        game.related_to_arguing_ds_1a = 0;
+        game.dialogue_event_04_05_accept_refuse_argue(0);
+        assert_eq!(
+            game.get_active_menu_ref(),
+            MenuRef::MenuArgueAcceptRefuse,
+            "= seg000:a252"
+        );
+        assert_eq!(game.argue_menu_with_smuggler, 0);
+        assert_eq!(game.accept_refuse_argue_choice_ds_9f, 0, "= seg000:a24d");
+        game.menu_stack_pop_and_cleanup();
+        // Two ARGUE rounds then ACCEPT: ds:1a counts 3, the accepted figure
+        // is entry (3 - 1) & 3 = 2 -> 90.
+        game.related_to_arguing_ds_1a = 3;
+        game.accept_refuse_argue_choice_ds_9f = 1;
+        game.dialogue_event_09_duncan_idaho();
+        assert_eq!(
+            game.for_condit_spice_shipment_ds_c0, 90,
+            "= seg000:2509/250d"
+        );
+        assert_eq!(game.shipment_report_scene_mask, 0xffff, "= seg000:2510");
+        // REFUSE / ARGUE answers change nothing for Duncan.
+        game.for_condit_spice_shipment_ds_c0 = 0;
+        game.accept_refuse_argue_choice_ds_9f = 2;
+        game.dialogue_event_09_duncan_idaho();
+        game.accept_refuse_argue_choice_ds_9f = 3;
+        game.dialogue_event_09_duncan_idaho();
+        assert_eq!(
+            game.for_condit_spice_shipment_ds_c0, 0,
+            "= seg000:2540/2554"
+        );
+    }
+
+    // The smuggler side of the same verbs: entering his den stages him
+    // (seg000:2318), ACCEPT sells one of the offered equipment onto his bill
+    // (seg000:23e6), and his answer's event 0x09 with the choice accepted
+    // pays the whole bill from the spice stock (seg000:2517..252c).
+    #[test]
+    #[ignore = "needs assets/DUNE.DAT"]
+    fn smuggler_sale_and_bill_payment() {
+        let Some(mut game) = asset_game() else { return };
+        // A den in region 3: smugglers[1] serves it.
+        let li = game
+            .locations
+            .iter()
+            .position(|l| l.appearance == 0x21 && l.first_name == 3)
+            .expect("a region-3 smuggler den");
+        game.current_location_index = li as u16;
+        game.game_time = 12 << 4;
+        game.rand_bits = 1;
+        game.smuggler_stage_encounter(li);
+        assert_eq!(
+            game.room_persons[13].field_c,
+            crate::smugglers::smuggler_ptr(1)
+        );
+        assert_eq!(
+            game.current_smuggler_number_of_days_since_previous_encounter_ds_1e, 1,
+            "first visit"
+        );
+        assert_ne!(game.smugglers[1].field_2 & 8, 0, "= seg000:2335");
+        assert_eq!(game.string_subst_id_table[3], 0xe9, "rand_bits 1 -> slot 1");
+        assert_eq!(game.accept_refuse_argue_choice_ds_9f, 0);
+        // ACCEPT the offer: price 0x80, slot 1 (ornithopters).
+        game.for_condit_smuggler_dialogue_related_ds_9d = 0x80;
+        let stock = game.smugglers[1].stock[1];
+        let orni = game.locations[li].equipment.ornithopters;
+        game.smuggler_sell_equipment(1);
+        assert_eq!(game.smugglers[1].bill_value, 0x80);
+        assert_eq!(game.current_smuggler_bill_value_ds_20, 0x80);
+        assert_eq!(game.smuggler_bills_count_ds_22, 1, "= seg000:23fc");
+        assert_eq!(game.smugglers[1].bill_day, 12, "= seg000:2403");
+        assert_eq!(game.smugglers[1].stock[1], stock - 1, "= seg000:240e");
+        assert_eq!(
+            game.locations[li].equipment.ornithopters,
+            orni + 1,
+            "= seg000:2415"
+        );
+        assert_eq!(game.for_condit_smuggler_dialogue_related_ds_9d, 0);
+        // His "deal" line (event 0x09, accepted, smuggler talk) collects.
+        game.spice_in_stock = 0x100;
+        game.argue_menu_with_smuggler = 1;
+        game.accept_refuse_argue_choice_ds_9f = 1;
+        game.dialogue_event_09_duncan_idaho();
+        assert_eq!(game.smugglers[1].bill_value, 0, "= seg000:251d");
+        assert_eq!(game.smuggler_bills_count_ds_22, 0, "= seg000:2520");
+        assert_eq!(game.spice_in_stock, 0x80, "= seg000:2524");
+        assert_eq!(game.spice_spent_today, 0x80, "= seg000:2528");
+        // A refused / argued answer stamps his state bits instead.
+        game.accept_refuse_argue_choice_ds_9f = 2;
+        game.dialogue_event_09_duncan_idaho();
+        assert_eq!(game.smugglers[1].field_2 & 0x60, 0x40, "= seg000:2550");
+        game.accept_refuse_argue_choice_ds_9f = 3;
+        game.dialogue_event_09_duncan_idaho();
+        assert_eq!(game.smugglers[1].field_2 & 0x60, 0x20, "= seg000:253c");
+        // ARGUE haggles an eighth off while the rounds stay under his
+        // willingness (record 1: 1).
+        game.for_condit_smuggler_dialogue_related_ds_9d = 0x80;
+        game.smuggler_haggle_price_down();
+        assert_eq!(
+            game.for_condit_smuggler_dialogue_related_ds_9d,
+            0x80 - 0x10,
+            "= seg000:23d5"
+        );
     }
 
     // Stilgar's event 0x08 only arms the post-voice hook (seg000:a13a); the

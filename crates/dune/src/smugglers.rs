@@ -185,6 +185,92 @@ impl GameState {
         self.current_smuggler_willingness_to_haggle_ds_1d = s.willingness_to_haggle;
     }
 
+    // = seg000:2318 smuggler_stage_encounter — entering a smuggler den
+    // (init_room_persons, seg000:3166): find the smugglers[] record whose
+    // region byte is the den location's first_name, stage it for CONDIT,
+    // set ds:1e to the days since the last visit (1 on the first visit,
+    // which also arms state bit 3), clear the offer price ds:9d, pick the
+    // offered equipment slot from rand_bits wrapped modulo the worm-event
+    // base byte (seg000:2347 reads seg001:1141, as event 0x08 does), and
+    // reset the ACCEPT/REFUSE/ARGUE choice. DOS walks the table unbounded;
+    // a den whose region no smuggler serves stages nothing here.
+    pub(crate) fn smuggler_stage_encounter(&mut self, loc_index: usize) {
+        // = seg000:2318 al = [di] — the location's region (first_name).
+        let region = self.locations[loc_index].first_name;
+        // = seg000:231a..2322 walk from smugglers[0] for a matching region.
+        let Some(index) = self.smugglers.iter().position(|s| s.region == region) else {
+            return;
+        };
+        // = seg000:2324 call stage_smuggler_for_condit.
+        self.stage_smuggler_for_condit(index);
+        // = seg000:2327..2339 al = today - [si+3]; a first visit (state bit
+        //   3 clear) reads as 1 and arms the bit.
+        let day = self.get_ingame_day() as u8;
+        let s = &mut self.smugglers[index];
+        let mut days = day.wrapping_sub(s.field_3);
+        if s.field_2 & 8 == 0 {
+            days = 1;
+            s.field_2 |= 8;
+        }
+        self.current_smuggler_number_of_days_since_previous_encounter_ds_1e = days;
+        // = seg000:233c ds:9d = 0.
+        self.for_condit_smuggler_dialogue_related_ds_9d = 0;
+        // = seg000:2341..2351 ax = rand_bits & 7, wrapped modulo the byte at
+        //   seg001:1141 (worm_event_likelihood_by_region[0]).
+        let modulus = self.worm_event_likelihood_by_region[0];
+        let mut al = (self.rand_bits & 7) as u8;
+        if modulus != 0 {
+            while al >= modulus {
+                al -= modulus;
+            }
+        }
+        // = seg000:2353/2356 subst_id_03 = slot + 0xe8.
+        self.string_subst_id_table[3] = al as u16 + 0xe8;
+        // = seg000:2359 ds:9f = 0.
+        self.accept_refuse_argue_choice_ds_9f = 0;
+    }
+
+    // = seg000:23d5 smuggler_haggle_price_down — a successful ARGUE knocks
+    // one eighth off the offer price: ds:9d -= ds:9d >> 3.
+    pub(crate) fn smuggler_haggle_price_down(&mut self) {
+        let price = self.for_condit_smuggler_dialogue_related_ds_9d;
+        self.for_condit_smuggler_dialogue_related_ds_9d = price.wrapping_sub(price >> 3);
+    }
+
+    // = seg000:23e6 smuggler_sell_equipment — ACCEPT on the smuggler's
+    // offer: clear his REFUSED/ARGUED state bits (5/6), move the offer price
+    // ds:9d onto his bill (ds:20 and the record's +0xe; a bill that was zero
+    // counts a new debtor in ds:22), stamp today as the bill day, take one
+    // of the offered equipment (subst_id_03 - 0xe8) from his stock and add
+    // it to the current location's equipment row.
+    pub(crate) fn smuggler_sell_equipment(&mut self, index: usize) {
+        // = seg000:23e6 and byte [di+2], 9fh.
+        self.smugglers[index].field_2 &= 0x9f;
+        // = seg000:23ea..23fc ax = xchg(ds:9d, 0); ds:20 += ax; bill += ax;
+        //   a bill equal to ax was zero before -> ds:22 += 1.
+        let price = std::mem::take(&mut self.for_condit_smuggler_dialogue_related_ds_9d) as u16;
+        self.current_smuggler_bill_value_ds_20 =
+            self.current_smuggler_bill_value_ds_20.wrapping_add(price);
+        let s = &mut self.smugglers[index];
+        s.bill_value = s.bill_value.wrapping_add(price);
+        if s.bill_value == price {
+            self.smuggler_bills_count_ds_22 = self.smuggler_bills_count_ds_22.wrapping_add(1);
+        }
+        // = seg000:2400..2403 [di+10h] = today.
+        self.smugglers[index].bill_day = self.get_ingame_day() as u8;
+        // = seg000:2406..2418 the offered slot: stock -1, the current
+        //   location's equipment row +1.
+        let slot = (self.string_subst_id_table[3].wrapping_sub(0xe8) & 0xff) as usize;
+        if let Some(stock) = self.smugglers[index].stock.get_mut(slot) {
+            *stock = stock.wrapping_sub(1);
+        }
+        let li = self.current_location_index as usize;
+        if slot < 7 && li < self.locations.len() {
+            let e = self.locations[li].equipment.slot_mut(slot);
+            *e = e.wrapping_add(1);
+        }
+    }
+
     // = seg000:2388 callback_event_dialogue_line_08_Smugglers — the
     // smuggler's dialogue event 0x08: advance the game phase to 0x3c, roll
     // the haggling rounds, stamp today into the staged record's +3 byte,

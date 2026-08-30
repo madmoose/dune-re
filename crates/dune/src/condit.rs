@@ -26,7 +26,12 @@ fn condit_var_name(addr: u16) -> Option<(&'static str, bool)> {
         0x1b => ("stay_here_come_with_me_count", false),
         0x1c => ("related_to_paying_smuggler_bills_ds_1c", false),
         0x1d => ("current_smuggler_willingness_to_haggle_ds_1d", false),
+        0x1e => (
+            "current_smuggler_number_of_days_since_previous_encounter_ds_1e",
+            false,
+        ),
         0x1f => ("related_to_paying_smuggler_bills_ds_1f", false),
+        0x22 => ("smuggler_bills_count_ds_22", false),
         0x20 => ("current_smuggler_bill_value_ds_20", true),
         0x9d => ("for_condit_smuggler_dialogue_related_ds_9d", false),
         0x9e => ("for_condit_smuggler_arguing_count_ds_9e", false),
@@ -163,7 +168,10 @@ impl GameState {
             // haggling attitude and bill age (stage_smuggler_for_condit).
             0x1c => self.related_to_paying_smuggler_bills_ds_1c,
             0x1d => self.current_smuggler_willingness_to_haggle_ds_1d,
+            0x1e => self.current_smuggler_number_of_days_since_previous_encounter_ds_1e,
             0x1f => self.related_to_paying_smuggler_bills_ds_1f,
+            // = seg001:0022 smuggler_bills_count_ds_22.
+            0x22 => self.smuggler_bills_count_ds_22,
             // = seg001:009d..009f the smuggler offer / haggling state
             // (dialogue_event_08_smugglers, dialogue_event_08_duncan_idaho).
             0x9d => self.for_condit_smuggler_dialogue_related_ds_9d,
