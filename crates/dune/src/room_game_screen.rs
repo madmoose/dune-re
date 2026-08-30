@@ -540,9 +540,11 @@ impl GameState {
     // greyed, dispatch it (DOS `jmp bx`).
     pub(crate) fn dispatch_command_menu_slot(&mut self, slot: usize) {
         // = seg000:d45d the " Others..." row (data_0dce5): with more records
-        // ahead (data_0dce4 sign set) advance a page (loc_0d423, skip +=
-        // 0x10 = 4 records); otherwise a scrolled menu rewinds to page one
-        // (loc_0d429, skip = 0); an unscrolled dead row does nothing (bx=0).
+        // ahead (data_0dce4 sign set) advance a page
+        // (command_menu_others_next_page, seg000:d423: skip += 0x10 = 4
+        // records); otherwise a scrolled menu rewinds to page one
+        // (command_menu_others_rewind, seg000:d429: skip = 0); an unscrolled
+        // dead row does nothing (bx = 0).
         if slot as u8 == self.command_menu_more_slot {
             let more = self.command_menu_more_state;
             let menu_ref = self.get_active_menu_ref();
@@ -553,7 +555,15 @@ impl GameState {
             } else {
                 return;
             }
+            // = seg000:d426/d42c jmp redraw_active_command_menu — the new page
+            // of rows goes straight to VGA (draw_command_menu_item targets the
+            // screen). The port draws into `screen` and publishes only on a
+            // cursor or hover change, so present the repainted strip here
+            // (unless composing offscreen, where the caller presents).
             self.redraw_active_command_menu();
+            if !self.front_buffer_is_fb1() {
+                self.send_frame_to_display();
+            }
             return;
         }
         // = seg000:d454 read_command_menu_record_for_slot — records + skip +
