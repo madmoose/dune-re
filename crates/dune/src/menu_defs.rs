@@ -386,7 +386,7 @@ pub(crate) const MENU_OCCUPATION_FOR_SPICE_TROOP: MenuDef = menu(0xf8, &[
 #[rustfmt::skip]
 pub(crate) const MENU_OCCUPATION_FOR_ARMY_TROOP: MenuDef = menu(0xf8, &[
     item(cmd::GO_SEARCH_FOR_EQUIPMENT, 0x7734, GameState::menu_callback_choice_troop_occupation_army_troop_go_search_for_equipment),
-    gray(cmd::ESPIONAGE_5F,            0x6a45, |_, _, _| println!("menu: ESPIONAGE (seg000:6a45) not ported")),
+    gray(cmd::ESPIONAGE_5F,            0x6a45, GameState::menu_callback_choice_troop_occupation_army_troop_espionage),
     item(cmd::SPECIALIZE_IN_SPICE,     0x6a71, GameState::menu_callback_choice_troop_occupation_specialize_in_spice),
     item(cmd::SPECIALIZE_IN_ECOLOGY,   0x6a87, GameState::menu_callback_choice_troop_occupation_specialize_in_ecology),
     item(cmd::CANCEL,                  0xd2e2, GameState::menu_callback_choice_exit_menu),

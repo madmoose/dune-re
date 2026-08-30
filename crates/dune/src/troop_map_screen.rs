@@ -2887,6 +2887,55 @@ impl GameState {
         free
     }
 
+    // = seg000:6a45 menu_callback_choice_troop_occupation_army_troop_espionage
+    // — the ESPIONAGE verb (offered while a Harkonnen holding lies within
+    // 0x1e of the troop's location): the troop takes job 1 in its class
+    // (army 4 -> espionage 5, with the occupation reaction line), its
+    // espionage-report bit is cleared, and the nearest Harkonnen area —
+    // staged by its location's CONDIT scan — becomes the move target: the
+    // acknowledgement line presents, and unless a spoken-line event refuses,
+    // the contact ends and the move order goes out. A refusal drops the
+    // move bits instead (troop_clear_occupation_bits_0_and_1).
+    pub(crate) fn menu_callback_choice_troop_occupation_army_troop_espionage(
+        &mut self,
+        _text_id: u16,
+        _index: usize,
+    ) {
+        // = seg000:6a45/6a47 al = 1; call choice_troop_occupation_common_code.
+        self.troop_occupation_within_class(1);
+        // = seg000:6a4a data_046d8 = 1 — the popup close keeps its place.
+        self.map_popup_anim_suppress = true;
+        // = seg000:6a4f call contact_verb_troop.
+        let Some(ti) = self.contact_verb_troop() else {
+            return;
+        };
+        // = seg000:6a52 and [si+10h],0bfh — clear the report bit.
+        self.troops[ti].bitfield_10 &= !0x40;
+        // = seg000:6a56/6a59 di = the troop's location; call prepare_location_
+        //   data_for_condit — its scan fills the nearest-Harkonnen-area block.
+        let li = crate::locations::location_index_from_ptr(self.troops[ti].offset_of_location);
+        if li < self.locations.len() {
+            self.prepare_location_data_for_condit(li);
+        }
+        // = seg000:6a5c di = [nearest_Harkonnen_area_ptr_ds_e4].
+        let dest_li =
+            crate::locations::location_index_from_ptr(self.nearest_harkonnen_area.loc_ptr);
+        if dest_li >= self.locations.len() {
+            return;
+        }
+        // = seg000:6a60/6a63 the acknowledgement; jnz troop_clear_occupation_
+        //   bits_0_and_1 — a refusing line drops the move bits (cl =
+        //   occupation & 0xfc into troop_set_occupation, seg000:6ac5).
+        if !self.troop_present_move_acknowledgement(ti, dest_li) {
+            let cleared = self.troops[ti].occupation & 0xfc;
+            self.troop_set_occupation(ti, cleared);
+            return;
+        }
+        // = seg000:6a65/6a68 end the contact, then the move order.
+        self.menu_callback_choice_map_troop_contact_no_more_orders(0, 0);
+        self.troop_issue_move_order(ti, dest_li);
+    }
+
     // = seg000:6a89 troop_apply_occupation_choice — the shared occupation-verb
     // tail: apply the new occupation, let the troop react, and take the change back if it
     // refuses. The reaction is a dialogue line presented with
@@ -2937,6 +2986,15 @@ impl GameState {
     fn map_present_troop_reaction_line(&mut self, ti: usize, action: u8) {
         // = seg000:7bb9 call troop_prepare_troop_data_for_condit.
         self.troop_prepare_troop_data_for_condit(ti);
+        // = seg000:7bbe falls into troop_present_dialogue_line_with_action.
+        self.map_present_troop_line_with_action(ti, action);
+    }
+
+    // = seg000:7bbe troop_present_dialogue_line_with_action — the present
+    // half on its own: troop_present_move_acknowledgement (seg000:8300)
+    // enters here after staging the DESTINATION as the troop's location, so
+    // no restaging happens.
+    fn map_present_troop_line_with_action(&mut self, ti: usize, action: u8) {
         // = seg000:7bbe/7bc2 data_046f1 = si; pending_room_action = al —
         //   data_046f1 is what subtitle_setup_layout rebuilds the popup from.
         self.map_contact_troop_pending = Some(ti);
@@ -6548,6 +6606,67 @@ mod tests {
             game.troop_find_nearest_location_with_equipment(ti, 2),
             None,
             "= seg000:7fd9"
+        );
+    }
+
+    // The ESPIONAGE verb (seg000:6a45): the army troop takes occupation 5,
+    // its report bit clears, and it is sent to the nearest Harkonnen area
+    // (appearance >= 0x28, status bit 7) once the acknowledgement line
+    // passes.
+    #[test]
+    #[ignore = "needs assets/DUNE.DAT"]
+    fn espionage_sends_the_troop_to_the_nearest_harkonnen_area() {
+        let Some(mut game) = search_test_game() else {
+            return;
+        };
+        let ti = (0..game.troops.len())
+            .find(|&t| {
+                t != 2 // the prospector's move orders go to its queue instead
+                    && game.troops[t].occupation & 0x40 == 0
+                    && crate::locations::location_index_from_ptr(game.troops[t].offset_of_location)
+                        < game.locations.len()
+            })
+            .expect("a stationed troop");
+        game.troops[ti].occupation = 4;
+        game.troops[ti].bitfield_10 |= 0x40;
+        let own_li = crate::locations::location_index_from_ptr(game.troops[ti].offset_of_location);
+        let own = game.locations[own_li];
+        // A Harkonnen holding two cells away.
+        let hark = (2..game.locations.len())
+            .find(|&l| l != own_li)
+            .expect("a location to repurpose");
+        game.locations[hark].appearance = 0x28;
+        game.locations[hark].status |= 0x80;
+        // Far enough that the departure's 7-sub-step head start
+        // (troop_travel_substeps, seg000:8512) does not already arrive.
+        game.locations[hark].map_x = own.map_x.wrapping_add(0x1c * 256);
+        game.locations[hark].map_y = own.map_y;
+        // = seg000:68ee the map view resolves the contact by the selected id.
+        game.data_046eb = 0x80;
+        game.map_selected_troop_id = game.troops[ti].troop_id;
+        game.map_popup_anim_suppress = false;
+        // The contact popup is already this troop's (as during a real
+        // contact), so the lines repaint it instead of re-opening it — a
+        // re-open would clear the suppress flag (seg000:7b0f).
+        game.map_contact_troop = Some(ti);
+        game.menu_callback_choice_troop_occupation_army_troop_espionage(0, 0);
+        assert_eq!(game.troops[ti].bitfield_10 & 0x40, 0, "= seg000:6a52");
+        assert!(game.map_popup_anim_suppress, "= seg000:6a4a");
+        // Accepted: the troop is on espionage duty and moving to the holding.
+        assert_eq!(
+            game.troops[ti].occupation & 0x0f,
+            5,
+            "= seg000:6a47 job 1 in class 4"
+        );
+        assert_ne!(
+            game.troops[ti].occupation & 0x40,
+            0,
+            "moving (troop_issue_move_order)"
+        );
+        assert_eq!(
+            game.troops[ti].offset_of_location,
+            crate::locations::location_ptr_from_index(hark),
+            "= seg000:6a68 toward the nearest Harkonnen area"
         );
     }
 }
