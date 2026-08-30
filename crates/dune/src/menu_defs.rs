@@ -376,7 +376,7 @@ pub(crate) const MENU_SELECT_TROOP_OCCUPATION: MenuDef = menu(0xf8, &[
 /// = seg001:216e menu_map_troop_change_troop_occupation_for_spice_troop
 #[rustfmt::skip]
 pub(crate) const MENU_OCCUPATION_FOR_SPICE_TROOP: MenuDef = menu(0xf8, &[
-    item(cmd::GO_SEARCH_FOR_EQUIPMENT, 0x776d, |_, _, _| println!("menu: GO & SEARCH FOR EQUIPMENT (seg000:776d) not ported")),
+    item(cmd::GO_SEARCH_FOR_EQUIPMENT, 0x776d, GameState::menu_callback_choice_troop_occupation_spice_troop_go_search_for_equipment),
     item(cmd::SPECIALIZE_IN_ARMY,      0x6a83, GameState::menu_callback_choice_troop_occupation_specialize_in_army),
     item(cmd::SPECIALIZE_IN_ECOLOGY,   0x6a87, GameState::menu_callback_choice_troop_occupation_specialize_in_ecology),
     item(cmd::CANCEL,                  0xd2e2, GameState::menu_callback_choice_exit_menu),
@@ -385,7 +385,7 @@ pub(crate) const MENU_OCCUPATION_FOR_SPICE_TROOP: MenuDef = menu(0xf8, &[
 /// = seg001:2182 menu_map_troop_change_troop_occupation_for_army_troop.
 #[rustfmt::skip]
 pub(crate) const MENU_OCCUPATION_FOR_ARMY_TROOP: MenuDef = menu(0xf8, &[
-    item(cmd::GO_SEARCH_FOR_EQUIPMENT, 0x7734, |_, _, _| println!("menu: GO & SEARCH FOR EQUIPMENT (seg000:7734) not ported")),
+    item(cmd::GO_SEARCH_FOR_EQUIPMENT, 0x7734, GameState::menu_callback_choice_troop_occupation_army_troop_go_search_for_equipment),
     gray(cmd::ESPIONAGE_5F,            0x6a45, |_, _, _| println!("menu: ESPIONAGE (seg000:6a45) not ported")),
     item(cmd::SPECIALIZE_IN_SPICE,     0x6a71, GameState::menu_callback_choice_troop_occupation_specialize_in_spice),
     item(cmd::SPECIALIZE_IN_ECOLOGY,   0x6a87, GameState::menu_callback_choice_troop_occupation_specialize_in_ecology),
@@ -402,7 +402,7 @@ pub(crate) const MENU_OCCUPATION_FOR_ESPIONAGE_TROOP: MenuDef = menu(0xf8, &[
 /// = seg001:21a6 menu_map_troop_change_troop_occupation_for_ecology_troop
 #[rustfmt::skip]
 pub(crate) const MENU_OCCUPATION_FOR_ECOLOGY_TROOP: MenuDef = menu(0xf8, &[
-    item(cmd::GO_SEARCH_FOR_EQUIPMENT, 0x775c, |_, _, _| println!("menu: GO & SEARCH FOR EQUIPMENT (seg000:775c) not ported")),
+    item(cmd::GO_SEARCH_FOR_EQUIPMENT, 0x775c, GameState::menu_callback_choice_troop_occupation_ecology_troop_go_search_for_equipment),
     item(cmd::ASSEMBLY_WIND_TRAP,      0x6a2b, GameState::menu_callback_choice_troop_occupation_assembly_wind_trap),
     item(cmd::SPECIALIZE_IN_SPICE,     0x6a71, GameState::menu_callback_choice_troop_occupation_specialize_in_spice),
     item(cmd::SPECIALIZE_IN_ARMY,      0x6a83, GameState::menu_callback_choice_troop_occupation_specialize_in_army),

@@ -2645,6 +2645,248 @@ impl GameState {
         self.troop_occupation_verb_apply(ti, new);
     }
 
+    // = seg000:7734 menu_callback_choice_troop_occupation_army_troop_go_search_
+    // for_equipment — an army troop looks for the first weapon it lacks:
+    // krys knives (bit 5, slot 2), laser guns (4, 3), weirding modules (3, 4),
+    // atomics (2, 5).
+    pub(crate) fn menu_callback_choice_troop_occupation_army_troop_go_search_for_equipment(
+        &mut self,
+        _text_id: u16,
+        _index: usize,
+    ) {
+        // = seg000:7734 call contact_verb_troop.
+        let Some(ti) = self.contact_verb_troop() else {
+            return;
+        };
+        // = seg000:7737..7756 bx = 2; cl = 0x20; test / inc bx; shr cl.
+        let equipment = self.troops[ti].equipment;
+        let slot = (2..=5).find(|&s| equipment & (0x80 >> s) == 0);
+        self.go_search_for_equipment(ti, slot);
+    }
+
+    // = seg000:775c menu_callback_choice_troop_occupation_ecology_troop_go_
+    // search_for_equipment — an ecology troop looks for bulbs (bit 1, slot 6).
+    pub(crate) fn menu_callback_choice_troop_occupation_ecology_troop_go_search_for_equipment(
+        &mut self,
+        _text_id: u16,
+        _index: usize,
+    ) {
+        let Some(ti) = self.contact_verb_troop() else {
+            return;
+        };
+        // = seg000:7762..7767 bx = 6; test al,2.
+        let slot = (self.troops[ti].equipment & 0x02 == 0).then_some(6);
+        self.go_search_for_equipment(ti, slot);
+    }
+
+    // = seg000:776d menu_callback_choice_troop_occupation_spice_troop_go_search_
+    // for_equipment — a spice troop looks for a harvester (bit 7, slot 0),
+    // then an ornithopter (bit 6, slot 1).
+    pub(crate) fn menu_callback_choice_troop_occupation_spice_troop_go_search_for_equipment(
+        &mut self,
+        _text_id: u16,
+        _index: usize,
+    ) {
+        let Some(ti) = self.contact_verb_troop() else {
+            return;
+        };
+        // = seg000:7773..777e xor bx,bx; test al,80h; inc bx; test al,40h.
+        let equipment = self.troops[ti].equipment;
+        let slot = (0..=1).find(|&s| equipment & (0x80 >> s) == 0);
+        self.go_search_for_equipment(ti, slot);
+    }
+
+    // = seg000:7780 go_search_for_equipment_troop_needs_something (and the
+    // 7758/7769/777c "has everything" entries into loc_077ca) — the shared
+    // tail of the three verbs. `slot` is the equipment slot the troop lacks
+    // (None = it has everything: reaction 0x0f). Name the item for the lines
+    // (subst_id_0c), take it from the troop's own location when one is free
+    // (troop_equipment_changed), else send the troop to the nearest location
+    // that has one: occupation job 3 in its class (loc_06a33 — the troop may
+    // refuse), the fetch word in +0x0e and the home location in +0x0c, a move
+    // order, and the contact ends. No such location: reaction 0x0e.
+    fn go_search_for_equipment(&mut self, ti: usize, slot: Option<usize>) {
+        let Some(slot) = slot else {
+            // = seg000:7758 al = 0x0f; jmp loc_077ca.
+            self.go_search_for_equipment_react(ti, 0x0f);
+            return;
+        };
+        // = seg000:7781..7786 subst_id_0c = slot + 0xe8 — the equipment name.
+        self.string_subst_id_table[0xc] = slot as u16 + 0xe8;
+        // = seg000:7789 call troop_take_equipment_from_location; jb.
+        if self.troop_take_equipment_from_location(ti, slot) {
+            // = seg000:778e/778f pop si; jmp troop_equipment_changed.
+            self.troop_equipment_changed(ti);
+            return;
+        }
+        // = seg000:7792..779b call troop_find_nearest_location_with_equipment;
+        //   nearest_equipment_location_ptr == 0xffff -> reaction 0x0e.
+        let Some(dest_li) = self.troop_find_nearest_location_with_equipment(ti, slot) else {
+            self.go_search_for_equipment_react(ti, 0x0e);
+            return;
+        };
+        // = seg000:779d..77a1 bh = 0x80 >> slot, bl = slot — the fetch word.
+        let fetch = ((0x80u16 >> slot) << 8) | slot as u16;
+        // = seg000:77a9 call loc_06a33 — occupation job 3 within the troop's
+        //   class (troop_apply_occupation_choice: apply, reaction line 0x0a,
+        //   exit the submenu).
+        let new = (self.troops[ti].occupation & 0x0c) | 3;
+        self.troop_occupation_verb_apply(ti, new);
+        // = seg000:77af call test_dialogue_interrupt_gate; jnz loc_077d4 — the
+        //   troop refused: back to the map sheet, no order.
+        if self.dialogue_interrupt_gate != 0xff {
+            self.open_onmap_spritesheet();
+            return;
+        }
+        // = seg000:77b4..77ba [si+0eh] = the fetch word; [si+0ch] = its own
+        //   location (the home the arrival at seg000:841f returns to).
+        self.troops[ti].harvest_total = fetch;
+        self.troops[ti].harvest_rate = self.troops[ti].offset_of_location;
+        // = seg000:77bd call troop_issue_move_order.
+        self.troop_issue_move_order(ti, dest_li);
+        // = seg000:77c0 data_046d8 = 1 — the contact popup closes without
+        //   its bracket effect.
+        self.map_popup_anim_suppress = true;
+        // = seg000:77c5 jmp menu_callback_choice_map_troop_contact_no_more_orders.
+        self.menu_callback_choice_map_troop_contact_no_more_orders(0, 0);
+    }
+
+    // = seg000:77ca loc_077ca — the verb's no-order exits: pop the occupation
+    // submenu (screen_element_stack_pop_and_redraw), present the troop's
+    // reaction line for `action` (0x0e = nothing within reach, 0x0f = it has
+    // everything), and re-open the map sheet (open_onmap_resource).
+    fn go_search_for_equipment_react(&mut self, ti: usize, action: u8) {
+        // = seg000:77cc call screen_element_stack_pop_and_redraw.
+        self.menu_stack_pop_and_redraw();
+        // = seg000:77d1 call troop_present_reaction_line.
+        self.map_present_troop_reaction_line(ti, action);
+        // = seg000:77d4 jmp open_onmap_resource.
+        self.open_onmap_spritesheet();
+    }
+
+    // = seg000:77d7 troop_take_equipment_from_location — give the troop one
+    // unit of `slot` from its own location when one is free there: the
+    // location's available count (compute_location_available_equipment)
+    // must be at least 1 — 2 for an ornithopter at the player's own
+    // location, which keeps one for Paul. On success the pre-edit mask is
+    // staged in ds:3d and the equipment bit set; returns DOS's carry-clear.
+    pub(crate) fn troop_take_equipment_from_location(&mut self, ti: usize, slot: usize) -> bool {
+        // = seg000:77da..77df di = the troop's location; call
+        //   compute_location_available_equipment.
+        let li = crate::locations::location_index_from_ptr(self.troops[ti].offset_of_location);
+        if li >= self.locations.len() {
+            return false;
+        }
+        self.compute_location_available_equipment(li);
+        // = seg000:77e4..77f1 al = 1, or 2 for slot 1 at last_location_ptr.
+        let need = if slot == 1 && li == self.last_location_index {
+            2
+        } else {
+            1
+        };
+        // = seg000:77f3 cmp [bx+46feh],al; jb ret.
+        if self.available_equipment.slot(slot) < need {
+            return false;
+        }
+        // = seg000:77f9..7805 ds:3d = the old mask; set bit 0x80 >> slot.
+        self.troop_condit.equipment_added_by_modify = self.troops[ti].equipment;
+        self.troops[ti].equipment |= 0x80 >> slot;
+        true
+    }
+
+    // = seg000:7f90 troop_find_nearest_location_with_equipment — the closest
+    // location (from locations[2] on; not hidden — status bit 7 — of
+    // appearance below 0x28, not the troop's own) within 0x32 cells of the
+    // troop's location that has a free unit of `slot` once the troops already
+    // fetching that slot there are discounted (and, at the player's own
+    // location before phase 0x50, one ornithopter kept back). Villages and
+    // fortresses (appearance >= 0x21) count at a quarter of their distance.
+    // Distance = the x difference's high byte against the y difference's low
+    // byte (DOS's byte compares, mirrored). Returns the location index
+    // (DOS: nearest_equipment_location_distance / _ptr, 0xffff = none).
+    pub(crate) fn troop_find_nearest_location_with_equipment(
+        &mut self,
+        ti: usize,
+        slot: usize,
+    ) -> Option<usize> {
+        let own_li = crate::locations::location_index_from_ptr(self.troops[ti].offset_of_location);
+        let own = self.locations.get(own_li).copied()?;
+        // = seg000:7f9c nearest_equipment_location_distance = 0xffff.
+        let mut best: Option<(u16, usize)> = None;
+        // = seg000:7fa2/7fa5 from locations[2] to the 0xffff terminator.
+        for li in 2..self.locations.len() {
+            let loc = self.locations[li];
+            // = seg000:7faa..7fb9 the exclusions.
+            if loc.status & 0x80 != 0 || loc.appearance >= 0x28 || li == own_li {
+                continue;
+            }
+            // = seg000:7fbb..7fd7 dl = |dx| >> 8, al = |dy| & 0xff; dx = the
+            //   larger (the whole |dy| when it wins).
+            let dxa = loc.map_x.wrapping_sub(own.map_x).unsigned_abs();
+            let dya = loc.map_y.wrapping_sub(own.map_y).unsigned_abs();
+            let dl = (dxa >> 8) as u8;
+            let al = dya as u8;
+            let mut dist: u16 = if dl >= al { dl as u16 } else { dya };
+            // = seg000:7fd9 cmp dl,32h; jnb — out of reach.
+            if (dist as u8) >= 0x32 {
+                continue;
+            }
+            // = seg000:7fde..7fe6 villages / fortresses count at a quarter.
+            if loc.appearance >= 0x21 {
+                dist >>= 2;
+            }
+            // = seg000:7fe8 not nearer than the best so far.
+            if best.is_some_and(|(bd, _)| dist >= bd) {
+                continue;
+            }
+            // = seg000:7fee..7ffb the location's free units of the slot
+            //   (location_iterate_on_troops_in_location into the 4c60
+            //   scratch); none -> next.
+            let mut free = self.location_available_equipment(&loc).slot(slot);
+            if free == 0 {
+                continue;
+            }
+            // = seg000:7ffd call location_subtract_troops_fetching_equipment.
+            free = self.location_subtract_troops_fetching_equipment(li, slot, free);
+            // = seg000:8000/8005 still none -> next.
+            if free == 0 {
+                continue;
+            }
+            // = seg000:8007/800b record it.
+            best = Some((dist, li));
+        }
+        best.map(|(_, li)| li)
+    }
+
+    // = seg000:8018 location_subtract_troops_fetching_equipment — discount
+    // from `free` (the location's free units of `slot`) every troop already
+    // heading there for the same slot: moving (occupation bit 6), job 3,
+    // destination this location, home (+0x0c) elsewhere, fetch slot (+0x0e
+    // low byte) == slot; each takes one, clamped at 0. At the player's own
+    // location before phase 0x50 one ornithopter (slot 1) is kept back.
+    fn location_subtract_troops_fetching_equipment(&self, li: usize, slot: usize, free: u8) -> u8 {
+        let ptr = crate::locations::location_ptr_from_index(li);
+        let mut free = free;
+        // = seg000:8018..804a the troop walk.
+        for t in &self.troops {
+            if t.occupation & 0x40 == 0 || t.occupation & 3 != 3 {
+                continue;
+            }
+            if t.offset_of_location != ptr || t.harvest_rate == ptr {
+                continue;
+            }
+            if (t.harvest_total & 0xff) as usize != slot {
+                continue;
+            }
+            free = free.saturating_sub(1);
+        }
+        // = seg000:804c..805f the player's own location keeps an orni.
+        if slot == 1 && li == self.last_location_index && self.game_phase < 0x50 {
+            free = free.saturating_sub(1);
+        }
+        free
+    }
+
     // = seg000:6a89 troop_apply_occupation_choice — the shared occupation-verb
     // tail: apply the new occupation, let the troop react, and take the change back if it
     // refuses. The reaction is a dialogue line presented with
@@ -6166,5 +6408,146 @@ mod tests {
         );
         // Out of visibility range, so the contact offers only the cycle menu.
         assert_eq!(game.get_active_menu_ref(), MenuRef::MenuNextTroop);
+    }
+
+    fn search_test_game() -> Option<GameState> {
+        let dat_path = concat!(env!("CARGO_MANIFEST_DIR"), "/../../assets/DUNE.DAT");
+        let Ok(dat_file) = DatFile::open(dat_path) else {
+            eprintln!("skipping: {dat_path} not found");
+            return None;
+        };
+        let (tx, _rx) = mpsc::sync_channel(64);
+        let mut game = GameState::new(dat_file, tx);
+        game.set_headless();
+        game.start(true);
+        Some(game)
+    }
+
+    // An army troop at a location with a free krys knife takes it on the
+    // spot (seg000:77d7): the equipment bit is set, the pre-edit mask staged
+    // in ds:3d, the item named in subst_id_0c.
+    #[test]
+    #[ignore = "needs assets/DUNE.DAT"]
+    fn go_search_for_equipment_takes_from_the_own_location() {
+        let Some(mut game) = search_test_game() else {
+            return;
+        };
+        let ti = (0..game.troops.len())
+            .find(|&t| {
+                game.troops[t].occupation & 0x40 == 0
+                    && crate::locations::location_index_from_ptr(game.troops[t].offset_of_location)
+                        < game.locations.len()
+            })
+            .expect("a stationed troop");
+        game.troops[ti].occupation = 4; // an army troop
+        let li = crate::locations::location_index_from_ptr(game.troops[ti].offset_of_location);
+        game.troops[ti].equipment = 0;
+        game.locations[li].equipment.krys_knives = 3;
+        let before = game.troops[ti].equipment;
+        assert!(
+            game.troop_take_equipment_from_location(ti, 2),
+            "= seg000:7808 clc"
+        );
+        assert_eq!(game.troops[ti].equipment, before | 0x20, "= seg000:7805");
+        assert_eq!(
+            game.troop_condit.equipment_added_by_modify, before,
+            "= seg000:77fc"
+        );
+        // None free: carry set.
+        game.locations[li].equipment.krys_knives = 0;
+        game.troops[ti].equipment = 0;
+        assert!(
+            !game.troop_take_equipment_from_location(ti, 2),
+            "= seg000:77f7 jb"
+        );
+        // An ornithopter at the player's own location needs two (one stays
+        // for Paul).
+        game.last_location_index = li;
+        game.locations[li].equipment.ornithopters = 1;
+        assert!(
+            !game.troop_take_equipment_from_location(ti, 1),
+            "= seg000:77f1 inc al"
+        );
+        game.locations[li].equipment.ornithopters = 2;
+        assert!(game.troop_take_equipment_from_location(ti, 1));
+
+        // The whole verb from the contact: the troop names the item and the
+        // equipment change runs (troop_equipment_changed).
+        game.troops[ti].equipment = 0;
+        game.locations[li].equipment.krys_knives = 1;
+        // = seg000:68ee the map view resolves the contact by the selected id.
+        game.data_046eb = 0x80;
+        game.map_selected_troop_id = game.troops[ti].troop_id;
+        game.menu_callback_choice_troop_occupation_army_troop_go_search_for_equipment(0, 0);
+        assert_eq!(game.string_subst_id_table[0xc], 0xe8 + 2, "= seg000:7786");
+        assert_ne!(game.troops[ti].equipment & 0x20, 0);
+    }
+
+    // With nothing free at home the troop is sent to the nearest location
+    // that has the item (seg000:7f90), discounting troops already fetching
+    // it there (seg000:8018).
+    #[test]
+    #[ignore = "needs assets/DUNE.DAT"]
+    fn go_search_for_equipment_finds_the_nearest_location() {
+        let Some(mut game) = search_test_game() else {
+            return;
+        };
+        let ti = (0..game.troops.len())
+            .find(|&t| {
+                game.troops[t].occupation & 0x40 == 0
+                    && crate::locations::location_index_from_ptr(game.troops[t].offset_of_location)
+                        < game.locations.len()
+            })
+            .expect("a stationed troop");
+        game.troops[ti].occupation = 4; // an army troop
+        let own_li = crate::locations::location_index_from_ptr(game.troops[ti].offset_of_location);
+        let own = game.locations[own_li];
+        // No free krys knives anywhere.
+        for l in game.locations.iter_mut() {
+            l.equipment.krys_knives = 0;
+        }
+        assert_eq!(game.troop_find_nearest_location_with_equipment(ti, 2), None);
+        // A sietch 3 cells east with two: found.
+        let near = (2..game.locations.len())
+            .find(|&l| {
+                l != own_li
+                    && game.locations[l].appearance < 0x21
+                    && game.locations[l].status & 0x80 == 0
+            })
+            .expect("a sietch");
+        game.locations[near].map_x = own.map_x.wrapping_add(3 * 256);
+        game.locations[near].map_y = own.map_y;
+        game.locations[near].equipment.krys_knives = 2;
+        assert_eq!(
+            game.troop_find_nearest_location_with_equipment(ti, 2),
+            Some(near)
+        );
+        // Two troops already fetching krys knives there use them up.
+        let ptr = crate::locations::location_ptr_from_index(near);
+        let others: Vec<usize> = (0..game.troops.len())
+            .filter(|&t| t != ti)
+            .take(2)
+            .collect();
+        for &t in &others {
+            game.troops[t].occupation = 0x43;
+            game.troops[t].offset_of_location = ptr;
+            game.troops[t].harvest_rate = crate::locations::location_ptr_from_index(own_li); // home != ptr
+            game.troops[t].harvest_total = (0x20 << 8) | 2;
+        }
+        assert_eq!(
+            game.troop_find_nearest_location_with_equipment(ti, 2),
+            None,
+            "= seg000:8040"
+        );
+        // Out of reach (0x32 cells) is never a candidate.
+        for &t in &others {
+            game.troops[t].occupation = 0;
+        }
+        game.locations[near].map_x = own.map_x.wrapping_add(0x40 * 256);
+        assert_eq!(
+            game.troop_find_nearest_location_with_equipment(ti, 2),
+            None,
+            "= seg000:7fd9"
+        );
     }
 }

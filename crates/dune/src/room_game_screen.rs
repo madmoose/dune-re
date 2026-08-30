@@ -1477,7 +1477,7 @@ impl GameState {
     // clamped at 0. The result — the equipment present at the location but not
     // yet held by its troops — is returned as an Equipment value where DOS fills
     // the seg001:46fe buffer.
-    fn location_available_equipment(&self, location: &Location) -> Equipment {
+    pub(crate) fn location_available_equipment(&self, location: &Location) -> Equipment {
         // = seg000:7f2d/7f30/7f38 copy location->harvesters..bulbs into the buffer.
         let e = &location.equipment;
         let mut buf = [

@@ -719,19 +719,27 @@ impl GameState {
             callback(self);
         }
 
-        // = seg000:d2fd screen_element_stack_pop_and_redraw — pop the entry unless already at the room base
-        //   (DOS `cmp si,21beh; jz`).
+        // = seg000:d2fd falls into screen_element_stack_pop_and_redraw.
+        self.menu_stack_pop_and_redraw();
+    }
+
+    // = seg000:d2fd screen_element_stack_pop_and_redraw — pop the top menu
+    // (unless already at the room base, DOS `cmp si,21beh; jz`) and repaint
+    // the revealed one. No cleanup func runs: the callers that want it go
+    // through menu_stack_pop_and_cleanup. GO & SEARCH FOR EQUIPMENT's
+    // reaction path (seg000:77cc) pops its occupation submenu this way.
+    pub(crate) fn menu_stack_pop_and_redraw(&mut self) {
         if self.menu_stack.len() <= 1 {
             return;
         }
         self.menu_stack.pop();
-
         // = seg000:d30e bp = [si]; cl = 0xff; call draw_command_menu — repaint
         //   the now-active menu straight from its still-intact record buffer.
         //   A pop is a pure reveal: nothing is rebuilt (DOS keeps every menu's
         //   records alive in its static seg001 buffer; the port's owned
         //   MenuBuffers give the same guarantee). With in_transition armed
-        //   above, redraw_active_command_menu paints into fb1 for the fold.
+        //   by the caller, redraw_active_command_menu paints into fb1 for the
+        //   fold.
         self.redraw_active_command_menu();
     }
 
