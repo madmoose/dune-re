@@ -1693,8 +1693,12 @@ pub struct GameState {
     pub(crate) selected_fremen2: u8,
 
     // = seg001 vegetation_started_on_Dune — the ecology-victory flag the
-    // motivation modifier reads; the event that sets it is not yet ported.
+    // motivation modifier reads: troop_irrigated_this_period as the last
+    // per-period troop walk left it.
     pub(crate) vegetation_started_on_dune: u8,
+
+    // = seg001:4737 troop_irrigated_this_period.
+    pub(crate) troop_irrigated_this_period: u8,
 
     // = the for_condit troop staging block (seg001:002c..004b), filled by
     // troop_prepare_troop_data_for_condit.
@@ -2697,6 +2701,7 @@ impl GameState {
             data_0476b: 0,
             selected_fremen2: 0,
             vegetation_started_on_dune: 0,
+            troop_irrigated_this_period: 0,
             troop_condit: Default::default(),
             location_condit: Default::default(),
             npc_menu_idle_timer_base: 0,

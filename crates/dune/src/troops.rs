@@ -2188,8 +2188,8 @@ impl GameState {
         // = seg000:6c6f..6c87 data_0473c = the location room_persons[4] stands
         //   in, then loc_06c46 — the per-period location/NPC bookkeeping. Not
         //   ported.
-        // = seg000:6c8a data_04737 = 0 — the vegetation accumulator the walk
-        //   rebuilds (copied into vegetation_started_on_Dune at 6ccc).
+        // = seg000:6c8a troop_irrigated_this_period = 0.
+        self.troop_irrigated_this_period = 0;
         // = seg000:6cc3..6cca add si,1bh; cmp si,troops[67]; jb — the walk
         //   stops at the table's last entry, which is the terminator (troop id
         //   0, no location), not a troop.
@@ -2236,6 +2236,8 @@ impl GameState {
             // = seg000:6cc0 call troop_usually_decrease_skills_every_4_days —
             //   the every-64-period skill decay. Not ported.
         }
+        // = seg000:6ccc/6ccf.
+        self.vegetation_started_on_dune = self.troop_irrigated_this_period;
     }
 
     // = seg000:6ced loc_06ced — the walk's moving-troop branch: the troop
@@ -2249,16 +2251,78 @@ impl GameState {
     }
 
     // = seg000:6c26 array_callbacks_for_troop_occupation_06c26 — the per-period
-    // callback for each occupation nibble. Spice mining (0) and prospecting (1)
-    // are ported; the others (military training, espionage, attacking,
-    // irrigation, wind-trap assembly, bulb growing) are their own subsystems,
+    // callback for each occupation nibble. Spice mining (0), prospecting (1)
+    // and irrigation (8) are ported; the others (military training, espionage,
+    // attacking, wind-trap assembly, bulb growing) are their own subsystems,
     // and slots 2/3/7/11..15 are nullsub_00f66.
     fn run_troop_occupation_callback(&mut self, ti: usize) {
         match self.troops[ti].occupation & 0x0f {
             0 => self.troop_occupation_event_spice_mining(ti),
             1 => self.troop_occupation_event_spice_prospecting(ti),
+            8 => self.troop_occupation_event_irrigation(ti),
             _ => {}
         }
+    }
+
+    // = seg000:7693 callback_troop_location_for_troop_occupation_irrigation —
+    // one time period of irrigation: the first period starts the location's
+    // vegetation program, later ones grow it (irrigation_grow).
+    fn troop_occupation_event_irrigation(&mut self, ti: usize) {
+        // = seg000:7693/7699 a stopped troop, or one that cannot irrigate here.
+        if self.troops[ti].occupation & 0x10 != 0 || self.troop_occupation_not_viable(ti) {
+            return;
+        }
+        // = seg000:769e/76a3.
+        self.troop_irrigated_this_period = 0xff;
+        self.troops[ti].bitfield_10 |= 0x100;
+        let li = locations::location_index_from_ptr(self.troops[ti].offset_of_location);
+        let loc = &mut self.locations[li];
+        if loc.status & 1 == 0 {
+            // = seg000:76ae..76c8 start the program: the disc centre is the
+            //   location's map cell (the word store zeroes vegetation_growth).
+            loc.status |= 1;
+            loc.spice_density = 0;
+            loc.vegetation_x = loc.map_x;
+            loc.vegetation_y = loc.map_y as i8;
+            loc.vegetation_growth = 0;
+            loc.discoverable_at_phase = 4;
+            self.location_spread_vegetation_on_map(li);
+            return;
+        }
+        // = seg000:76cb irrigation_grow.
+        // = seg000:76cb call troop_location_do_stuff_upon_new_day_06e20 — not
+        //   ported (as in spice mining).
+        // = seg000:76ce..76d8 ecology_skill / 4, at least 1.
+        let step = (self.troops[ti].ecology_skill >> 2).max(1);
+        let (growth, overflow) = loc.vegetation_growth.overflowing_add(step);
+        loc.vegetation_growth = growth;
+        if !overflow {
+            return;
+        }
+        // = seg000:76dd/76e2.
+        self.troop_increase_spice_skill(ti, 1, 2);
+        let loc = &mut self.locations[li];
+        // = seg000:76e5/76e9 water -12; dry -> irrigation_out_of_water.
+        let (water, dry) = loc.water.overflowing_sub(12);
+        loc.water = water;
+        if dry {
+            // = seg000:7707 irrigation_out_of_water.
+            loc.water = 0;
+            self.troop_make_stop_working(ti);
+            self.troop_refresh_icon(ti);
+            return;
+        }
+        // = seg000:76eb..76f1 radius +1, cap 12.
+        if (loc.discoverable_at_phase as u8) < 0x0c {
+            loc.discoverable_at_phase += 1;
+        }
+        // = seg000:76f4..7700 the disc centre 2 rows north, floor -82.
+        let y = loc.vegetation_y as i16 - 2;
+        if y >= -82 {
+            loc.vegetation_y = y as i8;
+        }
+        // = seg000:7703.
+        self.location_spread_vegetation_on_map(li);
     }
 
     // = seg000:6fe5 callback_troop_location_for_troop_occupation_spice_mining —
@@ -3753,5 +3817,78 @@ mod tests {
         game.run_troop_occupation_events();
         assert_eq!(game.troops[ti].spice_skill, 12, "no second raise");
         assert!(game.vision_messages.is_empty(), "no second report");
+    }
+
+    // = seg000:7693 the irrigation callback: the first period starts the
+    // location's vegetation program, a growth overflow widens and moves the
+    // disc, and running out of water stops the troop.
+    #[test]
+    #[ignore = "needs assets/DUNE.DAT"]
+    fn irrigation_starts_grows_and_dries_out() {
+        let dat_path = concat!(env!("CARGO_MANIFEST_DIR"), "/../../assets/DUNE.DAT");
+        let Ok(dat_file) = DatFile::open(dat_path) else {
+            eprintln!("skipping: {dat_path} not found");
+            return;
+        };
+        let (tx, rx) = mpsc::sync_channel(64);
+        let mut game = GameState::new(dat_file, tx);
+        game.set_headless();
+        game.start(true);
+        while rx.try_recv().is_ok() {}
+
+        let ti = 0;
+        let li = crate::locations::location_index_from_ptr(game.troops[ti].offset_of_location);
+        game.troops[ti].occupation = 8;
+        game.troops[ti].equipment |= 2;
+        game.troops[ti].bitfield_10 = 0;
+        game.troops[ti].dissatisfaction_and_speech = 0;
+        game.troops[ti].ecology_skill = 0xff;
+        let skill_before = game.troops[ti].spice_skill;
+        game.locations[li].status = (game.locations[li].status | 0x20) & !1;
+        game.locations[li].water = 20;
+        game.locations[li].spice_density = 9;
+        let (map_x, map_y) = (game.locations[li].map_x, game.locations[li].map_y);
+        let cell = game.locations[li].map_offset as usize;
+        game.map[cell] &= !0x30;
+
+        // Period 1: the program starts.
+        game.run_troop_occupation_events();
+        let loc = game.locations[li];
+        assert_eq!(loc.status & 1, 1);
+        assert_eq!(loc.spice_density, 0);
+        assert_eq!((loc.vegetation_x, loc.vegetation_y), (map_x, map_y as i8));
+        assert_eq!(loc.vegetation_growth, 0);
+        assert_eq!(loc.discoverable_at_phase, 4);
+        assert_eq!(game.map[cell] & 0x30, 0x20, "the location cell is green");
+        assert_eq!(game.troops[ti].bitfield_10 & 0x100, 0x100);
+        assert_eq!(game.vegetation_started_on_dune, 0xff);
+
+        // Period 2: 63 growth, no overflow.
+        game.run_troop_occupation_events();
+        assert_eq!(game.locations[li].vegetation_growth, 63);
+        assert_eq!(game.locations[li].discoverable_at_phase, 4);
+
+        // An overflow: skill +1, water -12, radius 5, centre 2 rows north.
+        game.locations[li].vegetation_growth = 250;
+        game.run_troop_occupation_events();
+        let loc = game.locations[li];
+        assert_eq!(loc.vegetation_growth, 250u8.wrapping_add(63));
+        assert_eq!(game.troops[ti].spice_skill, skill_before + 1);
+        assert_eq!(loc.water, 8);
+        assert_eq!(loc.discoverable_at_phase, 5);
+        assert_eq!(loc.vegetation_y, map_y as i8 - 2);
+        assert_eq!(game.troops[ti].occupation, 8, "still working");
+
+        // The next overflow runs the location dry: the troop stops.
+        game.locations[li].vegetation_growth = 250;
+        game.run_troop_occupation_events();
+        assert_eq!(game.locations[li].water, 0);
+        assert_eq!(game.troops[ti].occupation, 0x18, "stopped");
+        assert_eq!(game.locations[li].discoverable_at_phase, 5, "no respread");
+        assert_eq!(game.vegetation_started_on_dune, 0xff);
+
+        // Stopped and dry: nothing happens, and no troop irrigated.
+        game.run_troop_occupation_events();
+        assert_eq!(game.vegetation_started_on_dune, 0);
     }
 }
