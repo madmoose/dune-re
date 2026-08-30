@@ -332,6 +332,27 @@ impl GameState {
     // Returns true if a keypress interrupted the wait (= seg000:de01
     // any_key_pressed; CF=1), which play_intro treats as a request to abort the
     // whole intro (05fb jnb -> exit tail).
+    // = seg000:e387 wait_a_bit — wait `ticks` PIT ticks, uninterruptible.
+    // DOS spins on the PIT counter; the port yields a frame per tick.
+    pub(crate) fn wait_a_bit(&mut self, ticks: u64) {
+        let deadline = self.game_ticks() + ticks;
+        while self.game_ticks() < deadline {
+            self.tick_one_frame();
+        }
+    }
+
+    // = seg000:abd5 loc_0abd5 — re-run lip_sync_frame_task until the voice
+    // has drained (is_voc_pcm_playing clear). DOS busy-spins; the port yields
+    // one PIT tick between calls.
+    pub(crate) fn wait_for_voc_pcm_to_drain(&mut self) {
+        while self.voc_pcm_playing {
+            // = seg000:abd2 call lip_sync_frame_task.
+            self.tick_talking_head_voc();
+            let now = self.game_ticks();
+            self.sleep_ticks(now, 1);
+        }
+    }
+
     pub(crate) fn wait_for_pcm_voice_interruptable(&mut self, wait: u64) -> bool {
         if self.talking_head.as_ref().is_some_and(|h| h.speaking) {
             // = seg000:ddfc voice-playing loop.

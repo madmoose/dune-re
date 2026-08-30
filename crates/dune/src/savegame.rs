@@ -275,6 +275,10 @@ impl GameState {
         w16(b, 0x0014, self.persons_talking_to);
         w8(b, 0x0019, self.line_spoken_this_conversation);
         w8(b, 0x001b, self.data_0001b);
+        w8(b, 0x001c, self.related_to_paying_smuggler_bills_ds_1c);
+        w8(b, 0x001d, self.current_smuggler_willingness_to_haggle_ds_1d);
+        w8(b, 0x001f, self.related_to_paying_smuggler_bills_ds_1f);
+        w16(b, 0x0020, self.current_smuggler_bill_value_ds_20);
         w8(b, 0x0023, self.pending_room_action);
         w8(b, 0x0025, self.number_of_sietches_visited);
         w8(b, 0x0026, self.entering_new_sietch);
@@ -333,6 +337,12 @@ impl GameState {
         w16(b, 0x00ae, self.previous_day_spice_production);
         w16(b, 0x00b0, self.spice_production_better_than_previous_day);
         w16(b, 0x00b2, self.spice_production_lower_than_previous_day);
+        w8(b, 0x009d, self.for_condit_smuggler_dialogue_related_ds_9d);
+        w8(b, 0x009e, self.for_condit_smuggler_arguing_count_ds_9e);
+        w8(b, 0x009f, self.accept_refuse_argue_choice_ds_9f);
+        for (k, v) in self.spice_shipment_arguing_ds_b4.iter().enumerate() {
+            w16(b, 0x00b4 + k * 2, *v);
+        }
         w16(b, 0x00bc, self.spice_shipment_quantity);
         w8(b, 0x00be, self.spice_shipment_fulfilment);
         w8(b, 0x00bf, self.spice_shipment_flags);
@@ -436,7 +446,7 @@ impl GameState {
         }
 
         // = seg001:0fd8 room_persons[16], 0x10 bytes each (the static-zero
-        // padding words at +6/+0xc stay zero).
+        // padding word at +6 stays zero).
         for (i, p) in self.room_persons.iter().enumerate() {
             let o = 0xfd8 + i * 0x10;
             w16(b, o, p.location_and_room);
@@ -444,6 +454,7 @@ impl GameState {
             w16(b, o + 0x04, p.handler);
             w16(b, o + 0x08, p.time_joined);
             w16(b, o + 0x0a, p.time_dismissed);
+            w16(b, o + 0x0c, p.field_c);
             w8(b, o + 0x0e, p.person_index);
             w8(b, o + 0x0f, p.flags);
         }
@@ -457,8 +468,11 @@ impl GameState {
             w8(b, o + 3, s.field_3);
             b[o + 4..o + 9].copy_from_slice(&s.stock);
             b[o + 9..o + 0xe].copy_from_slice(&s.prices);
-            b[o + 0xe..o + 0x11].copy_from_slice(&s.not_just_padding);
+            w16(b, o + 0xe, s.bill_value);
+            w8(b, o + 0x10, s.bill_day);
         }
+        // = seg001:113f current_smuggler_ptr.
+        w16(b, 0x113f, self.current_smuggler_ptr);
 
         w16(
             b,
@@ -558,6 +572,10 @@ impl GameState {
         self.persons_talking_to = r16(b, 0x0014);
         self.line_spoken_this_conversation = r8(b, 0x0019);
         self.data_0001b = r8(b, 0x001b);
+        self.related_to_paying_smuggler_bills_ds_1c = r8(b, 0x001c);
+        self.current_smuggler_willingness_to_haggle_ds_1d = r8(b, 0x001d);
+        self.related_to_paying_smuggler_bills_ds_1f = r8(b, 0x001f);
+        self.current_smuggler_bill_value_ds_20 = r16(b, 0x0020);
         self.pending_room_action = r8(b, 0x0023);
         self.number_of_sietches_visited = r8(b, 0x0025);
         self.entering_new_sietch = r8(b, 0x0026);
@@ -614,6 +632,12 @@ impl GameState {
         self.previous_day_spice_production = r16(b, 0x00ae);
         self.spice_production_better_than_previous_day = r16(b, 0x00b0);
         self.spice_production_lower_than_previous_day = r16(b, 0x00b2);
+        self.for_condit_smuggler_dialogue_related_ds_9d = r8(b, 0x009d);
+        self.for_condit_smuggler_arguing_count_ds_9e = r8(b, 0x009e);
+        self.accept_refuse_argue_choice_ds_9f = r8(b, 0x009f);
+        for (k, v) in self.spice_shipment_arguing_ds_b4.iter_mut().enumerate() {
+            *v = r16(b, 0x00b4 + k * 2);
+        }
         self.spice_shipment_quantity = r16(b, 0x00bc);
         self.spice_shipment_fulfilment = r8(b, 0x00be);
         self.spice_shipment_flags = r8(b, 0x00bf);
@@ -709,6 +733,7 @@ impl GameState {
             p.handler = r16(b, o + 0x04);
             p.time_joined = r16(b, o + 0x08);
             p.time_dismissed = r16(b, o + 0x0a);
+            p.field_c = r16(b, o + 0x0c);
             p.person_index = r8(b, o + 0x0e);
             p.flags = r8(b, o + 0x0f);
         }
@@ -722,8 +747,10 @@ impl GameState {
             s.field_3 = r8(b, o + 3);
             s.stock.copy_from_slice(&b[o + 4..o + 9]);
             s.prices.copy_from_slice(&b[o + 9..o + 0xe]);
-            s.not_just_padding.copy_from_slice(&b[o + 0xe..o + 0x11]);
+            s.bill_value = r16(b, o + 0xe);
+            s.bill_day = r8(b, o + 0x10);
         }
+        self.current_smuggler_ptr = r16(b, 0x113f);
 
         self.current_location_index = location_index_from_ptr(r16(b, 0x114e));
         self.last_location_index = location_index_from_ptr(r16(b, 0x1150)) as usize;

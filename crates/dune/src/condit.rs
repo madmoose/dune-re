@@ -24,6 +24,17 @@ fn condit_var_name(addr: u16) -> Option<(&'static str, bool)> {
         0x18 => ("for_condit_ds_18.speaker_flags", false),
         0x19 => ("line_spoken_this_conversation", false),
         0x1b => ("stay_here_come_with_me_count", false),
+        0x1c => ("related_to_paying_smuggler_bills_ds_1c", false),
+        0x1d => ("current_smuggler_willingness_to_haggle_ds_1d", false),
+        0x1f => ("related_to_paying_smuggler_bills_ds_1f", false),
+        0x20 => ("current_smuggler_bill_value_ds_20", true),
+        0x9d => ("for_condit_smuggler_dialogue_related_ds_9d", false),
+        0x9e => ("for_condit_smuggler_arguing_count_ds_9e", false),
+        0x9f => ("accept_refuse_argue_choice_ds_9f", false),
+        0xb4 => ("spice_shipment_arguing_ds_b4", true),
+        0xb6 => ("spice_shipment_arguing_ds_b6", true),
+        0xb8 => ("spice_shipment_arguing_ds_b8", true),
+        0xba => ("spice_shipment_arguing_ds_ba", true),
         0x23 => ("pending_room_action", false),
         0x2c => ("troop.offset_of_location", true),
         0x2e => ("troop.troop_id", false),
@@ -148,6 +159,16 @@ impl GameState {
             // = seg001:001b related_to_stay_here_come_with_me_ds_1b — the
             // COME WITH ME / STAY HERE use counter (cleared by TALK TO ME).
             0x1b => self.data_0001b,
+            // = seg001:001c/001d/001f the staged smuggler's state byte,
+            // haggling attitude and bill age (stage_smuggler_for_condit).
+            0x1c => self.related_to_paying_smuggler_bills_ds_1c,
+            0x1d => self.current_smuggler_willingness_to_haggle_ds_1d,
+            0x1f => self.related_to_paying_smuggler_bills_ds_1f,
+            // = seg001:009d..009f the smuggler offer / haggling state
+            // (dialogue_event_08_smugglers, dialogue_event_08_duncan_idaho).
+            0x9d => self.for_condit_smuggler_dialogue_related_ds_9d,
+            0x9e => self.for_condit_smuggler_arguing_count_ds_9e,
+            0x9f => self.accept_refuse_argue_choice_ds_9f,
             // = seg001:0023 pending_room_action — the room-leave / dialogue-scan state;
             // condition 0x1c tests it == 1.
             0x23 => self.pending_room_action,
@@ -304,6 +325,8 @@ impl GameState {
             0x4a => self.troop_condit.ds_4a,
             // = seg001:004e the staged location area+name word.
             0x4e => self.location_condit.area_and_name,
+            // = seg001:0020 current_smuggler_bill_value_ds_20.
+            0x20 => self.current_smuggler_bill_value_ds_20,
             // = seg001:00a0 spice_in_stock — the player's spice, in 10 kg
             //   batches.
             0xa0 => self.spice_in_stock,
@@ -321,6 +344,11 @@ impl GameState {
             0xae => self.previous_day_spice_production,
             0xb0 => self.spice_production_better_than_previous_day,
             0xb2 => self.spice_production_lower_than_previous_day,
+            // = seg001:00b4..00ba the shipment-argument amounts
+            // (stage_spice_argue_amounts_with_duncan).
+            0xb4 | 0xb6 | 0xb8 | 0xba => {
+                self.spice_shipment_arguing_ds_b4[((addr - 0xb4) / 2) as usize]
+            }
             // = seg001:00bc spice_shipment_quantity.
             0xbc => self.spice_shipment_quantity,
             // = seg001:00c0 for_condit_spice_shipment_related_ds_c0 —

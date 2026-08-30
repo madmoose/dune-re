@@ -707,7 +707,7 @@ impl GameState {
     // "CHARISMA = N".
     fn ui_stats_draw_ingame_day_and_charisma(&mut self) {
         // = seg000:bdfa..be01 find_string_and_replace_digits(0xc2, day+1).
-        let day = self.get_ingame_day_in_ax() + 1;
+        let day = self.get_ingame_day_3_periods_later() + 1;
         self.command_string_replace_number(0xc2, day);
         // = seg000:be04 call string_update_ordinal_suffix.
         self.string_update_ordinal_suffix(0xc2);

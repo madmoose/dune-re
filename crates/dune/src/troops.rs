@@ -2029,7 +2029,7 @@ impl GameState {
         self.troop_condit.population = t.population;
         // = seg000:328d..3293 ds:40 = get_ingame_day - game_day_of_ralliement.
         self.troop_condit.days_since_ralliement =
-            (self.get_ingame_day_in_ax() as u8).wrapping_sub(t.game_day_of_ralliement);
+            (self.get_ingame_day_3_periods_later() as u8).wrapping_sub(t.game_day_of_ralliement);
         // = seg000:3296 call prepare_location_data_for_condit on the troop's
         //   location (di still holds troop->offset_of_location).
         let loc_index = locations::location_index_from_ptr(t.offset_of_location);
@@ -2271,7 +2271,7 @@ impl GameState {
             return;
         }
         let li = locations::location_index_from_ptr(self.troops[ti].offset_of_location);
-        let day = self.get_ingame_day_in_ax() as u8;
+        let day = self.get_ingame_day_3_periods_later() as u8;
         // = seg000:6e28..6e47 a captured fortress (status bit 3) becomes a
         //   sietch two days after the battle (discoverable_at_phase = day + 2);
         //   before that day nothing else runs.
@@ -3541,7 +3541,7 @@ impl GameState {
         // = seg000:66ee/66f0 al = 1; call increase_charisma...
         self.increase_charisma(1);
         let game_time = self.game_time;
-        let day = self.get_ingame_day_in_ax() as u8;
+        let day = self.get_ingame_day_3_periods_later() as u8;
         {
             let t = &mut self.troops[ti];
             // = seg000:66f3/66f7 occupation = (occupation & 0x20) | 2.
@@ -4050,7 +4050,7 @@ mod tests {
         while rx.try_recv().is_ok() {}
         game.new_day_flag = 1;
         game.bitfield_paul_events |= 1;
-        let day = game.get_ingame_day_in_ax() as u8;
+        let day = game.get_ingame_day_3_periods_later() as u8;
 
         // Troop 0 heads its location's chain; rallied 9 days ago.
         let ti = 0;

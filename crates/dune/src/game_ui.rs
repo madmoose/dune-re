@@ -917,8 +917,8 @@ impl GameState {
         // = seg000:1a5f font_select_small_font; colour 0xf1fa (fg 0xfa, bg 0xf1).
         self.font_select_small_font();
         self.font_state.color = 0xf1fa;
-        // = seg000:1a68 get_ingame_day_in_ax; day = (day mod 365) + 1.
-        let day = self.get_ingame_day_in_ax() % 365 + 1;
+        // = seg000:1a68 get_ingame_day_3_periods_later; day = (day mod 365) + 1.
+        let day = self.get_ingame_day_3_periods_later() % 365 + 1;
         // = seg000:1a77 x = 0xb, shifted left 2px per missing digit; y = 190.
         let mut x = 11;
         if day < 100 {
@@ -983,8 +983,14 @@ impl GameState {
         self.open_sprite_bank(prev as i16);
     }
 
-    // = seg000:1ad1 get_ingame_day_in_ax — the in-game day index, (game_time+3)>>4.
-    pub(crate) fn get_ingame_day_in_ax(&self) -> u16 {
+    // = seg000:1ac5 get_ingame_day — the in-game day index, game_time >> 4.
+    pub(crate) fn get_ingame_day(&self) -> u16 {
+        self.game_time >> 4
+    }
+
+    // = seg000:1ad1 get_ingame_day_3_periods_later — the day index three
+    // time periods on, (game_time + 3) >> 4.
+    pub(crate) fn get_ingame_day_3_periods_later(&self) -> u16 {
         (self.game_time + 3) >> 4
     }
 

@@ -391,7 +391,7 @@ pub struct GameState {
     // nibble is the time-of-day phase). Static-initialised to 2 (seg001:0002
     // `dw 2`), which is also the value play_intro re-seeds at its exit and
     // start re-seeds again at seg000:001e. The PIT game-clock ISR (not ported)
-    // advances it. get_ingame_day_in_ax reads (game_time+3)>>4.
+    // advances it. get_ingame_day_3_periods_later reads (game_time+3)>>4.
     pub(crate) game_time: u16,
 
     // = seg001:0004 location_and_room — the current scene's (location<<8)|room
@@ -476,6 +476,16 @@ pub struct GameState {
     // setup pass and set to 1 while its room-entry scan is live; the arguing
     // logic around seg000:2241..24fe (unported) reads and steps it.
     pub(crate) related_to_arguing_ds_1a: u8,
+
+    // = seg001:001c related_to_paying_smuggler_bills_ds_1c — the staged
+    // smuggler's state byte (Smuggler +2), 001d current_smuggler_willingness_
+    // to_haggle_ds_1d (+1), 001f related_to_paying_smuggler_bills_ds_1f — the
+    // age in days of his open bill, 0020 current_smuggler_bill_value_ds_20 —
+    // the bill (+0xe). All staged by stage_smuggler_for_condit (seg000:235f).
+    pub(crate) related_to_paying_smuggler_bills_ds_1c: u8,
+    pub(crate) current_smuggler_willingness_to_haggle_ds_1d: u8,
+    pub(crate) related_to_paying_smuggler_bills_ds_1f: u8,
+    pub(crate) current_smuggler_bill_value_ds_20: u16,
 
     // = seg001:001b related_to_stay_here_come_with_me_ds_1b — counts the
     // COME WITH ME / STAY HERE verb uses since the last TALK TO ME (which
@@ -588,6 +598,21 @@ pub struct GameState {
     pub(crate) spice_shipment_quantity: u16,
     pub(crate) spice_shipment_fulfilment: u8,
     pub(crate) spice_shipment_flags: u8,
+
+    // = seg001:00b4..00ba for_condit_spice_shipment_arguing_related_ds_b4..ba
+    // — the four spice amounts Duncan's shipment argument quotes, staged by
+    // stage_spice_argue_amounts_with_duncan (seg000:22b1) from the stock and
+    // the demand; ds:bf bits 1/2 record which bracket the stock fell in.
+    pub(crate) spice_shipment_arguing_ds_b4: [u16; 4],
+
+    // = seg001:009d for_condit_smuggler_dialogue_related_ds_9d — (price & 0x7f)
+    // << 1 of the equipment the smuggler offers; 009e for_condit_smuggler_
+    // arguing_count_ds_9e — rand_masked(3) haggling rounds; 009f accept_
+    // refuse_argue_choice_ds_9f — the ACCEPT/REFUSE/ARGUE verb state (3 =
+    // Paul has spice to argue with, 1 = accepted).
+    pub(crate) for_condit_smuggler_dialogue_related_ds_9d: u8,
+    pub(crate) for_condit_smuggler_arguing_count_ds_9e: u8,
+    pub(crate) accept_refuse_argue_choice_ds_9f: u8,
 
     // = seg001:00c0 for_condit_spice_shipment_related_ds_c0 — Duncan's
     // shipment-mission report state: zeroed when his dialogue-line event
@@ -784,6 +809,11 @@ pub struct GameState {
     // haggling, stock and prices); the new-day hook restocks them
     // (seg000:1cae).
     pub(crate) smugglers: [crate::smugglers::Smuggler; 6],
+    // = seg001:113f current_smuggler_ptr — the smugglers[] record Duncan's
+    // bill scan rotates through (seg000:2282..229f); static init = the
+    // table's first record. Kept as the DOS seg001 pointer (see
+    // smugglers::smuggler_ptr) so the save image carries it verbatim.
+    pub(crate) current_smuggler_ptr: u16,
 
     // = seg001:1141 array_likelihood_of_worm_related_spice_mining_troop_
     // events_by_region — [0] is the base event probability (incremented by
@@ -1863,6 +1893,12 @@ pub struct GameState {
     // replays through play_dialogue_voc_with_bank_flag with this value.
     pub(crate) last_line_voc_bank_flag: u8,
 
+    // = seg001:227e post_voice_hook — a one-shot routine the line presenter
+    // runs right after the voice starts (seg000:a0d6: xchg with nullsub_00f66,
+    // call). Only the Stilgar branch of dialogue event 0x08 arms it
+    // (seg000:a13a). None = nullsub_00f66.
+    pub(crate) post_voice_hook: Option<fn(&mut GameState)>,
+
     // = seg001:47de dialogue_line_word0 — first word of the sentence entry being
     // presented (seg000:9ff9); the voc-replay / subtitle continuation code
     // (seg000:89d3/8a3b/8ac6, unported) tests its 0x10 flag.
@@ -2408,6 +2444,10 @@ impl GameState {
             for_condit_ds_18: 0,
             line_spoken_this_conversation: 0,
             related_to_arguing_ds_1a: 0,
+            related_to_paying_smuggler_bills_ds_1c: 0,
+            current_smuggler_willingness_to_haggle_ds_1d: 0,
+            related_to_paying_smuggler_bills_ds_1f: 0,
+            current_smuggler_bill_value_ds_20: 0,
             data_0001b: 0,
             pending_room_action: 0,
             for_dialogue_enemies_ds_24: 0,
@@ -2432,6 +2472,10 @@ impl GameState {
             spice_shipment_quantity: 0,
             spice_shipment_fulfilment: 0,
             spice_shipment_flags: 0,
+            spice_shipment_arguing_ds_b4: [0; 4],
+            for_condit_smuggler_dialogue_related_ds_9d: 0,
+            for_condit_smuggler_arguing_count_ds_9e: 0,
+            accept_refuse_argue_choice_ds_9f: 0,
             for_condit_spice_shipment_ds_c0: 0,
             final_attack_stage: 0,
             spice_shipment_sequence_number: 0,
@@ -2472,6 +2516,7 @@ impl GameState {
             globe_param_4: 0,
             room_persons: ROOM_PERSON_TABLE_INIT,
             smugglers: crate::smugglers::SMUGGLERS,
+            current_smuggler_ptr: crate::smugglers::SMUGGLERS_SEG001_OFS,
 
             // = the seg001:1141 static initializer.
             worm_event_likelihood_by_region: [
@@ -2741,6 +2786,7 @@ impl GameState {
             current_lip_sync_resource_id: 0,
             data_047dc: 0,
             last_line_voc_bank_flag: 0,
+            post_voice_hook: None,
             dialogue_line_word0: 0,
             data_047e0: 0,
             head_sign_state: 0,
@@ -4305,7 +4351,7 @@ impl GameState {
     pub(crate) fn draw_debug_overlay(&self, fb: &mut FrameBuffer) {
         use crate::font::TextSize;
 
-        // let day = self.get_ingame_day_in_ax();
+        // let day = self.get_ingame_day_3_periods_later();
         // (label, value) rows. The value column is placed at a fixed pixel x
         // past the widest label, so the values line up even though the glyph
         // font is proportional (space-padding would not align them).

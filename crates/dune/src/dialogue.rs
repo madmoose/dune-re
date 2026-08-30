@@ -1169,9 +1169,12 @@ impl GameState {
             //   subtitle line's .voc + lip-sync.
             self.play_dialogue_voc();
             // = seg000:a0d6..a0dd — run the one-shot post-voice hook: ax =
-            //   nullsub_00f66; xchg ax,[data_0227e]; call ax. Only the unported
-            //   event-0x08 Stilgar branch (seg000:a13a) arms it, so it is
-            //   always the nullsub here; not modelled.
+            //   nullsub_00f66; xchg ax,[post_voice_hook]; call ax. The
+            //   Stilgar branch of dialogue event 0x08 (seg000:a13a) arms
+            //   the Water of Life scene here.
+            if let Some(hook) = self.post_voice_hook.take() {
+                hook(self);
+            }
         }
         // = seg000:a0e2 loc_0a0e2 — in the room view (room_view_toggle >= 0),
         //   restore the default voice/subtitle mode for the next line.
@@ -1251,12 +1254,130 @@ impl GameState {
                 3 => self.dialogue_event_0f_duncan_idaho(),
                 _ => {}
             },
+            // = seg000:a125 callback_event_dialogue_line_08_speaker_
+            //   dependent_effect_1.
+            0x08 => self.dialogue_event_08_speaker_dependent(),
             // = a244/a248 (0x04/0x05) the accept/refuse/argue menu, a1ed
-            //   (0x0e) increase_final_attack_stage, a125/a157
-            //   (0x08/0x09) the speaker-dependent effects, a28e (0x0d)
-            //   the command-menu/PALPLAN redraw — all unported.
+            //   (0x0e) increase_final_attack_stage, a157 (0x09) the second
+            //   speaker-dependent effect, a28e (0x0d) the command-menu/
+            //   PALPLAN redraw — all unported.
             _ => println!("dispatch_dialogue_line_event: unported event 0x{event:02x}"),
         }
+    }
+
+    // = seg000:a125 callback_event_dialogue_line_08_speaker_dependent_effect_1
+    // — dialogue event 0x08, keyed on the speaker (current_lip_sync_resource_
+    // id): Jessica, Duncan, Stilgar (armed as the post-voice hook), speaker
+    // 0x0c (clears bit 7 of the staged location's status) and the Smugglers.
+    pub(crate) fn dialogue_event_08_speaker_dependent(&mut self) {
+        match self.current_lip_sync_resource_id {
+            // = seg000:a12b jz loc_0a186 (callback_event_dialogue_line_08_
+            //   Jessica).
+            1 => self.dialogue_event_08_jessica(),
+            // = seg000:a132 jmp callback_event_dialogue_line_08_Duncan_Idaho.
+            3 => self.dialogue_event_08_duncan_idaho(),
+            // = seg000:a13a [post_voice_hook] = callback_event_dialogue_line_
+            //   08_Stilgar_drink_Water_of_Life — runs once the line's voice
+            //   has started (seg000:a0d6).
+            5 => {
+                self.post_voice_hook =
+                    Some(GameState::dialogue_event_08_stilgar_drink_water_of_life)
+            }
+            // = seg000:a146/a14a di = [data_011ce]; and byte [di+0ah],7fh —
+            //   clear status bit 7 of the CONDIT-staged location.
+            0x0c => {
+                let li = self.condit_staged_location;
+                if let Some(loc) = self.locations.get_mut(li) {
+                    loc.status &= 0x7f;
+                }
+            }
+            // = seg000:a153 jmp callback_event_dialogue_line_08_Smugglers.
+            0x0d => self.dialogue_event_08_smugglers(),
+            _ => {}
+        }
+    }
+
+    // = seg000:a186 callback_event_dialogue_line_08_Jessica — Jessica's
+    // event 0x08: with Paul-event bit 1 set (the Water of Life taken) +40
+    // charisma and the visibility range restarts from -50; otherwise a range
+    // of exactly 1 (the first lesson) earns +10 charisma and restarts from
+    // 10. Either way the range grows by 20, and ds:d5 becomes 0x80 - range/6
+    // while the range is under 100 (0 from there on).
+    fn dialogue_event_08_jessica(&mut self) {
+        let mut ax: u16;
+        // = seg000:a186 test bitfield_Paul_events, 2.
+        if self.bitfield_paul_events & 2 != 0 {
+            // = seg000:a18d..a192.
+            self.increase_charisma(0x28);
+            ax = 0xffce;
+        } else {
+            // = seg000:a197..a1a7.
+            ax = self.location_visibility_distance;
+            if ax == 1 {
+                self.increase_charisma(0x0a);
+                ax = 0x0a;
+            }
+        }
+        // = seg000:a1aa/a1ad ax += 0x14; location_visibility_distance = ax.
+        ax = ax.wrapping_add(0x14);
+        self.location_visibility_distance = ax;
+        // = seg000:a1b0..a1bd bl = 0; below 0x64: bl = 0x80 - ax / 6.
+        let mut bl = 0u8;
+        if ax < 0x64 {
+            bl = 0x80u8.wrapping_sub((ax / 6) as u8);
+        }
+        // = seg000:a1bf [contact_distance_related_ds_d5] = bl.
+        self.contact_distance_related_ds_d5 = bl;
+    }
+
+    // = seg000:2ccf callback_event_dialogue_line_08_Stilgar_drink_Water_of_Life
+    // — the post-voice hook Stilgar's event 0x08 arms: Paul-event bit 3 (the
+    // Water of Life offered); when Paul accepted (ds:9f == 1) let the line
+    // play out (or wait 0x258 ticks with no voice), then with charisma of at
+    // least 100 the ritual: Paul-event bit 1, ds:d5 = 0xff, fade to black
+    // (transition 0x38), hold 0x3e8 ticks, drop the subtitle, fade back in
+    // (0x36), run three time periods of events and re-enter the room with
+    // pending_room_action 0x11. Below 100 charisma the room screen is
+    // rebuilt instead (pending_room_screen_request = 3).
+    fn dialogue_event_08_stilgar_drink_water_of_life(&mut self) {
+        // = seg000:2ccf or bitfield_Paul_events, 8.
+        self.bitfield_paul_events |= 8;
+        // = seg000:2cd4 cmp ds:9f, 1; jnz ret.
+        if self.accept_refuse_argue_choice_ds_9f != 1 {
+            return;
+        }
+        // = seg000:2cdb call call_restore_cursor.
+        self.call_restore_cursor();
+        // = seg000:2cde..2ceb a live voice drains (loc_0abd5); otherwise
+        //   wait_interruptable(0x258).
+        if self.voc_pcm_playing {
+            self.wait_for_voc_pcm_to_drain();
+        } else {
+            self.wait_interruptable(0x258);
+        }
+        // = seg000:2cee cmp charisma, 64h; jb loc_02d26.
+        if self.charisma < 0x64 {
+            // = seg000:2d26 pending_room_screen_request = 3.
+            self.pending_room_screen_request = 3;
+            return;
+        }
+        // = seg000:2cf5/2cfa.
+        self.bitfield_paul_events |= 2;
+        self.contact_distance_related_ds_d5 = 0xff;
+        // = seg000:2cff..2d04 al = 0x38; bp = nullsub_00f66; call transition.
+        self.transition(0x38, 0, |_| {});
+        // = seg000:2d07 wait_a_bit(0x3e8).
+        self.wait_a_bit(0x3e8);
+        // = seg000:2d0d call subtitle_restore_prior.
+        self.subtitle_restore_prior();
+        // = seg000:2d10..2d15 al = 0x36; bp = nullsub_00f66; call transition.
+        self.transition(0x36, 0, |_| {});
+        // = seg000:2d18 cx = 3; call run_events_for_n_time_periods.
+        self.run_events_for_n_time_periods(3);
+        // = seg000:2d1e pending_room_action = 0x11; 2d23 jmp
+        //   finish_room_screen_setup.
+        self.pending_room_action = 0x11;
+        self.finish_room_screen_setup();
     }
 
     // = seg000:24a3 callback_event_dialogue_line_0f_Duncan_Idaho — Duncan's
@@ -1799,5 +1920,81 @@ mod tests {
         game.dispatch_dialogue_line_event(0x0f, 0);
         assert_eq!(game.comm_sightings.last().copied(), Some(0x080b));
         assert_eq!(game.spice_shipment_unpaid, 1);
+    }
+}
+
+#[cfg(test)]
+mod event_08_tests {
+    use std::sync::mpsc;
+
+    use crate::{GameState, dat_file::DatFile};
+
+    fn asset_game() -> Option<GameState> {
+        let dat_path = concat!(env!("CARGO_MANIFEST_DIR"), "/../../assets/DUNE.DAT");
+        let Ok(dat_file) = DatFile::open(dat_path) else {
+            eprintln!("skipping: {dat_path} not found");
+            return None;
+        };
+        let (tx, _rx) = mpsc::sync_channel(64);
+        let mut game = GameState::new(dat_file, tx);
+        game.set_headless();
+        game.start(true);
+        Some(game)
+    }
+
+    // Jessica's event 0x08 (seg000:a186): the first lesson (range 1) earns
+    // +10 charisma and a range of 30 (ds:d5 = 0x80 - 5); later lessons add
+    // 20 each; at 100 ds:d5 drops to 0; after the Water of Life (bit 1) the
+    // range restarts from -50 + 20.
+    #[test]
+    #[ignore = "needs assets/DUNE.DAT"]
+    fn jessica_event_08_grows_the_visibility_range() {
+        let Some(mut game) = asset_game() else { return };
+        game.current_lip_sync_resource_id = 1;
+        game.bitfield_paul_events &= !2;
+        game.location_visibility_distance = 1;
+        let charisma = game.charisma;
+        game.dialogue_event_08_speaker_dependent();
+        assert_eq!(game.charisma, charisma + 10, "= seg000:a1a4");
+        assert_eq!(game.location_visibility_distance, 30);
+        assert_eq!(game.contact_distance_related_ds_d5, 0x80 - 5);
+        game.dialogue_event_08_speaker_dependent();
+        assert_eq!(game.location_visibility_distance, 50);
+        assert_eq!(game.contact_distance_related_ds_d5, 0x80 - 8);
+        game.location_visibility_distance = 80;
+        game.dialogue_event_08_speaker_dependent();
+        assert_eq!(game.location_visibility_distance, 100);
+        assert_eq!(game.contact_distance_related_ds_d5, 0, "= seg000:a1b5 jnb");
+        game.bitfield_paul_events |= 2;
+        let charisma = game.charisma;
+        game.dialogue_event_08_speaker_dependent();
+        assert_eq!(game.charisma, charisma + 40, "= seg000:a18f");
+        assert_eq!(
+            game.location_visibility_distance,
+            0xffce_u16.wrapping_add(0x14)
+        );
+        assert_eq!(game.contact_distance_related_ds_d5, 0);
+    }
+
+    // Stilgar's event 0x08 only arms the post-voice hook (seg000:a13a); the
+    // hook itself sets Paul-event bit 3 and does nothing more unless Paul
+    // accepted (ds:9f == 1).
+    #[test]
+    #[ignore = "needs assets/DUNE.DAT"]
+    fn stilgar_event_08_arms_the_post_voice_hook() {
+        let Some(mut game) = asset_game() else { return };
+        game.current_lip_sync_resource_id = 5;
+        game.bitfield_paul_events &= !8;
+        game.dialogue_event_08_speaker_dependent();
+        assert_eq!(
+            game.bitfield_paul_events & 8,
+            0,
+            "nothing runs until the voice starts"
+        );
+        let hook = game.post_voice_hook.take().expect("= seg000:a13a armed");
+        game.accept_refuse_argue_choice_ds_9f = 0;
+        hook(&mut game);
+        assert_ne!(game.bitfield_paul_events & 8, 0, "= seg000:2ccf");
+        assert_eq!(game.pending_room_screen_request, 0, "= seg000:2cd9 jnz ret");
     }
 }

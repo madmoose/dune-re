@@ -161,6 +161,10 @@ pub(crate) struct RoomPerson {
     /// person last stopped travelling (STAY HERE / npc_clear_travelling,
     /// npc_refresh_travel_timestamp with bx=2).
     pub(crate) time_dismissed: u16,
+    /// = entry word +0xc (RoomPerson.field_c) — for the Smugglers entry (13)
+    /// the seg001 pointer of the smugglers[] record staged for its dialogue
+    /// (stage_smuggler_for_condit, seg000:235f); static 0 elsewhere.
+    pub(crate) field_c: u16,
     /// 0..15, the bit position OR-ed into persons_in_room and the offset of the
     /// "&Person" text (0x78..0x87) the verb-menu record displays.
     pub(crate) person_index: u8,
@@ -185,6 +189,7 @@ const fn rp(
         handler,
         time_joined: 0,
         time_dismissed: 0,
+        field_c: 0,
         person_index,
         flags,
     }
