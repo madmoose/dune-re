@@ -144,12 +144,18 @@ impl GameState {
         // = seg000:2b0d [vision_message_type_ds_ea] = al.
         self.data_000ea = (message_id & 0xff) as i8;
         // = seg000:2b10..2b14 al = the sender class; call loc_096d8 — the
-        // fixed-block presenter. The port's presentation bundles the idle-
-        // animator install (seg000:2b17 loc_09945) and the fixed-bank voc
-        // start (seg000:2b1f loc_09ef1 al=1).
+        // fixed-block presenter. Its in-line voice start (seg000:a0c9) is
+        // skipped while ds:ea > 0, so the line shows silent here. The port's
+        // presentation bundles the idle-animator install (seg000:2b17
+        // loc_09945).
         self.travel_play_flyover_line((message_id >> 8) as u8);
-        // = seg000:2b1a [vision_message_type_ds_ea] = 0xff.
+        // = seg000:2b1a [vision_message_type_ds_ea] = 0xff — before the voice
+        // starts, so create_voc_file_name picks the room-acoustics suffix.
         self.data_000ea = -1;
+        // = seg000:2b1f/2b21 al = 1; call play_dialogue_voc_with_bank_flag —
+        // the voice, loaded from the shared fixed voc bank (P<class>\P<class>
+        // 3E9: "A message has arrived in the palace.").
+        self.play_dialogue_voc_with_bank_flag(1);
         // = seg000:2b24/2b25 pop di; call prepare_location_data_for_condit —
         // restore the staged location.
         self.prepare_location_data_for_condit(saved);
@@ -359,8 +365,11 @@ impl GameState {
         // = seg000:2c47 call loc_02c92 — transition 6 into the vision
         // backdrop, presenting the line inside the transition render.
         self.transition(6, 0, |s| s.vision_dream_backdrop());
-        // = seg000:2c4a/2c4c al = 1; call loc_09ef1 — the voc start; the
-        // port's presentation inside vision_dream_backdrop bundles it.
+        // = seg000:2c4a/2c4c al = 1; call play_dialogue_voc_with_bank_flag —
+        // the voice from the shared fixed voc bank (the in-line start at
+        // seg000:a0c9 skipped it: ds:ea > 0). ds:ea still holds the message
+        // type, so the voc name takes the 'O' suffix (the open retries 'I').
+        self.play_dialogue_voc_with_bank_flag(1);
         // = seg000:2c4f dequeue the presented message.
         self.dequeue_vision_message();
         // = seg000:2c52..2c5a blank the verb panel (the command buffer's
@@ -401,8 +410,9 @@ impl GameState {
         self.copy_active_framebuffer_to_framebuffer_2();
         // = seg000:2ca7/2caa present the line through loc_096d8 (the class
         // was staged in current_lip_sync_resource_id; the fixed block 0x84
-        // supplies the sentence, ds:ea the selector). The port's presenter
-        // also plays the voc (= the loc_09ef1 the DOS caller issues after).
+        // supplies the sentence, ds:ea the selector). The line shows silent:
+        // present_vision_dream starts the voice after the transition
+        // (seg000:2c4c).
         let class = self.current_lip_sync_resource_id as u8;
         self.travel_play_flyover_line(class);
         // = seg000:2cad..2cb5 drop the bubble/head-ornament elements and the
@@ -964,6 +974,7 @@ mod tests {
     #[ignore = "needs assets/DUNE.DAT"]
     fn vision_message_idle_delivery() {
         let Some(mut game) = asset_game() else { return };
+        game.pcm_player.set_enabled(true);
         // Visions enabled, past the first-vision phase.
         game.bitfield_paul_events |= 1;
         game.game_phase = 0x18;
@@ -980,5 +991,52 @@ mod tests {
         assert!(game.vision_messages.is_empty());
         assert_eq!(game.data_047a7, 1);
         assert_eq!(game.current_lip_sync_resource_id, 2);
+        // Spoken: the voice starts after the silent present (seg000:2b1f
+        // play_dialogue_voc_with_bank_flag al=1) from the shared fixed voc
+        // bank, not the speaker's own P<X> numbering.
+        assert!(
+            game.voc_pcm_playing,
+            "= seg000:a768 — the vision line's voice started"
+        );
+        assert_eq!(
+            std::str::from_utf8(&game.voc_filename).unwrap(),
+            "PC\\PC3E9I .VOC",
+            "= seg000:a6f8/a6fc fixed-bank rebase"
+        );
+    }
+
+    // The full-screen vision dream (loc_02b2a -> present_vision_dream): with
+    // the sender absent and 0x1c2 idle ticks elapsed, the message is spoken
+    // over the VIS backdrop. The voice starts after the transition
+    // (seg000:2c4c play_dialogue_voc_with_bank_flag al=1) while ds:ea still
+    // holds the message type, so the voc name takes the 'O' suffix.
+    #[test]
+    #[ignore = "needs assets/DUNE.DAT"]
+    fn vision_dream_speaks_from_fixed_bank() {
+        let Some(mut game) = asset_game() else { return };
+        game.pcm_player.set_enabled(true);
+        game.bitfield_paul_events |= 1;
+        game.game_phase = 0x18;
+        game.queue_vision_message_without_location(0x201);
+        game.persons_in_room = 0;
+        game.game_clock_tick_base = (game.game_ticks() as u16).wrapping_sub(0x200);
+        game.idle_room_message_check();
+        assert!(game.vision_messages.is_empty(), "= seg000:2c4f dequeue");
+        // The dream held for 0xbb8 ticks and tore the head down (seg000:2c69
+        // ..2c77), so only the built voc name survives as evidence of the
+        // voice start.
+        assert_eq!(
+            std::str::from_utf8(&game.voc_filename).unwrap(),
+            "PC\\PC3E9O .VOC",
+            "= seg000:a8e1 ds:ea > 0 -> 'O' suffix"
+        );
+        assert!(
+            game.talking_head.is_none(),
+            "= seg000:2c6c reset_scene_lip_sync_state"
+        );
+        assert!(
+            !game.voc_pcm_playing,
+            "= seg000:a7b9 cleared at the teardown"
+        );
     }
 }

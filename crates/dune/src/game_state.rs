@@ -1858,6 +1858,11 @@ pub struct GameState {
     // speaker's own base, so the fly-over line finds its .voc.
     pub(crate) data_047dc: u8,
 
+    // = seg001:47dd last_line_voc_bank_flag — data_047dc as it was when the
+    // current subtitle line's voice last played (seg000:9f00). The WHAT verb
+    // replays through play_dialogue_voc_with_bank_flag with this value.
+    pub(crate) last_line_voc_bank_flag: u8,
+
     // = seg001:47de dialogue_line_word0 — first word of the sentence entry being
     // presented (seg000:9ff9); the voc-replay / subtitle continuation code
     // (seg000:89d3/8a3b/8ac6, unported) tests its 0x10 flag.
@@ -2735,6 +2740,7 @@ impl GameState {
             data_047c2: 0,
             current_lip_sync_resource_id: 0,
             data_047dc: 0,
+            last_line_voc_bank_flag: 0,
             dialogue_line_word0: 0,
             data_047e0: 0,
             head_sign_state: 0,

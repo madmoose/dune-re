@@ -736,11 +736,11 @@ impl GameState {
         //   when the voice starts, and data_047e1 is not modelled.
         // = seg000:9eeb call arm_npc_menu_idle_timer.
         self.arm_npc_menu_idle_timer();
-        // = seg000:9eee..9ef7 restore the last line's voc-bank flag around
-        //   the replay (data_047dc = [last_line_voc_bank_flag]; both read 0
-        //   with the come-with-me troop bank unmodelled), then call
-        //   loc_09efd — reload and play current_subtitle_id's .voc.
-        self.play_dialogue_voc();
+        // = seg000:9eee al = [last_line_voc_bank_flag]; falls into
+        //   play_dialogue_voc_with_bank_flag (seg000:9ef1) — reload and play
+        //   current_subtitle_id's .voc with the bank flag the line played
+        //   under (1 for a vision-message line from the fixed block 0x84).
+        self.play_dialogue_voc_with_bank_flag(self.last_line_voc_bank_flag);
     }
 
     // = seg000:9f31 get_dialogue_topic_record — resolve the current speaker's
@@ -775,10 +775,12 @@ impl GameState {
     // `.voc` over the lip-sync engine. Reads current_subtitle_id, which
     // show_voice_subtitle set. DOS runs this AFTER the spoken-line event fires.
     pub(crate) fn play_dialogue_voc(&mut self) {
-        // = seg000:9efd [last_line_voc_bank_flag] = data_047dc (the shared
+        // = seg000:9efd/9f00 [last_line_voc_bank_flag] = data_047dc (the shared
         //   fixed-block voc-bank flag, armed by travel_play_flyover_line at
-        //   seg000:96db; the save into last_line_voc_bank_flag for the WHAT
-        //   verb's replay is not modelled); ax = current_subtitle_id; bx =
+        //   seg000:96db or forced by play_dialogue_voc_with_bank_flag); the
+        //   WHAT verb replays with the saved value.
+        self.last_line_voc_bank_flag = self.data_047dc;
+        // = seg000:9f03..9f0a ax = current_subtitle_id; bx =
         //   current_lip_sync_resource_id; call load_voc_and_lipsync_data (a6cc).
         //   Its index transform:
         // = seg000:a6e7 bl = min(speaker, 0x0e) — the voc directory id;
@@ -810,6 +812,23 @@ impl GameState {
 
         // = loc_0a0c9 -> loc_09efd: load and play the voice .voc + lip-sync.
         self.play_talking_head_voc(voc_index);
+    }
+
+    // = seg000:9ef1 play_dialogue_voc_with_bank_flag — run the loc_09efd
+    // load-and-play chain with data_047dc forced to `bank_flag` (al) for the
+    // load, then clear the flag. The vision-message presenters call it with
+    // al = 1 (seg000:2b1f, 2c4c): their line comes from the fixed dialogue
+    // block 0x84, whose voc numbering lives in the shared fixed bank
+    // (per_person_voc_base_table[0x10] + 0x3e7), and the in-line voice start
+    // at seg000:a0c9 stays skipped for them (ds:ea > 0). The WHAT verb falls
+    // into it with al = last_line_voc_bank_flag (seg000:9eee).
+    pub(crate) fn play_dialogue_voc_with_bank_flag(&mut self, bank_flag: u8) {
+        // = seg000:9ef1 mov [data_047dc], al.
+        self.data_047dc = bank_flag;
+        // = seg000:9ef4 call loc_09efd.
+        self.play_dialogue_voc();
+        // = seg000:9ef7 data_047dc = 0.
+        self.data_047dc = 0;
     }
 
     // = seg000:96f1 present_room_person_dialogue -> loc_09702 -> loc_0970b ->
