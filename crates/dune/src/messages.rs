@@ -144,11 +144,13 @@ impl GameState {
         // = seg000:2b0d [vision_message_type_ds_ea] = al.
         self.data_000ea = (message_id & 0xff) as i8;
         // = seg000:2b10..2b14 al = the sender class; call loc_096d8 — the
-        // fixed-block presenter. Its in-line voice start (seg000:a0c9) is
-        // skipped while ds:ea > 0, so the line shows silent here. The port's
-        // presentation bundles the idle-animator install (seg000:2b17
-        // loc_09945).
+        // fixed-block presenter. Its in-line voice start (seg000:a0c9) and
+        // idle-animator install (seg000:9936) are both skipped while ds:ea >
+        // 0, so the line shows silent and still here.
         self.travel_play_flyover_line((message_id >> 8) as u8);
+        // = seg000:2b17 call install_talking_head_idle_animator — the in-room
+        // sender's head idles while the message plays (the dream's does not).
+        self.install_talking_head_idle_animator();
         // = seg000:2b1a [vision_message_type_ds_ea] = 0xff — before the voice
         // starts, so create_voc_file_name picks the room-acoustics suffix.
         self.data_000ea = -1;
@@ -991,6 +993,12 @@ mod tests {
         assert!(game.vision_messages.is_empty());
         assert_eq!(game.data_047a7, 1);
         assert_eq!(game.current_lip_sync_resource_id, 2);
+        // In-room, the sender's head idles: seg000:2b17 installs the animator
+        // after the present.
+        assert!(
+            game.has_frame_task(crate::TaskId::TalkingHeadIdle),
+            "= seg000:2b17"
+        );
         // Spoken: the voice starts after the silent present (seg000:2b1f
         // play_dialogue_voc_with_bank_flag al=1) from the shared fixed voc
         // bank, not the speaker's own P<X> numbering.
@@ -1003,6 +1011,65 @@ mod tests {
             "PC\\PC3E9I .VOC",
             "= seg000:a6f8/a6fc fixed-bank rebase"
         );
+    }
+
+    // The dream's head is static: with ds:ea > 0 the head setup skips the
+    // idle-animator install (seg000:9936 jg loc_0994e) and, unlike the
+    // in-room presenter, present_vision_dream never installs it (seg000:2c47
+    // ..2c4f). Only the lip-sync task moves the mouth.
+    #[test]
+    #[ignore = "needs assets/DUNE.DAT"]
+    fn vision_dream_head_has_no_idle_animator() {
+        let Some(mut game) = asset_game() else { return };
+        game.remove_frame_task(crate::TaskId::TalkingHeadIdle);
+        // = seg000:2bf4 ds:ea = the message type; 2c16 the class speaks.
+        game.data_000ea = 1;
+        game.current_lip_sync_resource_id = 0;
+        // = seg000:2caa present through loc_096d8 (the dream's render).
+        game.travel_play_flyover_line(0);
+        assert!(game.talking_head.is_some(), "Leto's head is up");
+        // The voice starts (seg000:2c4c) with the type still in ds:ea. Its
+        // lip-sync stream is real (PA3E9O carries 300 mouth values), but the
+        // mouth stamp is gated on ds:ea (seg000:9e39 jg loc_09e74), so fb1
+        // stays untouched while the mouth value changes.
+        game.pcm_player.set_enabled(true);
+        game.play_dialogue_voc_with_bank_flag(1);
+        assert!(
+            game.talking_head
+                .as_ref()
+                .is_some_and(|h| !h.voc_lipsync.is_empty()),
+            "PA\\PA3E9O.VOC carries a lip-sync stream"
+        );
+        let before = game.framebuffer.pixels().to_vec();
+        game.talking_head.as_mut().unwrap().mouth = 0xff; // force "changed"
+        game.tick_talking_head_voc();
+        assert_ne!(
+            game.talking_head.as_ref().unwrap().mouth,
+            0xff,
+            "the lip bookkeeping ran"
+        );
+        assert_eq!(
+            game.framebuffer.pixels(),
+            &before[..],
+            "= seg000:9e39 — no mouth stamp in the dream"
+        );
+        // In-room the presenter has reset ds:ea to 0xff before the voice
+        // (seg000:2b1a): the same tick then stamps the mouth.
+        game.data_000ea = -1;
+        game.talking_head.as_mut().unwrap().mouth = 0xff;
+        game.tick_talking_head_voc();
+        assert_ne!(
+            game.framebuffer.pixels(),
+            &before[..],
+            "= seg000:9e45 draw_talking_head_at_si"
+        );
+        assert!(
+            !game.has_frame_task(crate::TaskId::TalkingHeadIdle),
+            "= seg000:993b — no idle animator for the dream head"
+        );
+        // The in-room presenter's explicit install is what animates it.
+        game.install_talking_head_idle_animator();
+        assert!(game.has_frame_task(crate::TaskId::TalkingHeadIdle));
     }
 
     // The full-screen vision dream (loc_02b2a -> present_vision_dream): with

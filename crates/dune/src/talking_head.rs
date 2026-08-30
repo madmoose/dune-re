@@ -655,13 +655,23 @@ impl GameState {
         // fires in the post-transition wait loop (so the head is revealed by the
         // transition, then animates).
         // = seg000:9936..9943 the install is skipped while a vision message is
-        //   mid-presentation (ds:ea > 0; the vision presenters install it
-        //   themselves at seg000:2b17, which the port folds into this call)
-        //   and for the wounded Gurney (is_Gurney_Halleck_and_between_game_
+        //   mid-presentation (ds:ea > 0): the in-room vision presenter
+        //   installs it itself afterwards (seg000:2b17
+        //   install_talking_head_idle_animator), the full-screen dream never
+        //   does, so its head stays still apart from the mouth. Also skipped
+        //   for the wounded Gurney (is_Gurney_Halleck_and_between_game_
         //   phases_15_and_20): his lying portrait stays still.
-        if !self.is_gurney_between_phases_15_and_20(lip_sync_resource_id) {
-            self.add_frame_task(0x10, crate::TaskId::TalkingHeadIdle);
+        if self.data_000ea <= 0 && !self.is_gurney_between_phases_15_and_20(lip_sync_resource_id) {
+            self.install_talking_head_idle_animator();
         }
+    }
+
+    // = seg000:9945 install_talking_head_idle_animator — add the idle
+    // animator (frame_task_callback_099be) as a frame task at interval 0x10.
+    // The tail of loc_09908's install, and called on its own by
+    // present_vision_message (seg000:2b17) after its silent present.
+    pub(crate) fn install_talking_head_idle_animator(&mut self) {
+        self.add_frame_task(0x10, crate::TaskId::TalkingHeadIdle);
     }
 
     /// = seg000:91a0 setup_lip_sync_data_from_sprite_sheet on its own — open
@@ -1241,22 +1251,30 @@ impl GameState {
                 self.pcm_voice_stream_refill();
                 return;
             }
-            // = seg000:9e33..9e45 — stamp the lip-id frame's sprite list over
-            // the live fb1 (setup_non_lip_sync_data_structure +
-            // draw_talking_head_at_si), clipped to the head's MOUTH BOX
-            // (9df8..9e0f) — no backdrop restore. Each lip group bundles the
-            // torso/collar sprite under the mouth sprite; the clip confines
-            // that collar redraw to the mouth box, where it erases the
-            // previous stamp's beard overhang without ever repainting the
-            // wings over the ears. The rest of the face stays owned by the
-            // still-running idle task.
-            let clip = self.mouth_clip_rect();
-            let rect = self.draw_talking_head_frame(lip_anim, frame, clip);
-            // = the seg000:9e48..9e54 draw tail (loc_0908c -> restore_mouse_if_
-            // rect_intersects -> present_screen_rect (c4f0)
-            // at_si -> draw_mouse_cursor_if_needed) — the same shared present
-            // chain as the idle animator's.
-            self.present_head_dirty_rect(rect);
+            // = seg000:9e39 cmp [vision_message_type_ds_ea],0; jg loc_09e74 —
+            // while a vision message presents the mouth is never drawn (the
+            // lip bookkeeping above still ran, = 9e33). The full-screen dream
+            // keeps ds:ea = its message type until seg000:2c7a, so its head
+            // speaks with a still mouth; the in-room delivery reset ds:ea to
+            // 0xff before its voice started (seg000:2b1a), so there the mouth
+            // moves.
+            if self.data_000ea <= 0 {
+                // = seg000:9e40..9e45 — stamp the lip-id frame's sprite list
+                // over the live fb1 (draw_talking_head_at_si), clipped to the
+                // head's MOUTH BOX (9df8..9e0f) — no backdrop restore. Each lip
+                // group bundles the torso/collar sprite under the mouth
+                // sprite; the clip confines that collar redraw to the mouth
+                // box, where it erases the previous stamp's beard overhang
+                // without ever repainting the wings over the ears. The rest
+                // of the face stays owned by the still-running idle task.
+                let clip = self.mouth_clip_rect();
+                let rect = self.draw_talking_head_frame(lip_anim, frame, clip);
+                // = the seg000:9e48..9e54 draw tail (loc_0908c -> restore_mouse_
+                // if_rect_intersects -> present_screen_rect (c4f0) ->
+                // draw_mouse_cursor_if_needed) — the same shared present chain
+                // as the idle animator's.
+                self.present_head_dirty_rect(rect);
+            }
         }
         // = seg000:a811 jmp pcm_voice_stream_refill — every pass of the task
         // that leaves the voice live feeds the driver the next chunk; only
