@@ -52,6 +52,7 @@ pub fn vga_transition(state: &mut GameState, code: u16, dx: i16) {
         0x00 => transition_vertical_curtain(state, dx as u8),
         0x02 => transition_expanding_box(state),
         0x04 => transition_vertical_fold(state, dx as u8),
+        0x06 => transition_mosaic_full(state),
         0x08 => transition_dissolve_lfsr_fast(state),
         0x0c | 0x0e => transition_page_turn(state, dx),
         0x10 => transition_dotted_columns(state),
@@ -571,13 +572,8 @@ fn transition_vertical_curtain(state: &mut GameState, dl: u8) {
             }
         }
     } else {
-        // = loc_segvga_02596 — snapshot the visible screen into fb2 (DOS
-        // clobbers the fb2 buffer the same way).
-        let screen_snapshot = state.screen.pixels().to_vec();
-        state
-            .framebuffer_saved
-            .pixels_mut()
-            .copy_from_slice(&screen_snapshot);
+        // = loc_segvga_02596 — snapshot the visible screen into fb2.
+        transition_snapshot_screen_to_fb2(state);
         // = segvga:2d08 si = 0xa00, stepping up to the full byte count.
         let mut si = BAND;
         while si <= TOTAL {
@@ -818,6 +814,127 @@ fn run_dotted_pass(state: &mut GameState, fb_base: usize, row_groups: usize, rev
 // `call palette_flush` between passes; we mirror that by presenting pass 1 with
 // `screen_pal` (the displayed palette) and restoring the live `palette` before
 // pass 2.
+// = segvga:2596 transition_snapshot_screen_to_fb2 — vga_copy_screen from the
+// transition's es (the visible screen, the OLD image) to its si (fb2): all
+// 64000 bytes. The effects use the snapshot as their scratch source; fb2's
+// prior content is lost, exactly as in DOS.
+fn transition_snapshot_screen_to_fb2(state: &mut GameState) {
+    let screen_snapshot = state.screen.pixels().to_vec();
+    state
+        .framebuffer_saved
+        .pixels_mut()
+        .copy_from_slice(&screen_snapshot);
+}
+
+// = segvga:2fb7 mosaic_offsets_2x2 — the sample position (row * 320 + col
+// within the block) each 2×2 mosaic frame reads, cycled in this order.
+const MOSAIC_OFFSETS_2X2: [usize; 4] = [0x000, 0x141, 0x001, 0x140];
+// = segvga:2fd7 mosaic_offsets_4x4 — the 16 sample positions of a 4×4 block.
+const MOSAIC_OFFSETS_4X4: [usize; 16] = [
+    0x141, 0x3c0, 0x283, 0x002, 0x140, 0x3c2, 0x000, 0x281, 0x003, 0x3c1, 0x142, 0x3c3, 0x282,
+    0x001, 0x143, 0x280,
+];
+// = segvga:300f mosaic_offsets_8x8 — 16 sample positions (rows 2..5, cols
+// 0..5) of an 8×8 block.
+const MOSAIC_OFFSETS_8X8: [usize; 16] = [
+    0x3c3, 0x640, 0x505, 0x284, 0x3c0, 0x644, 0x280, 0x503, 0x285, 0x643, 0x3c4, 0x645, 0x504,
+    0x283, 0x3c5, 0x502,
+];
+// = segvga:3087 `cmp ax,24h` — each mosaic pass runs for 0x24 PIT ticks.
+const MOSAIC_PASS_TICKS: u64 = 0x24;
+// = segvga:2604 cx = 0x98 — the 152-row game area every pass covers.
+const MOSAIC_ROWS: usize = 152;
+
+// The framebuffer a mosaic pass samples: fb2 (the old-screen snapshot) for
+// the pixelate half, fb1 (the new image) for the de-pixelate half.
+#[derive(Clone, Copy)]
+enum MosaicSource {
+    Fb2,
+    Fb1,
+}
+
+// = segvga:2f53 transition_mosaic_full (transition_dispatch_table entry 3) —
+// code 0x06: the three-level mosaic. Snapshot the old screen into fb2, then
+// re-stamp the game area as 2×2, 4×4 and 8×8 blocks of the snapshot (each
+// level for 0x24 ticks, the block sample position cycling per frame so the
+// mosaic shimmers), flush the new palette at the coarsest point, and
+// de-pixelate the new image from fb1 through the same levels in reverse.
+// The vision dream enters its VIS backdrop with it (present_vision_dream,
+// seg000:2c47).
+fn transition_mosaic_full(state: &mut GameState) {
+    // = segvga:2f53 call loc_segvga_02596.
+    transition_snapshot_screen_to_fb2(state);
+    // = segvga:2f56/2f57 push ds; ds = si — the pixelate half reads fb2.
+    mosaic_pass(state, MosaicSource::Fb2, 2, &MOSAIC_OFFSETS_2X2);
+    mosaic_pass(state, MosaicSource::Fb2, 4, &MOSAIC_OFFSETS_4X4);
+    mosaic_pass(state, MosaicSource::Fb2, 8, &MOSAIC_OFFSETS_8X8);
+    // = segvga:2f62 push cs; call palette_flush.
+    palette_flush(state);
+    // = segvga:2f66 pop ds — the de-pixelate half reads the new image (fb1).
+    mosaic_pass(state, MosaicSource::Fb1, 8, &MOSAIC_OFFSETS_8X8);
+    mosaic_pass(state, MosaicSource::Fb1, 4, &MOSAIC_OFFSETS_4X4);
+    mosaic_pass(state, MosaicSource::Fb1, 2, &MOSAIC_OFFSETS_2X2);
+}
+
+// = segvga:2fc1 / 2ff9 / 3031 mosaic_pass_2x2 / _4x4 / _8x8 — one mosaic
+// level: bx = [bp] (the PIT counter at entry), then walk the offset table,
+// stamping the whole game area once per entry, restarting the table at its
+// 0xffff sentinel, until the stamp's tick check (segvga:3082, `[bp] - bx <
+// 0x24`) clears the carry. DOS re-stamps as fast as the CPU allows; the
+// port presents one frame per PIT tick.
+fn mosaic_pass(state: &mut GameState, source: MosaicSource, size: usize, offsets: &[usize]) {
+    // = segvga:30c6 / 3091 / 3048 di = fb_base_ofs.
+    let fb_base = state.y_offset as usize * state.screen.w() as usize;
+    let start = state.game_ticks();
+    let mut i = 0;
+    loop {
+        let ofs = offsets[i];
+        // = the `js` restart at the table's 0xffff sentinel.
+        i = (i + 1) % offsets.len();
+        {
+            let GameState {
+                screen,
+                framebuffer,
+                framebuffer_saved,
+                ..
+            } = state;
+            let src = match source {
+                MosaicSource::Fb2 => framebuffer_saved,
+                MosaicSource::Fb1 => framebuffer,
+            };
+            mosaic_stamp(screen.pixels_mut(), src.pixels(), fb_base, size, ofs);
+        }
+        state.present_transition_frame_ticks(1);
+        // = segvga:3082..308a `mov ax,[bp]; sub ax,bx; cmp ax,24h` — carry
+        // (another table entry) while under 0x24 ticks.
+        if state.game_ticks().wrapping_sub(start) >= MOSAIC_PASS_TICKS {
+            break;
+        }
+    }
+}
+
+// = segvga:30c5 / 308c / 3047 mosaic_stamp_2x2 / _4x4 / _8x8 — stamp the
+// 152-row game area as `size`×`size` blocks: every block takes the single
+// source pixel at `ofs` (row * 320 + col) inside it. 2×2: `lodsb; inc si`
+// then the pair written to di and di+320; 4×4 / 8×8: `lodsb; add si,3/7`
+// then 4 / 8 rows of `stosw`s.
+fn mosaic_stamp(dst: &mut [u8], src: &[u8], fb_base: usize, size: usize, ofs: usize) {
+    const W: usize = 320;
+    for by in 0..MOSAIC_ROWS / size {
+        let row0 = fb_base + by * size * W;
+        for bx in 0..W / size {
+            let block = row0 + bx * size;
+            let v = src.get(block + ofs).copied().unwrap_or(0);
+            for r in 0..size {
+                let d = block + r * W;
+                if d + size <= dst.len() {
+                    dst[d..d + size].fill(v);
+                }
+            }
+        }
+    }
+}
+
 fn transition_dotted_columns(state: &mut GameState) {
     // = segvga:2604 cx = 152 — the 152-row game area.
     dotted_columns_reveal(state, DOTTED_ROWS >> 2);
@@ -2601,5 +2718,38 @@ mod tests {
             assert!(next <= 63, "dst overshot 63: {dst} -> {next}");
             dst = next;
         }
+    }
+}
+
+#[cfg(test)]
+mod mosaic_tests {
+    use super::mosaic_stamp;
+
+    // mosaic_stamp fills each block with its sampled pixel: an 8×8 block
+    // takes the pixel at row 5 / col 5 (offset 0x645) of the source block.
+    #[test]
+    fn mosaic_stamp_fills_blocks_from_the_sampled_pixel() {
+        let mut src = vec![0u8; 320 * 200];
+        // Mark the (5, 5) pixel of the block at column 1, row-group 0, with
+        // fb_base 320 * 10.
+        let fb_base = 320 * 10;
+        src[fb_base + 8 + 0x645] = 7;
+        let mut dst = vec![1u8; 320 * 200];
+        mosaic_stamp(&mut dst, &src, fb_base, 8, 0x645);
+        for r in 0..8 {
+            assert!(
+                dst[fb_base + r * 320 + 8..fb_base + r * 320 + 16]
+                    .iter()
+                    .all(|&p| p == 7)
+            );
+            assert!(
+                dst[fb_base + r * 320..fb_base + r * 320 + 8]
+                    .iter()
+                    .all(|&p| p == 0)
+            );
+        }
+        // Rows outside the 152-row area are untouched.
+        assert!(dst[fb_base + 152 * 320..].iter().all(|&p| p == 1));
+        assert!(dst[..fb_base].iter().all(|&p| p == 1));
     }
 }
