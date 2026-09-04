@@ -548,9 +548,18 @@ impl GameState {
     // draw the 6 nav records. Also reached from the command panel's nav rebuild
     // (loc_02ffb) once it has populated records 12..18.
     pub(crate) fn ui_draw_nav_panel(&mut self) {
-        // = seg000:d741 loc_0d741 — when record[2].sprite_id is in 3..6 (the
-        // closed/open-book frieze states), fill the nav-panel rect (seg001:2458)
-        // with colour 0xf0 before drawing the panel's records over it.
+        // = seg000:d735 call loc_0d741 — the panel background.
+        self.ui_fill_nav_panel_background();
+        // = seg000:d738 si=1b8eh; cx=6; draw records 12..18.
+        self.draw_ui_elements_list(NAV_PANEL_RECORD_OFFSET, NAV_PANEL_RECORD_COUNT);
+    }
+
+    // = seg000:d741 loc_0d741 — when record[2].sprite_id is in 3..6 (the
+    // closed/open-book frieze states), fill the nav-panel rect (seg001:2458)
+    // with colour 0xf0. Run before the nav records are drawn over it, and on
+    // its own by the game-over presenter (apply_pending_room_screen_request),
+    // which blanks the compass under the RESTART / LOAD / EXIT menu.
+    pub(crate) fn ui_fill_nav_panel_background(&mut self) {
         if (self.ui_elements[2].sprite_id as u16).wrapping_sub(3) < 3 {
             // = seg000:d74f mov es, [_word_2D088_screen_buffer_seg] — the fill
             // targets the FRONT buffer, like every draw_ui_element (the one
@@ -560,8 +569,6 @@ impl GameState {
             // visible screen.
             gfx::vga_fill_rect(self, self.screen_buffer, 254, 162, 296, 193, 0xf0);
         }
-        // = seg000:d738 si=1b8eh; cx=6; draw records 12..18.
-        self.draw_ui_elements_list(NAV_PANEL_RECORD_OFFSET, NAV_PANEL_RECORD_COUNT);
     }
 
     // = seg000:daa3 clear_mouse_nav_rect — clear the navigation mouse

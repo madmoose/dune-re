@@ -28,7 +28,9 @@ const MAP_CELLS: usize = 0xc5fc;
 /// Image offsets of the four regions (= the create_save_in_memory copy order).
 const OFS_MAP: usize = 0;
 const OFS_LOG: usize = OFS_MAP + MAP_CELLS / 4; // 0x317f
-const OFS_DIALOGUE: usize = OFS_LOG + 0xa2; // 0x3221
+/// = seg000:b457 — the dialogue-played log region is 0xa2 bytes.
+const LOG_LEN: usize = 0xa2;
+const OFS_DIALOGUE: usize = OFS_LOG + LOG_LEN; // 0x3221
 const OFS_STATE: usize = OFS_DIALOGUE + 0x11f8; // 0x4419
 /// = seg001:1225..1261 atreides_palace_rooms: the scene records inside the
 /// state block (the 0x1261 cut lands exactly on the end of the 12th record).
@@ -186,9 +188,9 @@ impl GameState {
 
         // = seg000:b452..b45a — the dialogue-played log at cs:00aa..014b: the
         // 0-terminated word list of replayable spoken lines. The region holds
-        // at most 0x50 words + the terminator. (DOS snapshots the raw bytes,
+        // at most 0x50 words + the terminator. DOS snapshots the raw bytes,
         // which past the terminator are the initialize_resources code the log
-        // grows over; the port writes zeroes there.)
+        // grows over; that code is not game state, so the port writes zeros.
         for (k, word) in self.dialogue_played_log.iter().take(0x50).enumerate() {
             w16(&mut image, OFS_LOG + 2 * k, *word);
         }
@@ -501,6 +503,50 @@ impl GameState {
         w16(b, 0x1174, self.last_event_game_time);
         w16(b, 0x1176, self.location_visibility_distance);
         w8(b, 0x1178, self.number_of_rallied_troops_for_leto_killed);
+        // = seg001:113e a static 0xff byte between smugglers[] and
+        //   current_smuggler_ptr.
+        w8(b, 0x113e, 0xff);
+        // = seg001:115c/115e/116a the SEE RESULTS trend state.
+        w16(b, 0x115c, self.results_stats_timestamp);
+        for (k, v) in self.results_prev_values.iter().enumerate() {
+            w16(b, 0x115e + 2 * k, *v);
+        }
+        b[0x116a..0x1170].copy_from_slice(&self.results_trend_glyphs);
+        // = seg001:116b/116d/116f data_0116b/d/f — three static 3 bytes
+        //   interleaved with the glyphs (the port does not model them).
+        w8(b, 0x116b, 3);
+        w8(b, 0x116d, 3);
+        w8(b, 0x116f, 3);
+        // = seg001:11b9/11ba two static bytes (7, 12h) ahead of data_011bb.
+        w8(b, 0x11b9, 7);
+        w8(b, 0x11ba, 0x12);
+        // = seg001:11bf book_bookmark_ptr.
+        w16(b, 0x11bf, self.book_bookmark_ptr);
+        // = seg001:11c1/11c3 data_011c1/011c3 — the spice-density overlay's
+        //   home panel origin (75, 15), constants in the port.
+        w16(b, 0x11c1, 75);
+        w16(b, 0x11c3, 15);
+        // = seg001:11d0 troop_icon_panel_heights (88, 60, 30), constants in
+        //   the port (troop_map_screen HEIGHTS).
+        b[0x11d0..0x11d3].copy_from_slice(&[0x58, 0x3c, 0x1e]);
+        // = seg001:11dd _stru_2068D_icon_list — two static (index, x, y)
+        //   UISprite entries: (31h, 0, 4ch), (1, 0, 86h).
+        for (k, w) in [0x31u16, 0, 0x4c, 1, 0, 0x86].iter().enumerate() {
+            w16(b, 0x11dd + 2 * k, *w);
+        }
+        // = seg001:11e9 data_011e9 — static 0xffff.
+        w16(b, 0x11e9, 0xffff);
+        // = seg001:120b _stru_206BB_icon_list — four static entries and the
+        //   0xffff terminator index: (0, b6h, 0ch), (3, 10ah, 41h),
+        //   (4, 0eeh, 41h), (5, 0c1h, 41h).
+        for (k, w) in [
+            0u16, 0xb6, 0x0c, 3, 0x10a, 0x41, 4, 0xee, 0x41, 5, 0xc1, 0x41, 0xffff,
+        ]
+        .iter()
+        .enumerate()
+        {
+            w16(b, 0x120b + 2 * k, *w);
+        }
 
         // = seg001:1179 comm_sighting_list — the count lives at 00c8.
         for (k, word) in self.comm_sightings.iter().take(10).enumerate() {
@@ -772,6 +818,15 @@ impl GameState {
         self.spice_stock_at_last_new_day = r16(b, 0x1170);
         self.spice_spent_today = r16(b, 0x1172);
         self.last_event_game_time = r16(b, 0x1174);
+        // = seg001:115c/115e/116a the SEE RESULTS trend state.
+        self.results_stats_timestamp = r16(b, 0x115c);
+        for (k, v) in self.results_prev_values.iter_mut().enumerate() {
+            *v = r16(b, 0x115e + 2 * k);
+        }
+        self.results_trend_glyphs
+            .copy_from_slice(&b[0x116a..0x1170]);
+        // = seg001:11bf book_bookmark_ptr.
+        self.book_bookmark_ptr = r16(b, 0x11bf);
         self.location_visibility_distance = r16(b, 0x1176);
         self.number_of_rallied_troops_for_leto_killed = r8(b, 0x1178);
 
@@ -1035,9 +1090,11 @@ impl GameState {
     // view toggle to preserve across the restore.
     pub(crate) fn pre_load_fixups(&mut self) -> u8 {
         // = seg000:b3b0..b3b7 loc_00e49 — drain a pending room-screen request
-        //   first (the port clears the request and the lip-sync id; the
-        //   loc_00e6c transition draw is not ported).
+        //   first: play DEAD2.HNM (video 0dh) over the game-over screen
+        //   (play_hnm_after_lip_sync_stop), then clear the request and the
+        //   lip-sync id.
         if self.pending_room_screen_request != 0 {
+            self.play_hnm_after_lip_sync_stop(0x0d);
             self.pending_room_screen_request = 0;
             self.current_lip_sync_resource_id = 0;
         }
@@ -1130,6 +1187,78 @@ mod tests {
 
     use super::*;
     use crate::dat_file::DatFile;
+
+    // Port-only diagnostic: diff the port's fresh-game image against a
+    // dune37s0.sav written by the original (DUNE37S0-ORIGINAL.SAV in the
+    // workspace root). Run with:
+    //   cargo test -p dune --bin dune -- --ignored diff_initial_save --nocapture
+    #[test]
+    #[ignore = "needs assets/DUNE.DAT and DUNE37S0-ORIGINAL.SAV"]
+    fn diff_initial_save_against_original() {
+        use std::sync::mpsc;
+
+        use crate::dat_file::DatFile;
+
+        let dat_path = concat!(env!("CARGO_MANIFEST_DIR"), "/../../assets/DUNE.DAT");
+        let sav_path = concat!(env!("CARGO_MANIFEST_DIR"), "/../../DUNE37S0-ORIGINAL.SAV");
+        let (Ok(dat_file), Ok(data)) = (DatFile::open(dat_path), std::fs::read(sav_path)) else {
+            eprintln!("skipping: {dat_path} or {sav_path} not found");
+            return;
+        };
+        let (tx, _rx) = mpsc::sync_channel(64);
+        let mut game = GameState::new(dat_file, tx);
+        game.set_headless();
+        game.start(true);
+        let ours = game.initial_game_image.clone().expect("no initial image");
+        let header = u16::from_le_bytes([data[0], data[1]]);
+        let theirs = decompress_sav(&data[2..]);
+        // Expected differences: seg001:0000 rand_bits (runtime random), the
+        // packed map byte 0x317e (DOS packs 3 cells past the MAP resource),
+        // and the dialogue-played log region past its terminator (DOS
+        // snapshots initialize_resources' code bytes there; the port zeros).
+        println!(
+            "original: header game_time={header:#x} image={:#x} bytes",
+            theirs.len()
+        );
+        println!(
+            "port:     game_time={:#x} image={:#x} bytes",
+            game.game_time,
+            ours.len()
+        );
+        assert_eq!(theirs.len(), IMAGE_LEN);
+        assert_eq!(ours.len(), IMAGE_LEN);
+        let regions = [
+            ("map overlay bits", 0usize, 0x317f, 0usize, "map"),
+            ("dialogue-played log", 0x317f, 0xa2, 0xaa, "cs"),
+            ("DIALOGUE snapshot", 0x3221, 0x11f8, 0xaa76, "seg001"),
+            ("game-state block", 0x4419, 0x1261, 0, "seg001"),
+        ];
+        for (name, start, len, base, seg) in regions {
+            let a = &theirs[start..start + len];
+            let b = &ours[start..start + len];
+            let diffs = a.iter().zip(b).filter(|(x, y)| x != y).count();
+            println!("== {name}: {diffs} differing bytes of {len:#x}");
+            let mut i = 0;
+            let mut shown = 0;
+            while i < len && shown < 60 {
+                if a[i] != b[i] {
+                    let run_start = i;
+                    while i < len && a[i] != b[i] && i - run_start < 16 {
+                        i += 1;
+                    }
+                    let addr = base + run_start;
+                    println!(
+                        "  {seg}:{addr:04x} (+{run_start:#06x}) orig={:02x?} port={:02x?}",
+                        &a[run_start..i],
+                        &b[run_start..i]
+                    );
+                    shown += 1;
+                } else {
+                    i += 1;
+                }
+            }
+        }
+    }
 
     #[test]
     fn rle_matches_dos_encoding() {

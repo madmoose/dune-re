@@ -783,6 +783,18 @@ impl GameState {
         //   seg000:96db or forced by play_dialogue_voc_with_bank_flag); the
         //   WHAT verb replays with the saved value.
         self.last_line_voc_bank_flag = self.data_047dc;
+        // = seg000:a6cc..a6e4 load_voc_and_lipsync_data's game-over branch:
+        //   with current_lip_sync_resource_id == 0xffff (apply_pending_room_
+        //   screen_request) the line is not the subtitle's phrase but the
+        //   fixed index in data_0a6d3 (0x0fff, alternately 0x1fff — the
+        //   variant-B file), named after the head's own letter
+        //   (talking_head_id): PM\PMFFFO.VOC for the Harkonnen captain.
+        if self.current_lip_sync_resource_id == 0xffff {
+            let index = self.game_over_voc_index;
+            self.game_over_voc_index ^= 0x1000;
+            self.play_talking_head_voc(index);
+            return;
+        }
         // = seg000:9f03..9f0a ax = current_subtitle_id; bx =
         //   current_lip_sync_resource_id; call load_voc_and_lipsync_data (a6cc).
         //   Its index transform:

@@ -103,18 +103,21 @@ impl SceneRecord {
     }
 }
 
-// = seg001:13c4 scene dispatch table, indexed by dh (0x00..0x2f). Each entry
+// = seg001:13c4 scene dispatch table, indexed by dh (0x00..0x30). Each entry
 // is an index into SCENE_RECORDS picking the first record of a scene-record
 // run (palace_rooms, sietch_rooms, …). The original table holds seg001 byte
-// offsets (0x1225 + index * 5); converted here to record indices.
+// offsets (0x1225 + index * 5); converted here to record indices. Entry 0x30
+// is harkonnen_palace_rooms (seg001:13ba), the Arrakeen-Harkonnen palace
+// scene (its location appearance is 0x30).
 #[rustfmt::skip]
-const SCENE_DISPATCH: [u8; 0x30] = [
+const SCENE_DISPATCH: [u8; 0x31] = [
     12, 14, 16, 18, 20, 22, 25, 28,
     31, 35, 39, 43, 47, 51, 55, 59,
     63, 14, 16, 18, 20, 22, 25, 28,
     31, 35, 39, 43, 47, 51, 55, 59,
      0, 68, 68, 68, 68, 68, 68, 68,
     69, 72, 75, 78, 69, 72, 75, 78,
+    81,
 ];
 
 // = seg001:1225..13c4 scene records (palace_rooms at index 0, sietch_rooms at
@@ -1454,7 +1457,7 @@ impl GameState {
 // 16-tick day spans the table once and each whole-day rollover shifts the
 // gradient by 4 sub-palettes. At intro2 entry game_time == 0 → table[0] = 8;
 // the in-game clock advances it as the day progresses.
-fn sky_palette_id_from_game_time(game_time: u16) -> usize {
+pub(crate) fn sky_palette_id_from_game_time(game_time: u16) -> usize {
     // = seg001:2280 byte_21730 db 8,8,9,9,9,9,9,9,9,9,9,Ah,Ah,Bh,Bh,Bh.
     const SKY_TABLE: [u8; 16] = [8, 8, 9, 9, 9, 9, 9, 9, 9, 9, 9, 10, 10, 11, 11, 11];
     let al = (game_time & 0xff) as u8;

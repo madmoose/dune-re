@@ -993,9 +993,11 @@ impl GameState {
             self.blit_repeated_x(3, rect);
             return false;
         }
-        // = seg000:8f8d/8f94 the dusk strip and pending room transitions
-        //   paint no background at all (loc_08fd0).
-        if self.data_0227d != 0 {
+        // = seg000:8f8d/8f94 the dusk strip and a pending room-screen
+        //   request (the game-over screen, whose byte is already 0x80 when
+        //   its line is shown) paint no background at all (loc_08fd0): the
+        //   glyphs go straight over the scene.
+        if self.data_0227d != 0 || self.pending_room_screen_request != 0 {
             return false;
         }
         // = seg000:8f9b voice_subtitle_mode == 0 -> loc_0900b: the text-mode

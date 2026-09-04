@@ -272,7 +272,7 @@ pub(crate) const MENU_LOAD_GAME: MenuDef = menu(0xfe, &[
 /// = seg001:20a2 menu_restart_load_exit_game
 #[rustfmt::skip]
 pub(crate) const MENU_RESTART_LOAD_EXIT_GAME: MenuDef = menu(0xff, &[
-    item(cmd::RESTART_GAME, 0x0e47, |_, _, _| println!("menu: RESTART GAME (seg000:0e47) not ported")),
+    item(cmd::RESTART_GAME, 0x0e47, GameState::menu_callback_choice_multiple_restart_game),
     item(cmd::LOAD_GAME,    0xb29e, GameState::menu_callback_choice_mirror_room_load_game),
     item(cmd::EXIT_GAME,    0x0e3e, GameState::menu_callback_choice_exit_game),
     item(cmd::WHAT,         0x9ed5, GameState::menu_callback_choice_what),

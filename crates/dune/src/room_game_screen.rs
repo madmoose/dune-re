@@ -17,8 +17,24 @@ use crate::{
     game_ui::NAV_PANEL_RECORD_OFFSET,
     gfx, locations,
     menu_defs::{self, CMD_GREY, MenuCleanupFn, MenuItem, MenuItemCallback, MenuRef, item},
+    panel::{MapPanelRef, PanelRecord, panel},
+    rect::rect,
+    room_scene::sky_palette_id_from_game_time,
     sprite_bank,
 };
+
+// = seg001:2254 data_02254 — the game-over face panel: the box the mocking
+// portrait is drawn into (frame 0xfd, fill 0xf2), top-left of the game area.
+const GAME_OVER_FACE_PANEL: PanelRecord = panel(MapPanelRef::None, rect(20, 3, 81, 64), 0xfd, 0xf2);
+
+// = seg001:225d data_0225d read byte-wise (seg000:0df2 xlat) — the person
+// whose head mocks the player for each game-over request code (1..7);
+// negative = no face. The same bytes are the COMM face-position words
+// messages.rs reads per person (COMM_FACE_POS). Codes: 2 shot down over the
+// Harkonnen zone (the captain, 0x0c), 3 the Water of Life (Stilgar, 5),
+// 4 landing at a fortress (0x0a), 6 captured after a lost battle (9),
+// 7 the Emperor's Sardaukar (0x0b).
+const GAME_OVER_FACE_PERSON: [i8; 8] = [-0x0e, -1, 0x0c, 0x05, 0x0a, -1, 0x09, 0x0b];
 
 // = the seg001 command-record templates (seg001:21dc..221c), each a 4-byte
 // [text_id:u16, handler_ofs:u16]. build_room_command_records copies these into
@@ -528,6 +544,222 @@ impl GameState {
         self.game_clock_tick_base = self.game_ticks() as u16;
         // = seg000:18b7 jmp ui_hud_head_animate_up.
         self.ui_hud_head_animate_up();
+    }
+
+    // = seg000:0d8e apply_pending_room_screen_request — apply a pending
+    // room-screen request, once per game-loop pass (seg000:d848). The positive
+    // codes are the game-over screens: 2 = shot down over the Harkonnen zone
+    // (travel_route_hostile_zone_check), 3 = the Water of Life (dialogue.rs),
+    // 6 = captured after a lost battle, 7 = the Emperor's Sardaukar
+    // (events.rs). Phrase 0xba + code is the mocking line, GAME_OVER_FACE_PERSON
+    // its speaker. Once presented the byte is flipped to 0x80, which keeps the
+    // loop's pre-swap hooks and this handler suspended until RESTART / LOAD.
+    pub(crate) fn apply_pending_room_screen_request(&mut self) {
+        // = seg000:0d8e cmp comm_displayed_message_person,0; jnz ret — a COMM
+        //   message face owns the screen.
+        if self.comm_displayed_message_person != 0 {
+            return;
+        }
+        // = seg000:0d95..0d9b a negative request (0x80: already presented) is
+        //   left alone.
+        if (self.pending_room_screen_request as i8) < 0 {
+            return;
+        }
+        // = seg000:0d9e/0da1 data_0473b = 0; data_046ec = 0 — drop the
+        //   scheduler's room-redraw request and the map-view dirty count.
+        self.room_redraw_request = 0;
+        self.spice_density_overlay_dirty = 0;
+        // = seg000:0da4/0da8 a negative room_view_toggle (the map/globe view
+        //   is up): switch back to the room view first and leave the request
+        //   pending — the next pass presents the game over.
+        if (self.room_view_toggle as i8) < 0 {
+            // = seg000:0daa call call_restore_cursor; 0dad jmp ui_toggle_room_view.
+            self.call_restore_cursor();
+            self.ui_toggle_room_view();
+            return;
+        }
+        // = seg000:0db0 loc_00db0 — the game-over presentation.
+        // = seg000:0db0 call dismiss_stacked_overlays — pop the transient
+        //   menus (a fly-over warning's cleanup resumes the flight view).
+        self.dismiss_stacked_menus();
+        // = seg000:0db3 call game_over_sky_flash.
+        self.game_over_sky_flash();
+        // = seg000:0db6/0db9 restore the cursor, drop the scene lip-sync.
+        self.call_restore_cursor();
+        self.reset_scene_lip_sync_state();
+        // = seg000:0dbc game_time = 16c5h — the clock freezes on the game-over
+        //   date.
+        self.game_time = 0x16c5;
+        // = seg000:0dc2 call game_over_play_death_video.
+        self.game_over_play_death_video();
+        // = seg000:0dc5 data_011ca = 1 — the travel pump stays suspended.
+        self.data_011ca = 1;
+        // = seg000:0dca call loc_09f40 — fb1 active, the in-room subtitle
+        //   pads and the tall font.
+        self.prepare_dialogue_presentation();
+        // = seg000:0dcd current_lip_sync_resource_id = 0xffff — the voice
+        //   load takes its game-over branch (play_dialogue_voc).
+        self.current_lip_sync_resource_id = 0xffff;
+        // = seg000:0dd3..0ddb al = 80h; xchg al,[pending_room_screen_request]
+        //   — take the code, leave 0x80 behind.
+        let code = std::mem::replace(&mut self.pending_room_screen_request, 0x80) as u16;
+        // = seg000:0ddc..0de5 phrase 0bah + code, drawn as a voice subtitle
+        //   with the bubble pointer cleared on both sides so nothing restores
+        //   a prior bubble under it and nothing restores it later.
+        self.subtitle_bubble = None;
+        self.show_voice_subtitle(cmd::RESTART_GAME + code);
+        self.subtitle_bubble = None;
+        // = seg000:0de8/0deb si = data_02254; call loc_07b1b — the face panel.
+        self.map_draw_panel_record(GAME_OVER_FACE_PANEL);
+        // = seg000:0dee call clear_frame_tasks.
+        self.remove_all_frame_tasks();
+        // = seg000:0df1..0df8 xlat data_0225d — the mocking face; negative =
+        //   none.
+        let face = GAME_OVER_FACE_PERSON
+            .get(code as usize)
+            .copied()
+            .unwrap_or(-1);
+        if face >= 0 {
+            // = seg000:0dfa call setup_lip_sync_data_from_sprite_sheet — open
+            //   the person's portrait sheet.
+            self.open_talking_head_resource(face as u8, 0);
+            // = seg000:0dfd..0e05 ax = [sheet first word] / 2 - 3 — the sheet's
+            //   entry count less three: the game-over portrait is its last two
+            //   sprites before the lip-sync resource.
+            // = seg000:0e08..0e18 draw them both at (x0 + 1, y0 + 1) of the
+            //   panel; draw_sprite_clobbering_bx_dx places the second at the
+            //   same spot.
+            if let Some(head) = self.talking_head.take() {
+                let first = head.sheet.resource_count().wrapping_sub(3);
+                let x = GAME_OVER_FACE_PANEL.rect.x0 + 1;
+                let y = GAME_OVER_FACE_PANEL.rect.y0 + 1;
+                let _ = gfx::draw_sprite_on_framebuffer(self, &head.sheet, first, x, y);
+                let _ = gfx::draw_sprite_on_framebuffer(self, &head.sheet, first + 1, x, y);
+                self.talking_head = Some(head);
+            }
+            // = seg000:0e1b call [gfx_vtable_vga_palette_flush].
+            self.update_screen_palette();
+            // = seg000:0e1f call loc_09efd — the mocking line's voice.
+            self.play_dialogue_voc();
+        }
+        // = seg000:0e22 loc_00e22 — copy the composed screen out and disarm
+        //   the travel pump.
+        self.gfx_copy_whole_framebuf_to_screen();
+        self.travel_active = 0;
+        // = seg000:0e2a call loc_0d741 — blank the compass area.
+        self.ui_fill_nav_panel_background();
+        // = seg000:0e2d data_047a7 = 1 — no room dialogue may start over it.
+        self.data_047a7 = 1;
+        // = seg000:0e32..0e38 bp = menu_restart_load_exit_game; bx =
+        //   nullsub_00f66; call loc_0d323 — the RESTART / LOAD / EXIT menu.
+        self.screen_overlay_request_transition();
+        self.menu_stack_push(MenuRef::MenuRestartLoadExitGame, None);
+        self.play_pending_panel_fold();
+        self.highlight_hovered_text_action_item();
+        // = seg000:0e3b jmp draw_mouse.
+        self.draw_mouse();
+        if !self.front_buffer_is_fb1() {
+            self.send_frame_to_display();
+        }
+    }
+
+    // = seg000:0d45 game_over_sky_flash — the game-over sky flash: aim the sky
+    // fade at the game-time sub-palette, then three times write sky
+    // sub-palette 0x28 live and fade half-way back (countdown 0x20 down to
+    // 0x10, one loc_0391d step per 3 ticks), and finally fade the rest of the
+    // way. suppress_sky_240_255 is raised across the loop so the 240..255 span
+    // is untouched.
+    fn game_over_sky_flash(&mut self) {
+        // = seg000:0d45/0d48 the sub-palette for game_time, from SKY.HSQ (or
+        //   SKYDN.HSQ, sky_skydn_selector), into the fade target (loc_039b9).
+        let sub = sky_palette_id_from_game_time(self.game_time);
+        let (resource, dest_start, count) = if self.sky_skydn_selector != 0 {
+            ("SKYDN.HSQ", 73, 151)
+        } else {
+            ("SKY.HSQ", 128, 80)
+        };
+        self.load_sky_palette_to_fade_target(resource, sub, 0, count, dest_start);
+        // = seg000:39d2/39e5 the secondary 240..255 span when [227dh] == 0.
+        if self.data_0227d == 0 {
+            self.load_sky_palette_to_fade_target(resource, sub, count, 16, 240);
+        }
+        // = seg000:0d4e inc suppress_sky_240_255.
+        self.data_0227d = self.data_0227d.wrapping_add(1);
+        // = seg000:0d52..0d77 three flashes.
+        for _ in 0..3 {
+            // = seg000:0d56..0d5e bl = 28h — the flash sub-palette straight
+            //   into the live palette (loc_0398c; the secondary span is
+            //   skipped while suppressed), then flushed.
+            self.open_sky_palette(resource, 0x28, 0, count, dest_start);
+            self.update_screen_palette();
+            // = seg000:0d61 sky_fade_countdown = 20h.
+            self.sky_fade_countdown = 0x20;
+            // = seg000:0d66..0d74 fade steps every 3 ticks until < 10h.
+            while self.sky_fade_countdown >= 0x10 {
+                self.wait_processing_frame_tasks_interruptable(3, |s| s.game_over_sky_flash_step());
+            }
+        }
+        // = seg000:0d79..0d87 fade the remainder to 0.
+        while self.sky_fade_countdown != 0 {
+            self.wait_processing_frame_tasks_interruptable(3, |s| s.game_over_sky_flash_step());
+        }
+        // = seg000:0d89 dec suppress_sky_240_255.
+        self.data_0227d = self.data_0227d.wrapping_sub(1);
+    }
+
+    // = seg000:391d loc_0391d as the flash's bp — one fade step of the sky
+    // span toward the fade target (vga_fade_step with al = the countdown),
+    // then the countdown decrements. The DOS step writes the DAC directly, so
+    // the port presents.
+    fn game_over_sky_flash_step(&mut self) {
+        let countdown = self.sky_fade_countdown;
+        self.sky_palette_fade_step(countdown);
+        self.sky_fade_countdown = self.sky_fade_countdown.wrapping_sub(1);
+        self.send_frame_to_display();
+    }
+
+    // = seg000:0e66 game_over_play_death_video — refresh the room music
+    // (loc_0ad5e) and play DEAD.HNM (video 0x0c) to completion.
+    fn game_over_play_death_video(&mut self) {
+        // = seg000:0e66 call loc_0ad5e.
+        self.update_room_music();
+        // = seg000:0e69 ax = 0ch; falls into play_hnm_after_lip_sync_stop.
+        self.play_hnm_after_lip_sync_stop(0x0c);
+    }
+
+    // = seg000:0e6c play_hnm_after_lip_sync_stop — stop the lip-sync, then
+    // foreground-play HNM `video_id` (loc_0c8fb) with ui_hud_head_animate_down
+    // as the first-frame reveal. The game-over screen plays DEAD.HNM (0x0c)
+    // through here; RESTART GAME plays DEAD2.HNM (0x0d).
+    pub(crate) fn play_hnm_after_lip_sync_stop(&mut self, video_id: u16) {
+        // = seg000:0e6d call lip_sync_stop.
+        self.lip_sync_stop();
+        // = seg000:0e71/0e74 bp = ui_hud_head_animate_down; jmp loc_0c8fb.
+        self.play_hnm_to_completion(video_id, |s| s.ui_hud_head_animate_down());
+    }
+
+    // = seg000:0e47 menu_callback_choice_multiple_restart_game — the RESTART
+    // GAME verb of the game-over menu (and the mirror-room menu). DOS loads
+    // the fresh-game image dune37s0.sav (cl = 0xff is the slot the load's
+    // `add cl,31h` turns into the '0' digit), draining the pending game-over
+    // request on the way (loc_00e49). The port restores the same image from
+    // memory (initial_game_image, taken where create_save_cl wrote the file)
+    // and runs the load's two halves around it, so no save file is needed.
+    pub(crate) fn menu_callback_choice_multiple_restart_game(
+        &mut self,
+        _text_id: u16,
+        _index: usize,
+    ) {
+        let Some(image) = self.initial_game_image.clone() else {
+            println!("RESTART GAME: no initial game image (start() did not run)");
+            return;
+        };
+        // = seg000:0e49 loc_00e49 + seg000:b3b0..b3cd — the pre-load half.
+        let toggle = self.pre_load_fixups();
+        // = seg000:b3ed call restore_from_save_memory.
+        self.restore_from_save_memory(&image);
+        // = seg000:b3f1..b424 — the post-load half.
+        self.post_load_fixups(toggle);
     }
 
     // ---- Command / HUD click dispatch -------------------------------------
@@ -2791,6 +3023,19 @@ impl GameState {
     // screen with effect `effect` (DOS al, via the segvga vga_transition) and
     // flush the palette.
     pub(crate) fn transition(&mut self, effect: u8, dx: i16, render: fn(&mut GameState)) {
+        self.transition_with_midpoint(effect, dx, render, None);
+    }
+
+    // Port-only variant of `transition` (= seg000:c108) that forwards
+    // vga_transition's midpoint hook — see gfx::vga_transition for when it
+    // fires. Used by the intro to pin chapter markers to the reveal.
+    pub(crate) fn transition_with_midpoint(
+        &mut self,
+        effect: u8,
+        dx: i16,
+        render: fn(&mut GameState),
+        midpoint: gfx::TransitionMidpoint,
+    ) {
         // = seg000:c108 in_transition = 0x80.
         self.in_transition = 0x80;
         // = seg000:c10f run the render routine with the front buffer redirected
@@ -2806,7 +3051,7 @@ impl GameState {
         // turn (0x0e) reads its sign for the turn direction; most callers
         // leave it 0 (look_at_mirror `xor dx,dx`, ui_present_room_screen
         // `dx = 0`).
-        gfx::vga_transition(self, effect as u16, dx);
+        gfx::vga_transition(self, effect as u16, dx, midpoint);
         // = seg000:c12a gfx_copy_whole_framebuf_to_screen — leave the final fb1
         // image on the screen (also covers the not-yet-ported effects).
         self.gfx_copy_whole_framebuf_to_screen();

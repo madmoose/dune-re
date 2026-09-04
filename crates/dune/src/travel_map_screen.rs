@@ -14,7 +14,7 @@ use crate::{
     game_ui::MouseHandlers,
     gfx,
     locations::{location_index_from_ptr, location_ptr},
-    menu_defs::{self, MenuItem, MenuRef},
+    menu_defs::{self, CMD_GREY, MenuItem, MenuRef},
     rect::rect,
     room_game_screen::{NPC_COMPANION, NPC_DETACH_ON_TRAVEL},
     sprite_bank,
@@ -1959,9 +1959,10 @@ impl GameState {
             return;
         }
         // = seg000:35fc without a companion aboard only the hostile-zone
-        //   warning runs (loc_03637); the cabin view needs someone to speak.
+        //   check runs (travel_hostile_zone_warning_no_companion, loc_03637);
+        //   the cabin view needs someone to speak.
         if self.companions[0] == -1 && self.companions[1] == -1 {
-            self.travel_route_hostile_zone_check();
+            self.travel_hostile_zone_warning_no_companion();
             return;
         }
         // = seg000:3603 detect a location the flight passes near.
@@ -1995,6 +1996,51 @@ impl GameState {
             //   command menu and, for action 4, rebuild the room nav panel.
             self.install_pending_room_action_menu();
         }
+    }
+
+    // = seg000:3637 travel_hostile_zone_warning_no_companion — the
+    // companionless fly-over branch of travel_settle_companion_dispatch: run
+    // the hostile-zone check and, when it arms pending_room_action 4, present
+    // the full-screen "**** WARNING **** ENTERING HARKONNEN ZONE" screen over
+    // the cockpit with the CHANGE DESTINATION / IGNORE WARNING menu. The
+    // flight pump is suspended (data_011ca) until the menu's cleanup
+    // (travel_resume_flight_view) resumes it.
+    fn travel_hostile_zone_warning_no_companion(&mut self) {
+        // = seg000:3637 call travel_route_hostile_zone_check.
+        self.travel_route_hostile_zone_check();
+        // = seg000:363a/363f no pending room-action -> nothing to show.
+        if self.pending_room_action == 0 {
+            return;
+        }
+        // = seg000:3641 call call_restore_cursor.
+        self.call_restore_cursor();
+        // = seg000:3644 call map_screen_draw_base — the cockpit base into fb1.
+        self.map_screen_draw_base();
+        // = seg000:3647..3653 cx = 200ch, dx = 66h, bx = 4eh, ax = 0bfh —
+        //   the warning phrase at (102, 78).
+        self.font_draw_phrase_or_command_string_with_color_at_pos(
+            cmd::WARNING_N_NENTERING_HARKONNEN_ZONE,
+            0x200c,
+            102,
+            78,
+        );
+        // = seg000:3656/3659 flush the palette and present the game area.
+        self.update_screen_palette();
+        self.present_game_area();
+        // = seg000:365c call loc_04aca — data_011ca = 1: the pump is
+        //   suspended while the warning is up.
+        self.data_011ca = 1;
+        // = seg000:365f/3662 bp = menu_change_destination_ignore_warning;
+        //   or byte [bp+0bh], 40h — grey the WHAT? entry (no one is speaking).
+        self.menu_destination_warning.records[2].text_id |= CMD_GREY;
+        // = seg000:3666/3669 bx = loc_04abe; call loc_0d323 — stage the menu
+        //   with the flight resume as its cleanup and fold it in.
+        self.stage_command_submenu(
+            MenuRef::MenuDestinationWarning,
+            GameState::travel_resume_flight_view,
+        );
+        // = seg000:366c jmp rebuild_and_draw_room_nav_panel.
+        self.rebuild_and_draw_room_nav_panel();
     }
 
     // = seg000:40f9 loc_040f9 — scan the map around the flight for a location
@@ -3760,6 +3806,140 @@ mod tests {
         game.screen
             .write_png_scaled(&game.palette, "travel_arrival.png")
             .expect("write travel_arrival.png");
+    }
+
+    // A fresh game flying alone to the Arrakeen-Harkonnen palace: the
+    // hostile-zone check (seg000:4182) arms the companionless warning screen
+    // (travel_hostile_zone_warning_no_companion), IGNORE WARNING resumes the
+    // flight, and the accumulator running out raises request 2, which the
+    // game loop's apply_pending_room_screen_request turns into the game-over
+    // screen with the Harkonnen captain's mocking line.
+    // Asset-gated; run with:
+    //   cargo test -p dune --bin dune -- --ignored harkonnen_zone
+    #[test]
+    #[ignore = "needs assets/DUNE.DAT"]
+    fn harkonnen_zone_warning_then_shot_down() {
+        use crate::locations::location_index_from_ptr;
+
+        let dat_path = concat!(env!("CARGO_MANIFEST_DIR"), "/../../assets/DUNE.DAT");
+        let Ok(dat_file) = DatFile::open(dat_path) else {
+            eprintln!("skipping: {dat_path} not found");
+            return;
+        };
+        let (tx, _rx) = mpsc::sync_channel(64);
+        let mut game = GameState::new(dat_file, tx);
+        game.set_headless();
+        game.start(true);
+        game.location_and_room = 0x2001;
+        game.location_appearance = 0x180;
+        game.draw_room_game_screen();
+        assert_eq!(game.companions, [-1, -1], "a fresh game flies alone");
+
+        // Depart for the Harkonnen palace (location 1). Its marker sits
+        // outside the opening map window, so the confirm chain is entered
+        // with the location's hover value directly (= the marker click at
+        // seg000:4569 after a scroll).
+        game.menu_callback_choice_map_main_take_an_ornithopter_notransition(0, 0);
+        game.map_confirm_travel_and_close(crate::locations::location_ptr(1), 200, 70);
+        assert_eq!(game.travel_active, 0xff, "the travel pump was not armed");
+        assert_eq!(location_index_from_ptr(game.travel_destination_ptr), 1);
+        assert_eq!(game.pending_room_screen_request, 0);
+
+        // Fly (forcing the step cadence) until the warning suspends the pump.
+        let mut steps = 0;
+        while game.data_011ca == 0 && game.travel_active != 0 && steps < 500 {
+            game.travel_step_tick_stamp = (game.game_ticks() as u16).wrapping_sub(0x300);
+            game.travel_pump();
+            steps += 1;
+        }
+        assert_ne!(
+            game.travel_active, 0,
+            "arrived without a warning after {steps} steps"
+        );
+        assert_eq!(game.data_011ca, 1, "the warning did not suspend the pump");
+        assert_eq!(
+            game.pending_room_action, 4,
+            "room action 4 (hostile zone) not armed"
+        );
+        assert_eq!(game.get_active_menu_ref(), MenuRef::MenuDestinationWarning);
+        assert_eq!(
+            game.data_04726, 0xe0,
+            "the accumulator did not take its first step"
+        );
+        println!("warning after {steps} steps");
+        game.screen
+            .write_png_scaled(&game.palette, "harkonnen_zone_warning.png")
+            .expect("write harkonnen_zone_warning.png");
+
+        // IGNORE WARNING pops the menu; its cleanup resumes the flight.
+        game.menu_callback_choice_exit_menu(0, 0);
+        assert_eq!(game.data_011ca, 0, "the flight did not resume");
+        assert_eq!(game.get_active_menu_ref(), MenuRef::CommandMenuBuf);
+
+        // Run the game loop's swap + pump pair until the game over presents.
+        let mut steps = 0;
+        while (game.pending_room_screen_request as i8) >= 0 && steps < 40 {
+            if game.pending_room_screen_request != 0 {
+                game.apply_pending_room_screen_request();
+                continue;
+            }
+            game.travel_step_tick_stamp = (game.game_ticks() as u16).wrapping_sub(0x300);
+            game.travel_pump();
+            steps += 1;
+        }
+        assert_eq!(
+            game.pending_room_screen_request, 0x80,
+            "no game over after {steps} steps"
+        );
+        println!("shot down after {steps} more steps");
+        assert_eq!(game.travel_active, 0, "the pump was not disarmed");
+        assert_eq!(game.game_time, 0x16c5);
+        assert_eq!(game.current_subtitle_id, 0xbc, "not the shot-down line");
+        assert_eq!(game.current_lip_sync_resource_id, 0xffff);
+        assert_eq!(game.get_active_menu_ref(), MenuRef::MenuRestartLoadExitGame);
+        let head = game
+            .talking_head
+            .as_ref()
+            .expect("the captain's head is not up");
+        assert_eq!(head.talking_head_id, 0x0c, "not the Harkonnen captain");
+        assert!(
+            game.voc_pcm_playing,
+            "the mocking line's voice did not start"
+        );
+        assert!(
+            game.voc_filename.starts_with(b"PM\\PMFFF"),
+            "voc name {:?}",
+            std::str::from_utf8(&game.voc_filename)
+        );
+        // The panel and portrait landed on the screen: the panel fill colour
+        // rings the face box.
+        let yoff = game.y_offset as usize;
+        let fb = game.screen.pixels();
+        assert_eq!(fb[(3 + yoff) * 320 + 20], 0xfd, "no panel frame at (20,3)");
+        assert_eq!(
+            fb[(63 + yoff) * 320 + 80],
+            0xfd,
+            "no panel frame at (80,63)"
+        );
+        game.screen
+            .write_png_scaled(&game.palette, "harkonnen_zone_game_over.png")
+            .expect("write harkonnen_zone_game_over.png");
+
+        // RESTART GAME restores the fresh-game image from memory: the clock,
+        // the pending request and the room screen come back as at start.
+        game.menu_callback_choice_multiple_restart_game(0, 0);
+        assert_eq!(
+            game.pending_room_screen_request, 0,
+            "the game over was not drained"
+        );
+        assert_eq!(game.game_time, 2, "the clock did not restart");
+        assert_eq!(game.travel_active, 0);
+        assert_eq!(game.game_screen_mode_flags, 0, "not back in the room view");
+        assert_eq!(game.get_active_menu_ref(), MenuRef::CommandMenuBuf);
+        assert!(
+            game.talking_head.is_none(),
+            "the captain's head survived the restart"
+        );
     }
 
     // The four map-mode verbs (TOWARDS NEAREST PLACE seg000:50c4, CHANGE

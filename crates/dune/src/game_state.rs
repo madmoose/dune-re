@@ -1367,6 +1367,17 @@ pub struct GameState {
     // bytes 0, 2..3 and 10..13 stay fixed.
     pub(crate) voc_filename: [u8; 14],
 
+    // = seg000:a6d3 data_0a6d3 — the self-modifying immediate of
+    // load_voc_and_lipsync_data's game-over branch (current_lip_sync_resource_id
+    // == 0xffff): the voc index of the mocking line, 0x0fff / 0x1fff
+    // (P<head>FFF / P<head>FFF..B), its bit 12 toggled after every load.
+    pub(crate) game_over_voc_index: u16,
+
+    // Port-only stand-in for dune37s0.sav: the save image create_save_cl
+    // writes at seg000:0029 (cl = 0xff, slot '0') right after init_game_ui.
+    // RESTART GAME restores it from memory instead of reading the file.
+    pub(crate) initial_game_image: Option<Vec<u8>>,
+
     // = seg001:37fa music_cd_playlist — the working CD-playlist order: 9 song
     // numbers + the 0xff terminator. STANDARD ORDER recopies music_cd_standard_
     // order over it; SHUFFLE permutes it in place (music_cd_playlist_shuffle).
@@ -2473,7 +2484,8 @@ impl GameState {
             for_dialogue_enemies_ds_24: 0,
             number_of_sietches_visited: 0,
             entering_new_sietch: 0,
-            discovered_sietch_count: 0,
+            // = seg001:0027 static init 3.
+            discovered_sietch_count: 3,
             number_of_rallied_troops: 0,
             charisma: 0,
             game_phase: 0,
@@ -2552,12 +2564,15 @@ impl GameState {
             // their phase callbacks stamp them.
             harkonnen_raids_armed_after_game_time: 0xffff,
             illness_plot_armed_after_ingame_day: 0xffff,
-            results_stats_timestamp: 0,
-            results_prev_values: [0; 6],
+            // = seg001:115c static init 0xffff.
+            results_stats_timestamp: 0xffff,
+            // = seg001:115e static init 14h, 1, 0, 0, 0, 0.
+            results_prev_values: [0x14, 1, 0, 0, 0, 0],
             results_trend_glyphs: [0; 6],
             spice_stock_at_last_new_day: 0,
             spice_spent_today: 0,
-            last_event_game_time: 0,
+            // = seg001:1174 static init 2 (the start-of-game clock).
+            last_event_game_time: 2,
             location_visibility_distance: 1,
             number_of_rallied_troops_for_leto_killed: 0xff,
             ingame_day_of_last_spice_shipment_event: 0,
@@ -2702,6 +2717,8 @@ impl GameState {
             hnm_lop_cursor: 0,
             hnm_lop_remaining: 0,
             voc_filename: *b"PF\\PF001I .VOC",
+            game_over_voc_index: 0x0fff,
+            initial_game_image: None,
             music_cd_playlist: crate::music::MUSIC_CD_STANDARD_ORDER,
             music_cd_playlist_cursor: 0,
             music_playlist_flags: 0,
@@ -2939,7 +2956,7 @@ impl GameState {
     // initialize_system / initialize_resources). Plays the intro and credits,
     // sets up the in-game UI, enters the room view (ui_enter_room_view) and
     // starts the game clock (reset_game_suspend). play_intro2's WORMSUIT
-    // cutscenes, create_save_cl and game_loop are not ported yet.
+    // cutscenes and game_loop are not ported yet.
     //
     // `skip_intro` is a port-only convenience (no DOS equivalent): when set it
     // jumps straight to the in-game UI, skipping the intro/credits/intro2.
@@ -2985,8 +3002,11 @@ impl GameState {
         // = seg000:0024 call init_game_ui (loc_00083).
         self.init_game_ui();
 
-        // = seg000:0027 cl=0xff; call create_save_cl — not ported yet.
-        // TODO
+        // = seg000:0027/0029 cl=0xff; call create_save_cl — DOS writes the
+        //   fresh game as dune37s0.sav, the image RESTART GAME reloads. The
+        //   port keeps that image in memory (initial_game_image) instead of
+        //   writing a file.
+        self.initial_game_image = Some(self.create_save_in_memory());
 
         // = seg000:002c call ui_enter_room_view (loc_01860).
         self.ui_enter_room_view();
@@ -3191,14 +3211,12 @@ impl GameState {
             self.game_clock_last_tick = now;
             self.advance_game_clock(elapsed);
 
-            // = seg000:d841 if pending_room_screen_request != 0 apply the
-            // swap. loc_00d8e (seg000:0d8e) is the actual room-screen
-            // transition handler (reset_scene_lip_sync_state, frame-task
-            // clear, voice/subtitle, then draw_room_game_screen via the
-            // 0x80 | request byte). TODO: port; without it a request stays
-            // pending and the room never swaps.
+            // = seg000:d841/d848 a pending room-screen request is applied
+            // here (apply_pending_room_screen_request, seg000:0d8e): the
+            // game-over presenter for the positive codes, a no-op once the
+            // byte has been flipped to 0x80.
             if self.pending_room_screen_request != 0 {
-                // TODO: port loc_00d8e (apply_pending_room_screen_request).
+                self.apply_pending_room_screen_request();
             }
 
             // = seg000:d84b call rand; mov [rand_bits], ax.
