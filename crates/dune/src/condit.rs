@@ -230,6 +230,9 @@ impl GameState {
             0x53 => self.location_condit.unused_equipment,
             0x54 => self.location_condit.water,
             0x55..=0x5b => self.location_condit.equipment[(addr - 0x55) as usize],
+            // = seg001:0060..0092 array_for_condit_ds_60 — the staged
+            // location's troop tally (condit_tally_troops_at_location).
+            0x60..=0x92 => self.location_condit.troop_counts[(addr - 0x60) as usize],
             // = seg001:00be/00bf the spice-shipment fulfilment fraction and
             // flags (events.rs).
             0xbe => self.spice_shipment_fulfilment,

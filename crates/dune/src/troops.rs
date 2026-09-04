@@ -1604,7 +1604,7 @@ pub(crate) struct TroopCondit {
 
 /// = the for_condit location staging block at seg001:004d..005b, filled by
 /// prepare_location_data_for_condit.
-#[derive(Default, Clone, Copy)]
+#[derive(Clone, Copy)]
 pub(crate) struct LocationCondit {
     /// = seg001:004d for_condit_location_appearance_ds_4d.
     pub(crate) appearance: u8,
@@ -1625,6 +1625,33 @@ pub(crate) struct LocationCondit {
     pub(crate) water: u8,
     /// = seg001:0055 array_for_condit_location_equipment_ds_55 ([di+0x14..0x1b]).
     pub(crate) equipment: [u8; 7],
+    /// = seg001:0060 array_for_condit_ds_60 — the 0x33-byte troop tally of
+    /// the staged location (prepare_location_data_for_condit_sub_034a5 +
+    /// callback troop_034d0). Indices, for the troops in the location's
+    /// chain: [0] Fremen troops (bitfield_10 bit 7 clear, occupation !=
+    /// 0x80), [1] Harkonnen troops (bit 7 set), [2 + occupation nibble]
+    /// per-occupation counts (nibble 7 folds into 4; ds:66 = army training),
+    /// [17 + (dissatisfaction_and_speech & 0xf)] per-voice-bank counts.
+    /// For troops traveling here (occupation bit 6) the same three groups
+    /// sit at [30], [31] and [32 + nibble]. [48] unhired troops (occupation
+    /// 0x80). [49] = [0] + [30], [50] = [1] + [31] (ds:91/92).
+    pub(crate) troop_counts: [u8; 0x33],
+}
+
+impl Default for LocationCondit {
+    fn default() -> Self {
+        Self {
+            appearance: 0,
+            area_and_name: 0,
+            worm_event_likelihood: 0,
+            status: 0,
+            spice_density: 0,
+            unused_equipment: 0,
+            water: 0,
+            equipment: [0; 7],
+            troop_counts: [0; 0x33],
+        }
+    }
 }
 
 impl GameState {
@@ -1791,7 +1818,7 @@ impl GameState {
 
     // = seg000:331e prepare_location_data_for_condit — stage the location's
     // CONDIT block (ds:4d..5b) from its record. The derived pieces
-    // (location_033be, sub_034a5, sub_03385 and the
+    // (location_033be, sub_03385 and the
     // compute_location_available_equipment mask at ds:53) are not yet ported.
     pub(crate) fn prepare_location_data_for_condit(&mut self, loc_index: usize) {
         // = seg000:331e mov [data_011ce], di — the staged location.
@@ -1817,12 +1844,97 @@ impl GameState {
             loc.equipment.atomics,
             loc.equipment.bulbs,
         ];
-        // = seg000:335a..3379 location_033be, sub_034a5, compute_location_
-        //   available_equipment -> the ds:53 unused-equipment mask; 337d
-        //   sub_03385. TODO: not yet ported.
+        // = seg000:335a location_033be. TODO: not yet ported.
+        // = seg000:335d.
+        self.condit_tally_troops_at_location(loc_index);
+        // = seg000:3360..3379 compute_location_available_equipment -> the
+        //   ds:53 unused-equipment mask; 337d sub_03385. TODO: not yet
+        //   ported.
         self.location_condit.unused_equipment = 0;
         // = seg000:3380 call condit_scan_nearest_locations.
         self.condit_scan_nearest_locations(loc_index);
+    }
+
+    // = seg000:34a5 prepare_location_data_for_condit_sub_034a5 — clear the
+    // ds:60 tally, run callback_troop_tally_for_condit_ds_60 over every troop
+    // in or traveling to the location (call_callback_on_all_troops_in_or_
+    // traveling_to_location_06639), then ds:91 = [0] + [30] and ds:92 = [1]
+    // + [31].
+    pub(crate) fn condit_tally_troops_at_location(&mut self, loc_index: usize) {
+        // = seg000:34a9..34b1 rep stosb.
+        self.location_condit.troop_counts = [0; 0x33];
+        // = seg000:6639 the in-location chain first.
+        self.for_each_troop_in_location(loc_index, |s, ti| {
+            s.condit_tally_troop(ti);
+        });
+        // = seg000:663d..666c then every traveling troop (occupation bit 6)
+        //   bound for the location: the destination is offset_of_location,
+        //   or the home ptr in troop_occupation_dependent_C (harvest_rate)
+        //   when (occupation & 3) == 3 — DOS walks troops[0..67].
+        let dest = locations::location_ptr_from_index(loc_index);
+        for ti in 0..67 {
+            let t = &self.troops[ti];
+            if t.occupation & 0x40 == 0 {
+                continue;
+            }
+            let d = if t.occupation & 3 == 3 {
+                t.harvest_rate
+            } else {
+                t.offset_of_location
+            };
+            if d == dest {
+                self.condit_tally_troop(ti);
+            }
+        }
+        // = seg000:34ba..34cb.
+        let c = &mut self.location_condit.troop_counts;
+        c[49] = c[0].wrapping_add(c[30]);
+        c[50] = c[1].wrapping_add(c[31]);
+    }
+
+    // = seg000:34d0 callback_troop_tally_for_condit_ds_60 — count one troop
+    // into the ds:60 tally (see LocationCondit::troop_counts). dx = 0x61 for
+    // a troop in the location, 0x7f for one traveling (occupation bit 6):
+    // bx = dx, or dx - 1 for a Fremen troop (bitfield_10 bit 7 clear), where
+    // an unhired troop (occupation 0x80) only bumps ds:90 instead. Then
+    // [dx + 1 + nibble]++ (nibble 7 -> 4), and for a troop in the location
+    // [0x71 + (dissatisfaction_and_speech & 0xf)]++. A captured troop
+    // (occupation bit 5) is skipped.
+    fn condit_tally_troop(&mut self, ti: usize) {
+        let t = self.troops[ti];
+        let c = &mut self.location_condit.troop_counts;
+        // = seg000:34d0 test occupation,20h; jnz ret.
+        if t.occupation & 0x20 != 0 {
+            return;
+        }
+        // = seg000:34d6..34e0 dx = 0x61, or 0x7f when traveling.
+        let dx: usize = if t.occupation & 0x40 != 0 { 0x7f } else { 0x61 };
+        // = seg000:34e3..34ee bx = dx, minus 1 for a Fremen troop; an unhired
+        //   one goes to ds:90 only.
+        let mut bx = dx;
+        if t.bitfield_10 & 0x80 == 0 {
+            bx -= 1;
+            if t.occupation == 0x80 {
+                c[0x90 - 0x60] = c[0x90 - 0x60].wrapping_add(1);
+                return;
+            }
+        }
+        // = seg000:34f0.
+        c[bx - 0x60] = c[bx - 0x60].wrapping_add(1);
+        // = seg000:34f2..34fc the nibble, 7 folded into 4.
+        let mut nibble = (t.occupation & 0x0f) as usize;
+        if t.occupation & 3 == 3 {
+            nibble &= 0x0c;
+        }
+        // = seg000:34fe..3504 [dx + 1 + nibble]++.
+        let slot = dx + 1 + nibble;
+        c[slot - 0x60] = c[slot - 0x60].wrapping_add(1);
+        // = seg000:3507..3518 only for a troop in the location (bx < 0x7f):
+        //   the voice-bank slot.
+        if dx + nibble < 0x7f {
+            let v = 0x71 + (t.dissatisfaction_and_speech & 0x0f) as usize;
+            c[v - 0x60] = c[v - 0x60].wrapping_add(1);
+        }
     }
 
     // = seg000:5274 condit_scan_nearest_locations — scan the locations table
@@ -2185,9 +2297,17 @@ impl GameState {
     // at 6c26), then age its skills. Called from
     // run_events_for_current_time_period (seg000:1b70).
     pub(crate) fn run_troop_occupation_events(&mut self) {
-        // = seg000:6c6f..6c87 data_0473c = the location room_persons[4] stands
-        //   in, then loc_06c46 — the per-period location/NPC bookkeeping. Not
-        //   ported.
+        // = seg000:6c6f..6c83 gurney_location_ptr = the location record
+        //   Gurney (room_persons[4]) stands in when his slot's low byte is
+        //   0x80 (its high byte is the 1-based location index), else 0.
+        let slot = self.room_persons[4].location_appearance;
+        self.gurney_location_ptr = if slot & 0xff == 0x80 {
+            locations::location_ptr((slot >> 8).wrapping_sub(1))
+        } else {
+            0
+        };
+        // = seg000:6c87.
+        self.gurney_training_phase_check();
         // = seg000:6c8a troop_irrigated_this_period = 0.
         self.troop_irrigated_this_period = 0;
         // = seg000:6cc3..6cca add si,1bh; cmp si,troops[67]; jb — the walk
@@ -2233,11 +2353,39 @@ impl GameState {
             // = seg000:6caf..6cba call the occupation's callback with si = the
             //   troop and di = its location.
             self.run_troop_occupation_callback(ti);
-            // = seg000:6cc0 call troop_usually_decrease_skills_every_4_days —
-            //   the every-64-period skill decay. Not ported.
+            // = seg000:6cc0.
+            self.troop_usually_decrease_skills_every_4_days(ti);
         }
         // = seg000:6ccc/6ccf.
         self.vegetation_started_on_dune = self.troop_irrigated_this_period;
+    }
+
+    // = seg000:6c46 gurney_training_phase_check — during phases 0x2d..0x2f,
+    // when Gurney is not traveling with Paul (persons_travelling_with bit 4)
+    // and stands in a location where at least one troop is in army training
+    // (the staged ds:66 count), the story advances to phase 0x30.
+    fn gurney_training_phase_check(&mut self) {
+        // = seg000:6c46..6c4d al = game_phase - 0x2d; cmp al,3; jnb ret.
+        if self.game_phase.wrapping_sub(0x2d) >= 3 {
+            return;
+        }
+        // = seg000:6c4f test persons_travelling_with,10h; jnz ret.
+        if self.persons_travelling_with & 0x10 != 0 {
+            return;
+        }
+        // = seg000:6c57..6c5d di = gurney_location_ptr; jz ret.
+        if self.gurney_location_ptr == 0 {
+            return;
+        }
+        let li = locations::location_index_from_ptr(self.gurney_location_ptr);
+        // = seg000:6c5f..6c67 stage the location; ds:66 = troops here in
+        //   army training.
+        self.prepare_location_data_for_condit(li);
+        if self.location_condit.troop_counts[6] == 0 {
+            return;
+        }
+        // = seg000:6c69/6c6b.
+        self.set_game_phase_and_trigger_callbacks(0x30);
     }
 
     // = seg000:6ced loc_06ced — the walk's moving-troop branch: the troop
@@ -2251,17 +2399,179 @@ impl GameState {
     }
 
     // = seg000:6c26 array_callbacks_for_troop_occupation_06c26 — the per-period
-    // callback for each occupation nibble. Spice mining (0), prospecting (1)
-    // and irrigation (8) are ported; the others (military training, espionage,
-    // attacking, wind-trap assembly, bulb growing) are their own subsystems,
-    // and slots 2/3/7/11..15 are nullsub_00f66.
+    // callback for each occupation nibble. Spice mining (0), prospecting (1),
+    // military training (4) and irrigation (8) are ported; the others
+    // (espionage, attacking, wind-trap assembly, bulb growing) are their own
+    // subsystems, and slots 2/3/7/11..15 are nullsub_00f66.
     fn run_troop_occupation_callback(&mut self, ti: usize) {
         match self.troops[ti].occupation & 0x0f {
             0 => self.troop_occupation_event_spice_mining(ti),
             1 => self.troop_occupation_event_spice_prospecting(ti),
+            4 => self.troop_occupation_event_military_training(ti),
             8 => self.troop_occupation_event_irrigation(ti),
             _ => {}
         }
+    }
+
+    // = seg000:6d7b troop_usually_decrease_skills_every_4_days — every 64
+    // periods the skills the troop is not using decay by 1 (floor 0), gated
+    // by the "skill showing" speech bits. mask = 0xc000 rol class (0 spice,
+    // 1 army, 2 ecology) & dissatisfaction_and_speech; three shl steps then
+    // test bits 15 (ecology), 14 (army) and 13 (spice) of the masked word.
+    // Only a spice troop's mask (0xc000) reaches those bits: an army troop's
+    // (0x8001) only decays ecology, an ecology troop's (0x0003) never decays.
+    fn troop_usually_decrease_skills_every_4_days(&mut self, ti: usize) {
+        // = seg000:6d7b test game_time,3fh; jz.
+        if self.game_time & 0x3f != 0 {
+            return;
+        }
+        // = seg000:6d84..6d91 the mask.
+        let class = self.troop_get_occupation_bits_2_and_3(ti);
+        let t = &mut self.troops[ti];
+        let mut ax = 0xc000u16.rotate_left(class as u32) & t.dissatisfaction_and_speech;
+        if ax == 0 {
+            return;
+        }
+        // = seg000:6d93..6d9d shl; jnb — ecology.
+        let carry = ax & 0x8000 != 0;
+        ax <<= 1;
+        if carry && t.ecology_skill != 0 {
+            t.ecology_skill -= 1;
+        }
+        // = seg000:6da0..6daa — army.
+        let carry = ax & 0x8000 != 0;
+        ax <<= 1;
+        if carry && t.army_skill != 0 {
+            t.army_skill -= 1;
+        }
+        // = seg000:6dad..6db7 — spice.
+        if ax & 0x8000 != 0 && t.spice_skill != 0 {
+            t.spice_skill -= 1;
+        }
+    }
+
+    // = seg000:71ef callback_troop_location_for_troop_occupation_military_
+    // training — one time period of army training. With saboteurs in the
+    // location (status bit 2) the troop trains nothing and instead counts
+    // down to clearing them; otherwise harvest_rate (troop_occupation_
+    // dependent_C) counts down the periods to the next army-skill point.
+    fn troop_occupation_event_military_training(&mut self, ti: usize) {
+        let li = locations::location_index_from_ptr(self.troops[ti].offset_of_location);
+        // = seg000:71ef/71f2 the upkeep; bit 9 (repairing) clears.
+        self.troop_location_new_day_upkeep(ti);
+        self.troops[ti].bitfield_10 &= 0xfdff;
+        // = seg000:71f7 test location->status,4; jnz loc_0725f.
+        if self.locations[li].status & 4 != 0 {
+            self.troop_military_training_saboteur_countdown(ti, li);
+            return;
+        }
+        // = seg000:71fd/7200 dec C; js — still counting down. C starts at 0
+        //   (troop_reset_occupation_clocks), so the first period raises at
+        //   once.
+        let c = self.troops[ti].harvest_rate.wrapping_sub(1);
+        self.troops[ti].harvest_rate = c;
+        if (c as i16) >= 0 {
+            return;
+        }
+        let t = self.troops[ti];
+        // = seg000:7203..7219 the target skill: 0xa0 with Gurney here (and
+        //   bitfield_10 bit 11 for the dialogue), else the mean army skill of
+        //   the troops training at this location (div cl; a location with no
+        //   such troop leaves ax = 0).
+        let target: u8 = if t.offset_of_location == self.gurney_location_ptr {
+            self.troops[ti].bitfield_10 |= 0x800;
+            0xa0
+        } else {
+            let (count, sum) = self.troop_location_accumulate_army_training(li);
+            if count == 0 {
+                sum as u8
+            } else {
+                (sum / (count & 0xff)) as u8
+            }
+        };
+        // = seg000:721b..7222 gap = max(0, target - army_skill).
+        let gap = target.saturating_sub(t.army_skill) as u16;
+        // = seg000:7224..7233 cx = gap * 2 + max(motivation_modifier, 0x1e).
+        let motivation = self.troop_compute_motivation_modifier(ti).max(0x1e);
+        let rate = gap * 2 + motivation as u16;
+        // = seg000:7235..724f the base by armament: 200 with weirding modules
+        //   or atomics, 250 with laser guns, 300 with krys knives, else 400.
+        let base: u16 = if t.equipment & 0x0c != 0 {
+            200
+        } else if t.equipment & 0x10 != 0 {
+            250
+        } else if t.equipment & 0x20 != 0 {
+            300
+        } else {
+            400
+        };
+        // = seg000:7252..7256 C = base / cx — periods to the next point.
+        self.troops[ti].harvest_rate = base / rate;
+        println!(
+            "troop {ti} army training: skill {} -> target {target}, next point in {} periods",
+            t.army_skill, self.troops[ti].harvest_rate
+        );
+        // = seg000:7259/725c bx = 1; jmp troop_raise_army_skill_by_1.
+        self.troop_raise_army_skill_by_1(ti);
+    }
+
+    // = seg000:725f loc_0725f — the saboteur branch of military training:
+    // harvest_total (troop_occupation_dependent_E) holds 0xff00 | the periods
+    // left; a fresh count starts at 0x40 - army_skill. When it runs out the
+    // troop clears the saboteurs and takes the "eliminated saboteurs" speech
+    // bit (8) when any mining troop here carried bit 6.
+    fn troop_military_training_saboteur_countdown(&mut self, ti: usize, li: usize) {
+        // = seg000:725f..726a ax = E, or 0xff40 - army_skill (byte subtract:
+        //   ah stays 0xff) when its high byte is not yet 0xff.
+        let mut ax = self.troops[ti].harvest_total;
+        if ax >> 8 != 0xff {
+            ax = 0xff00 | 0x40u8.wrapping_sub(self.troops[ti].army_skill) as u16;
+        }
+        // = seg000:726d/726f dec al; jns.
+        let al = (ax as u8).wrapping_sub(1);
+        if (al as i8) >= 0 {
+            self.troops[ti].harvest_total = (ax & 0xff00) | al as u16;
+            return;
+        }
+        // = seg000:7271..7277.
+        let found = self.troop_location_clear_saboteurs(li);
+        self.troops[ti].dissatisfaction_and_speech |= found;
+        self.troops[ti].harvest_total = 0;
+        println!("troop {ti} army training: cleared the saboteurs at location {li}");
+    }
+
+    // = seg000:7298 troop_location_accumulate_army_military_training_troops_
+    // and_army_skill — (cx, dx) = the hired troops at the location whose
+    // occupation is exactly 4, and the sum of their army skill
+    // (callback_troop_accumulate_army_military_training_troops_and_army_skill,
+    // seg000:72a2).
+    fn troop_location_accumulate_army_training(&mut self, li: usize) -> (u16, u16) {
+        let mut count = 0u16;
+        let mut sum = 0u16;
+        self.for_each_hired_troop_in_location(li, |g, tj| {
+            if g.troops[tj].occupation == 4 {
+                count += 1;
+                sum = sum.wrapping_add(g.troops[tj].army_skill as u16);
+            }
+        });
+        (count, sum)
+    }
+
+    // = seg000:727d troop_location_clear_saboteurs_in_location_and_spice_
+    // mining_troops — clear the location's saboteur bit (status bit 2) and,
+    // in every hired troop here with speech bit 6 set, drop that bit
+    // (callback_troop_remove_saboteurs_in_spice_mining_troop, seg000:7289).
+    // Returns cx: 0x100 when any troop had it, else 0.
+    fn troop_location_clear_saboteurs(&mut self, li: usize) -> u16 {
+        self.locations[li].status &= 0xfb;
+        let mut found = 0u16;
+        self.for_each_hired_troop_in_location(li, |g, tj| {
+            if g.troops[tj].dissatisfaction_and_speech & 0x40 != 0 {
+                g.troops[tj].dissatisfaction_and_speech &= 0xffbf;
+                found = 0x100;
+            }
+        });
+        found
     }
 
     // = seg000:6e20 troop_location_new_day_upkeep — the per-day upkeep an
@@ -2440,8 +2750,8 @@ impl GameState {
         if !overflow {
             return;
         }
-        // = seg000:76dd/76e2.
-        self.troop_increase_spice_skill(ti, 1, 2);
+        // = seg000:76dd/76e2 bx = 2: ecology skill +1.
+        self.troop_raise_skill(ti, 2, 1);
         let loc = &mut self.locations[li];
         // = seg000:76e5/76e9 water -12; dry -> irrigation_out_of_water.
         let (water, dry) = loc.water.overflowing_sub(12);
@@ -2529,9 +2839,9 @@ impl GameState {
         println!();
 
         // = seg000:700b..7016 every time that total crosses a multiple of 128
-        //   the troop gets better at mining (skill +1, marker 1).
+        //   the troop gets better at mining (bx = 0: spice skill +1).
         if (total ^ old_total) & 0xff80 != 0 {
-            self.troop_increase_spice_skill(ti, 1, 0);
+            self.troop_raise_skill(ti, 0, 1);
             println!(
                 "troop {} increased spice skill to {}",
                 ti, self.troops[ti].spice_skill
@@ -2637,9 +2947,9 @@ impl GameState {
                 );
                 return;
             }
-            // = seg000:7110..7114 prospecting complete: spice skill +2
-            //   (rank-up marker 1).
-            self.troop_increase_spice_skill(ti, 2, 0);
+            // = seg000:7110..7114 prospecting complete: bx = 0, spice skill
+            //   +2.
+            self.troop_raise_skill(ti, 0, 2);
             // = seg000:7117 the location is prospected now.
             self.locations[li].status |= 0x40;
             println!(
@@ -2791,19 +3101,31 @@ impl GameState {
         self.queue_vision_message_f00(3, li);
     }
 
-    // = seg000:6edd troop_clamp_skill_and_do_something_else — raise the troop's
-    // spice skill by `by`, capped at 0x5f. When the raise carries the skill
-    // into a new rank (its high nibble changes) the rank-up is marked in
-    // bitfield_10 bits 0-1 as `marker + 1`, which the troop's dialogue reads.
-    fn troop_increase_spice_skill(&mut self, ti: usize, by: u8, marker: u8) {
-        let before = self.troops[ti].spice_skill;
+    // = seg000:6edd troop_raise_skill — raise one of the troop's skills by
+    // `by`, capped at 0x5f. `skill` picks the byte at [bx+si+16h]: 0 spice,
+    // 1 army, 2 ecology. When the raise carries the skill into a new rank
+    // (its high nibble changes) the rank-up is marked in bitfield_10 bits
+    // 0-1 as `skill + 1`, which the troop's dialogue reads.
+    fn troop_raise_skill(&mut self, ti: usize, skill: u8, by: u8) {
+        let t = &mut self.troops[ti];
+        let field = match skill {
+            0 => &mut t.spice_skill,
+            1 => &mut t.army_skill,
+            _ => &mut t.ecology_skill,
+        };
+        let before = *field;
         let raised = before.wrapping_add(by).min(0x5f);
-        self.troops[ti].spice_skill = raised;
+        *field = raised;
         // = seg000:6eeb..6ef9 the rank test + the marker.
         if (raised ^ before) & 0xf0 != 0 {
-            let t = &mut self.troops[ti];
-            t.bitfield_10 = (t.bitfield_10 & 0xfffc) | (marker as u16 + 1);
+            t.bitfield_10 = (t.bitfield_10 & 0xfffc) | (skill as u16 + 1);
         }
+    }
+
+    // = seg000:6edb troop_raise_army_skill_by_1 — al = 1 into troop_raise_skill
+    // with the caller's bx = 1 (army).
+    fn troop_raise_army_skill_by_1(&mut self, ti: usize) {
+        self.troop_raise_skill(ti, 1, 1);
     }
 
     // = seg000:6acb troop_set_occupation — give the troop the occupation `new`
@@ -3982,8 +4304,10 @@ mod tests {
         game.troops[ti].equipment |= 2;
         game.troops[ti].bitfield_10 = 0;
         game.troops[ti].dissatisfaction_and_speech = 0;
-        game.troops[ti].ecology_skill = 0xff;
-        let skill_before = game.troops[ti].spice_skill;
+        // 0xfc: the same 63-per-period step as 0xff, and the overflow raise
+        // caps it at 0x5f, so the dry-out overflow below still has a 23 step.
+        game.troops[ti].ecology_skill = 0xfc;
+        let spice_skill_before = game.troops[ti].spice_skill;
         game.locations[li].status = (game.locations[li].status | 0x20) & !1;
         game.locations[li].water = 20;
         game.locations[li].spice_density = 9;
@@ -4008,12 +4332,17 @@ mod tests {
         assert_eq!(game.locations[li].vegetation_growth, 63);
         assert_eq!(game.locations[li].discoverable_at_phase, 4);
 
-        // An overflow: skill +1, water -12, radius 5, centre 2 rows north.
+        // An overflow: ecology skill +1 (bx = 2 at seg000:76dd, capped at
+        // 0x5f), water -12, radius 5, centre 2 rows north.
         game.locations[li].vegetation_growth = 250;
         game.run_troop_occupation_events();
         let loc = game.locations[li];
         assert_eq!(loc.vegetation_growth, 250u8.wrapping_add(63));
-        assert_eq!(game.troops[ti].spice_skill, skill_before + 1);
+        assert_eq!(game.troops[ti].ecology_skill, 0x5f);
+        assert_eq!(
+            game.troops[ti].spice_skill, spice_skill_before,
+            "spice untouched"
+        );
         assert_eq!(loc.water, 8);
         assert_eq!(loc.discoverable_at_phase, 5);
         assert_eq!(loc.vegetation_y, map_y as i8 - 2);
@@ -4119,5 +4448,280 @@ mod tests {
             vec![(0x302, crate::locations::location_ptr_from_index(li))]
         );
         assert_eq!(game.locations[li].discoverable_at_phase, 7);
+    }
+    fn headless_game() -> Option<GameState> {
+        let dat_path = concat!(env!("CARGO_MANIFEST_DIR"), "/../../assets/DUNE.DAT");
+        let Ok(dat_file) = DatFile::open(dat_path) else {
+            eprintln!("skipping: {dat_path} not found");
+            return None;
+        };
+        let (tx, rx) = mpsc::sync_channel(64);
+        let mut game = GameState::new(dat_file, tx);
+        game.set_headless();
+        game.start(true);
+        while rx.try_recv().is_ok() {}
+        Some(game)
+    }
+
+    // = seg000:6edd troop_raise_skill: bx picks the skill byte, and the
+    // rank-up marker in bitfield_10 bits 0-1 is bx + 1.
+    #[test]
+    #[ignore = "needs assets/DUNE.DAT"]
+    fn raise_skill_indexes_the_skill_by_bx() {
+        let Some(mut game) = headless_game() else {
+            return;
+        };
+        let ti = 0;
+        game.troops[ti].spice_skill = 0x0f;
+        game.troops[ti].army_skill = 0x0f;
+        game.troops[ti].ecology_skill = 0x5e;
+        game.troops[ti].bitfield_10 = 0;
+        game.troop_raise_skill(ti, 2, 3);
+        assert_eq!(game.troops[ti].ecology_skill, 0x5f, "capped at 0x5f");
+        assert_eq!(game.troops[ti].spice_skill, 0x0f, "spice untouched");
+        assert_eq!(game.troops[ti].bitfield_10 & 3, 0, "same rank: no marker");
+        game.troop_raise_skill(ti, 1, 1);
+        assert_eq!(game.troops[ti].army_skill, 0x10);
+        assert_eq!(game.troops[ti].bitfield_10 & 3, 2, "army rank-up marker");
+        game.troop_raise_skill(ti, 0, 1);
+        assert_eq!(game.troops[ti].spice_skill, 0x10);
+        assert_eq!(game.troops[ti].bitfield_10 & 3, 1, "spice rank-up marker");
+    }
+
+    // = seg000:71ef the military-training callback: the first period raises
+    // at once, the countdown is base / (gap * 2 + max(motivation, 0x1e)),
+    // and Gurney's location trains toward 0xa0.
+    #[test]
+    #[ignore = "needs assets/DUNE.DAT"]
+    fn military_training_raises_army_skill_and_paces_by_gap() {
+        let Some(mut game) = headless_game() else {
+            return;
+        };
+        let ti = 0;
+        let li = crate::locations::location_index_from_ptr(game.troops[ti].offset_of_location);
+        // Only this troop trains here.
+        for tj in 0..game.troops.len() - 1 {
+            if tj != ti && game.troops[tj].occupation & 0x0f == 4 {
+                game.troops[tj].occupation = (game.troops[tj].occupation & 0xf0) | 2;
+            }
+        }
+        game.new_day_flag = 0;
+        game.vegetation_started_on_dune = 0;
+        game.game_phase = 0x30;
+        game.gurney_location_ptr = 0;
+        game.room_persons[4].location_appearance = 0;
+        game.troops[ti].occupation = 4;
+        game.troops[ti].equipment = 0;
+        game.troops[ti].motivation = 40;
+        game.troops[ti].army_skill = 20;
+        game.troops[ti].bitfield_10 = 0;
+        game.troops[ti].dissatisfaction_and_speech = 0;
+        game.troops[ti].harvest_rate = 0;
+        game.troops[ti].harvest_total = 0;
+        game.locations[li].status &= !4;
+
+        // Period 1: C = 0 -> -1, so the point comes at once. Alone, the mean
+        // is the troop's own skill: gap 0, rate = max(40, 0x1e) = 40, base
+        // 400 (unarmed) -> C = 10.
+        game.run_troop_occupation_events();
+        assert_eq!(game.troops[ti].army_skill, 21);
+        assert_eq!(game.troops[ti].harvest_rate, 10);
+        assert_eq!(game.troops[ti].bitfield_10 & 0x800, 0, "no Gurney bit");
+
+        // Periods 2..11 count down without a raise; period 12 raises again.
+        for _ in 0..10 {
+            game.run_troop_occupation_events();
+        }
+        assert_eq!(game.troops[ti].army_skill, 21);
+        assert_eq!(game.troops[ti].harvest_rate, 0);
+        game.run_troop_occupation_events();
+        assert_eq!(game.troops[ti].army_skill, 22);
+
+        // Gurney here: target 0xa0, gap 0xa0 - 22 = 138, rate = 276 + 40 =
+        // 316; krys knives -> base 300 -> C = 0. Bit 11 marks the tutor.
+        game.room_persons[4].location_appearance = ((li as u16 + 1) << 8) | 0x80;
+        game.troops[ti].equipment = 0x20;
+        game.troops[ti].harvest_rate = 0;
+        game.run_troop_occupation_events();
+        assert_eq!(game.gurney_location_ptr, game.troops[ti].offset_of_location);
+        assert_eq!(game.troops[ti].army_skill, 23);
+        assert_eq!(game.troops[ti].harvest_rate, 0);
+        assert_ne!(
+            game.troops[ti].bitfield_10 & 0x800,
+            0,
+            "trained with Gurney"
+        );
+        // With C = 0 every period raises.
+        game.run_troop_occupation_events();
+        assert_eq!(game.troops[ti].army_skill, 24);
+    }
+
+    // = seg000:725f the saboteur branch: E counts 0x40 - army_skill periods
+    // (high byte 0xff), then the troop clears the location's saboteurs and
+    // the mining troop's speech bit 6, taking bit 8 itself.
+    #[test]
+    #[ignore = "needs assets/DUNE.DAT"]
+    fn military_training_clears_saboteurs_after_a_countdown() {
+        let Some(mut game) = headless_game() else {
+            return;
+        };
+        let ti = 0;
+        let li = crate::locations::location_index_from_ptr(game.troops[ti].offset_of_location);
+        // A second hired troop at the same location, mining, with bit 6.
+        let tj = 1;
+        game.troops[tj].offset_of_location = game.troops[ti].offset_of_location;
+        game.troops[tj].occupation = 0;
+        game.troops[tj].next_troop_id = game.locations[li].troop_id;
+        game.locations[li].troop_id = game.troops[tj].troop_id;
+        game.troops[tj].dissatisfaction_and_speech = 0x40;
+        game.new_day_flag = 0;
+        game.troops[ti].occupation = 4;
+        game.troops[ti].army_skill = 0x3e;
+        game.troops[ti].bitfield_10 = 0;
+        game.troops[ti].dissatisfaction_and_speech = 0;
+        game.troops[ti].harvest_rate = 0;
+        game.troops[ti].harvest_total = 0;
+        game.locations[li].status |= 4;
+
+        // 0x40 - 0x3e = 2: two periods of counting, the third clears.
+        game.run_troop_occupation_events();
+        assert_eq!(game.troops[ti].harvest_total, 0xff01);
+        assert_eq!(
+            game.troops[ti].army_skill, 0x3e,
+            "no training with saboteurs"
+        );
+        game.run_troop_occupation_events();
+        assert_eq!(game.troops[ti].harvest_total, 0xff00);
+        assert_ne!(game.locations[li].status & 4, 0);
+        game.run_troop_occupation_events();
+        assert_eq!(game.troops[ti].harvest_total, 0);
+        assert_eq!(game.locations[li].status & 4, 0, "saboteurs cleared");
+        assert_eq!(game.troops[tj].dissatisfaction_and_speech & 0x40, 0);
+        assert_ne!(
+            game.troops[ti].dissatisfaction_and_speech & 0x100,
+            0,
+            "eliminated-saboteurs speech bit"
+        );
+        assert_eq!(game.troops[ti].army_skill, 0x3e);
+    }
+
+    // = seg000:6d7b the every-64-period decay: a spice troop loses the
+    // showing army/ecology skills, an army troop only ecology, an ecology
+    // troop nothing.
+    #[test]
+    #[ignore = "needs assets/DUNE.DAT"]
+    fn skill_decay_follows_the_rotated_mask() {
+        let Some(mut game) = headless_game() else {
+            return;
+        };
+        let ti = 0;
+        let reset = |game: &mut GameState, occupation: u8| {
+            let t = &mut game.troops[ti];
+            t.occupation = occupation;
+            t.dissatisfaction_and_speech = 0xe000;
+            t.spice_skill = 5;
+            t.army_skill = 5;
+            t.ecology_skill = 5;
+        };
+        game.game_time = 64;
+        reset(&mut game, 0);
+        game.troop_usually_decrease_skills_every_4_days(ti);
+        let t = game.troops[ti];
+        assert_eq!((t.spice_skill, t.army_skill, t.ecology_skill), (5, 4, 4));
+        reset(&mut game, 4);
+        game.troop_usually_decrease_skills_every_4_days(ti);
+        let t = game.troops[ti];
+        assert_eq!((t.spice_skill, t.army_skill, t.ecology_skill), (5, 5, 4));
+        reset(&mut game, 8);
+        game.troop_usually_decrease_skills_every_4_days(ti);
+        let t = game.troops[ti];
+        assert_eq!((t.spice_skill, t.army_skill, t.ecology_skill), (5, 5, 5));
+        // Off the 64-period boundary nothing decays.
+        game.game_time = 65;
+        reset(&mut game, 0);
+        game.troop_usually_decrease_skills_every_4_days(ti);
+        let t = game.troops[ti];
+        assert_eq!((t.spice_skill, t.army_skill, t.ecology_skill), (5, 5, 5));
+    }
+    // = seg000:34a5/34d0 the ds:60 troop tally: Fremen vs Harkonnen, the
+    // per-occupation slots (ds:66 = army training), the voice-bank slots,
+    // the traveling group at +30 and the ds:91/92 sums.
+    #[test]
+    #[ignore = "needs assets/DUNE.DAT"]
+    fn condit_troop_tally_counts_by_occupation() {
+        let Some(mut game) = headless_game() else {
+            return;
+        };
+        let ti = 0;
+        let li = crate::locations::location_index_from_ptr(game.troops[ti].offset_of_location);
+        // Rebuild the chain: troops 0 (training, Fremen), 1 (mining,
+        // Harkonnen), 2 (unhired). Troop 3 travels here with occupation 0x44.
+        let ptr = game.troops[ti].offset_of_location;
+        for (tj, occ, bits, dissat) in [(0, 4u8, 0u16, 3u16), (1, 0, 0x80, 5), (2, 0x80, 0, 3)] {
+            game.troops[tj].offset_of_location = ptr;
+            game.troops[tj].occupation = occ;
+            game.troops[tj].bitfield_10 = bits;
+            game.troops[tj].dissatisfaction_and_speech = dissat;
+        }
+        game.locations[li].troop_id = game.troops[0].troop_id;
+        game.troops[0].next_troop_id = game.troops[1].troop_id;
+        game.troops[1].next_troop_id = game.troops[2].troop_id;
+        game.troops[2].next_troop_id = 0;
+        game.troops[3].occupation = 0x44;
+        game.troops[3].bitfield_10 = 0;
+        game.troops[3].offset_of_location = ptr;
+        // Any other traveler bound here would skew the count.
+        for tj in 4..67 {
+            if game.troops[tj].occupation & 0x40 != 0 && game.troops[tj].offset_of_location == ptr {
+                game.troops[tj].offset_of_location = 0;
+            }
+        }
+
+        game.condit_tally_troops_at_location(li);
+        let c = game.location_condit.troop_counts;
+        assert_eq!(c[0], 1, "ds:60 Fremen in the location");
+        assert_eq!(c[1], 1, "ds:61 Harkonnen in the location");
+        assert_eq!(c[2], 1, "ds:62 spice mining");
+        assert_eq!(c[6], 1, "ds:66 army training");
+        assert_eq!(c[0x11], 0, "ds:71 voice bank 0");
+        assert_eq!(c[0x14], 1, "ds:74 voice bank 3");
+        assert_eq!(c[0x16], 1, "ds:76 voice bank 5");
+        assert_eq!(c[30], 1, "ds:7e Fremen traveling here");
+        assert_eq!(c[36], 1, "ds:84 traveling, army training");
+        assert_eq!(c[48], 1, "ds:90 unhired");
+        assert_eq!(c[49], 2, "ds:91 = ds:60 + ds:7e");
+        assert_eq!(c[50], 1, "ds:92 = ds:61 + ds:7f");
+    }
+
+    // = seg000:6c46 gurney_training_phase_check: phases 0x2d..0x2f advance to
+    // 0x30 once a troop trains at Gurney's location, unless Gurney travels
+    // with Paul.
+    #[test]
+    #[ignore = "needs assets/DUNE.DAT"]
+    fn gurney_at_a_training_troop_advances_the_phase() {
+        let Some(mut game) = headless_game() else {
+            return;
+        };
+        let ti = 0;
+        let li = crate::locations::location_index_from_ptr(game.troops[ti].offset_of_location);
+        game.new_day_flag = 0;
+        game.troops[ti].occupation = 4;
+        game.troops[ti].bitfield_10 = 0;
+        game.troops[ti].dissatisfaction_and_speech = 0;
+        game.room_persons[4].location_appearance = ((li as u16 + 1) << 8) | 0x80;
+
+        // Out of the window: nothing.
+        game.game_phase = 0x2c;
+        game.run_troop_occupation_events();
+        assert_eq!(game.game_phase, 0x2c);
+        // In the window but Gurney travels with Paul: nothing.
+        game.game_phase = 0x2e;
+        game.persons_travelling_with = 0x10;
+        game.run_troop_occupation_events();
+        assert_eq!(game.game_phase, 0x2e);
+        // Gurney at the sietch: the phase advances.
+        game.persons_travelling_with = 0;
+        game.run_troop_occupation_events();
+        assert_eq!(game.game_phase, 0x30);
     }
 }

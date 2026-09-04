@@ -1758,6 +1758,10 @@ pub struct GameState {
 
     // = seg001:4737 troop_irrigated_this_period.
     pub(crate) troop_irrigated_this_period: u8,
+    // = seg001:473c gurney_location_ptr — the location record Gurney
+    // (room_persons[4]) stands in, or 0 when he is not placed. Refreshed at
+    // the start of every troop walk; army training there is much faster.
+    pub(crate) gurney_location_ptr: u16,
 
     // = the for_condit troop staging block (seg001:002c..004b), filled by
     // troop_prepare_troop_data_for_condit.
@@ -2791,6 +2795,7 @@ impl GameState {
             selected_fremen2: 0,
             vegetation_started_on_dune: 0,
             troop_irrigated_this_period: 0,
+            gurney_location_ptr: 0,
             troop_condit: Default::default(),
             location_condit: Default::default(),
             npc_menu_idle_timer_base: 0,
