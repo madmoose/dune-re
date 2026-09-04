@@ -1092,7 +1092,7 @@ impl ApplicationHandler for App {
             event_loop
                 .create_window(
                     Window::default_attributes()
-                        .with_title("Dune \u{2014} The Sleeper Reawakens")
+                        .with_title("Dune Reawakened")
                         .with_inner_size(winit::dpi::LogicalSize::new(3 * dst_w, 3 * dst_h))
                         .with_min_inner_size(winit::dpi::LogicalSize::new(dst_w, dst_h)),
                 )

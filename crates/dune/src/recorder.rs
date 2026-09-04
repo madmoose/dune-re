@@ -112,6 +112,8 @@ pub struct Recorder {
     // Shared with the capture thread so the AVI backend can drain finished audio.
     audio: Arc<Mutex<Option<AudioSink>>>,
     video: Mutex<Option<VideoWorker>>,
+    // Chapter markers collected while recording (see [`Recorder::add_marker`]).
+    markers: Mutex<Option<MarkerSink>>,
     // The most recently published frame, tee'd in on every publish while
     // recording (see [`RecorderTee`]). This is the recorder's *own* copy, never
     // drained — unlike peeking the display's `FrameSlot`, which the present
@@ -191,6 +193,15 @@ impl AudioSink {
     }
 }
 
+/// Chapter markers collected while recording. Timestamps are seconds from the
+/// recording's anchor `Instant` — the same clock the video frames are paced by,
+/// so a marker lands on the frame that was being captured when it was set.
+struct MarkerSink {
+    start: Instant,
+    // (seconds from recording start, chapter title), in emit order.
+    list: Vec<(f64, String)>,
+}
+
 /// How a running recording is finalised on stop.
 enum Backend {
     /// ffmpeg path: temp video + WAV muxed by a detached background process.
@@ -217,7 +228,23 @@ impl Recorder {
             format: AtomicU8::new(RecordFormat::Mp4 as u8),
             audio: Arc::new(Mutex::new(None)),
             video: Mutex::new(None),
+            markers: Mutex::new(None),
             frame: Arc::new(Mutex::new(None)),
+        }
+    }
+
+    /// Record a chapter marker ("this scene starts now") at the current
+    /// recording time. A no-op while idle, so scene code can emit markers
+    /// unconditionally. On stop the markers become a `*.chapters.txt` sidecar
+    /// (both backends) and, on the MP4 backend, chapter atoms in the file.
+    pub fn add_marker(&self, title: &str) {
+        if !self.active.load(Ordering::Acquire) {
+            return;
+        }
+        if let Some(sink) = self.markers.lock().unwrap().as_mut() {
+            let t = sink.start.elapsed().as_secs_f64();
+            eprintln!("recording: chapter \"{title}\" at {}", fmt_timestamp(t));
+            sink.list.push((t, title.to_string()));
         }
     }
 
@@ -284,6 +311,10 @@ impl Recorder {
         // Publish the audio sink before flipping `active`: mix_in only records
         // once the sink is in place.
         *self.audio.lock().unwrap() = Some(AudioSink::new(start));
+        *self.markers.lock().unwrap() = Some(MarkerSink {
+            start,
+            list: Vec::new(),
+        });
         *self.video.lock().unwrap() = Some(VideoWorker {
             stop,
             handle: Some(handle),
@@ -450,15 +481,25 @@ impl Recorder {
         // The capture thread is done with the audio sink now; clear it.
         let sink = self.audio.lock().unwrap().take();
 
+        // Chapter markers: the recording's total length caps the last chapter.
+        let (chapters, total) = match self.markers.lock().unwrap().take() {
+            Some(m) => {
+                let total = m.start.elapsed().as_secs_f64();
+                (m.list, total)
+            }
+            None => (Vec::new(), 0.0),
+        };
+
         match worker.backend {
             Backend::Avi { out_path } => {
+                write_chapter_sidecar(&out_path, &chapters);
                 eprintln!("recording: wrote {}", out_path.display());
             }
             Backend::Mp4 {
                 tmp_video,
                 tmp_wav,
                 out_path,
-            } => self.finalise_mp4(sink, &tmp_video, &tmp_wav, &out_path),
+            } => self.finalise_mp4(sink, &tmp_video, &tmp_wav, &out_path, &chapters, total),
         }
     }
 
@@ -466,13 +507,20 @@ impl Recorder {
     /// background process, so closing the game is instant instead of blocking on
     /// ffmpeg's AAC re-encode. The WAV write is synchronous because the process
     /// may `std::process::exit` right after (the in-game EXIT GAME path).
+    /// Chapter markers become a temp ffmetadata file the mux folds into the MP4
+    /// as chapter atoms (written synchronously, like the WAV, for the same
+    /// reason), plus the `*.chapters.txt` sidecar both backends emit.
     fn finalise_mp4(
         &self,
         sink: Option<AudioSink>,
         tmp_video: &Path,
         tmp_wav: &Path,
         out_path: &Path,
+        chapters: &[(f64, String)],
+        total_secs: f64,
     ) {
+        write_chapter_sidecar(out_path, chapters);
+
         let audio_ok = match sink {
             Some(sink) => match write_wav(tmp_wav, &sink.buf, REC_AUDIO_RATE) {
                 Ok(()) => true,
@@ -484,11 +532,22 @@ impl Recorder {
             None => false,
         };
 
-        let spawned = if audio_ok {
-            spawn_detached_mux(tmp_video, tmp_wav, out_path)
-        } else {
-            spawn_detached_copy(tmp_video, out_path)
-        };
+        let tmp_meta = out_path.with_extension("tmp.ffmeta");
+        let meta_ok = !chapters.is_empty()
+            && match write_ffmeta_chapters(&tmp_meta, chapters, total_secs) {
+                Ok(()) => true,
+                Err(e) => {
+                    eprintln!("recording: failed to write chapter metadata ({e})");
+                    false
+                }
+            };
+
+        let spawned = spawn_detached_mux(
+            tmp_video,
+            audio_ok.then_some(tmp_wav),
+            meta_ok.then_some(tmp_meta.as_path()),
+            out_path,
+        );
 
         match spawned {
             Ok(child) => {
@@ -693,41 +752,126 @@ fn spawn_video_ffmpeg(tmp_video: &Path) -> std::io::Result<Child> {
         .spawn()
 }
 
-/// ffmpeg #2, detached: mux the encoded video with the WAV into the final file,
-/// then delete the temps. Runs as a background `sh` so the game can close
-/// immediately; the paths are passed as positional arguments (`$1`/`$2`/`$3`) so
+/// ffmpeg #2, detached: mux the encoded video with the WAV (when audio was
+/// captured) and the chapter ffmetadata (when markers were set) into the final
+/// file, then delete the temps. Runs as a background `sh` so the game can close
+/// immediately; the paths are passed as positional arguments (`$1`, `$2`, …) so
 /// they need no shell escaping. Video is stream-copied (its colour tags ride
 /// along, `+write_colr` keeps the colr atom); only the audio is (re)encoded.
-fn spawn_detached_mux(video: &Path, wav: &Path, out: &Path) -> std::io::Result<Child> {
-    Command::new("sh")
-        .arg("-c")
-        .arg(
-            "if ffmpeg -y -i \"$1\" -i \"$2\" -c:v copy -c:a aac -shortest \
-             -movflags +write_colr \"$3\"; then rm -f \"$1\" \"$2\"; fi",
-        )
-        .arg("dune-mux") // $0
-        .arg(video) // $1
-        .arg(wav) // $2
-        .arg(out) // $3
+fn spawn_detached_mux(
+    video: &Path,
+    wav: Option<&Path>,
+    meta: Option<&Path>,
+    out: &Path,
+) -> std::io::Result<Child> {
+    // Temp inputs, in positional-argument order ($1, $2, …).
+    let mut temps: Vec<&Path> = vec![video];
+    let mut cmd = String::from("if ffmpeg -y -i \"$1\"");
+    if let Some(wav) = wav {
+        temps.push(wav);
+        cmd.push_str(" -i \"$2\"");
+    }
+    if let Some(meta) = meta {
+        temps.push(meta);
+        // The ffmetadata pseudo-input contributes chapters + global metadata,
+        // no streams; map both from its (0-based) input index.
+        let idx = temps.len() - 1;
+        cmd.push_str(&format!(
+            " -i \"${}\" -map_metadata {idx} -map_chapters {idx}",
+            temps.len()
+        ));
+    }
+    if wav.is_some() {
+        cmd.push_str(" -c:v copy -c:a aac -shortest");
+    } else {
+        cmd.push_str(" -c copy");
+    }
+    cmd.push_str(&format!(
+        " -movflags +write_colr \"${}\"; then rm -f",
+        temps.len() + 1
+    ));
+    for i in 1..=temps.len() {
+        cmd.push_str(&format!(" \"${i}\""));
+    }
+    cmd.push_str("; fi");
+
+    let mut sh = Command::new("sh");
+    sh.arg("-c").arg(cmd).arg("dune-mux"); // $0
+    for temp in temps {
+        sh.arg(temp); // $1..$n
+    }
+    sh.arg(out) // $n+1
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::null())
         .spawn()
 }
 
-/// No-audio fallback for [`spawn_detached_mux`]: stream-copy the video into place
-/// (re-writing the colr atom) and delete the temp, in a detached `sh`.
-fn spawn_detached_copy(video: &Path, out: &Path) -> std::io::Result<Child> {
-    Command::new("sh")
-        .arg("-c")
-        .arg("if ffmpeg -y -i \"$1\" -c copy -movflags +write_colr \"$2\"; then rm -f \"$1\"; fi")
-        .arg("dune-mux") // $0
-        .arg(video) // $1
-        .arg(out) // $2
-        .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .spawn()
+/// Write the `*.chapters.txt` sidecar next to the recording: one `M:SS title`
+/// line per marker (the format video sites accept as a chapter list). Skipped
+/// when no markers were set during the recording.
+fn write_chapter_sidecar(out_path: &Path, chapters: &[(f64, String)]) {
+    if chapters.is_empty() {
+        return;
+    }
+    let path = out_path.with_extension("chapters.txt");
+    let write = || -> std::io::Result<()> {
+        let mut f = File::create(&path)?;
+        for (t, title) in chapters {
+            writeln!(f, "{} {}", fmt_timestamp(*t), title)?;
+        }
+        Ok(())
+    };
+    match write() {
+        Ok(()) => eprintln!("recording: wrote {}", path.display()),
+        Err(e) => eprintln!("recording: failed to write chapter sidecar ({e})"),
+    }
+}
+
+/// Write the markers as an ffmpeg ffmetadata chapter file: each chapter runs
+/// from its marker to the next marker (the last one to the end of the clip).
+fn write_ffmeta_chapters(
+    path: &Path,
+    chapters: &[(f64, String)],
+    total_secs: f64,
+) -> std::io::Result<()> {
+    let mut f = File::create(path)?;
+    writeln!(f, ";FFMETADATA1")?;
+    for (i, (t, title)) in chapters.iter().enumerate() {
+        let end = chapters
+            .get(i + 1)
+            .map(|(next, _)| *next)
+            .unwrap_or(total_secs)
+            .max(*t);
+        writeln!(f, "[CHAPTER]")?;
+        writeln!(f, "TIMEBASE=1/1000")?;
+        writeln!(f, "START={}", (t * 1000.0).round() as u64)?;
+        writeln!(f, "END={}", (end * 1000.0).round() as u64)?;
+        writeln!(f, "title={}", ffmeta_escape(title))?;
+    }
+    Ok(())
+}
+
+/// Backslash-escape the characters the ffmetadata format treats specially.
+fn ffmeta_escape(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    for c in s.chars() {
+        if matches!(c, '=' | ';' | '#' | '\\' | '\n') {
+            out.push('\\');
+        }
+        out.push(c);
+    }
+    out
+}
+
+/// `H:MM:SS` / `M:SS` timestamp for the chapter sidecar and log lines.
+fn fmt_timestamp(t: f64) -> String {
+    let s = t as u64;
+    if s >= 3600 {
+        format!("{}:{:02}:{:02}", s / 3600, (s % 3600) / 60, s % 60)
+    } else {
+        format!("{}:{:02}", s / 60, s % 60)
+    }
 }
 
 /// Lock the shared audio sink and drain finished samples as 16-bit PCM. `all`
@@ -902,6 +1046,7 @@ mod tests {
         rec.start(Some(out.clone()));
         assert!(rec.is_recording());
         rec.store_frame(fb, pal);
+        rec.add_marker("Opening");
 
         // ~0.3 s of a 440 Hz stereo tone at 48 kHz.
         let rate = 48000u32;
@@ -916,6 +1061,7 @@ mod tests {
         thread::sleep(Duration::from_millis(150));
         rec.mix_in(AudioTrack::Pcm, &block, rate);
         thread::sleep(Duration::from_millis(250));
+        rec.add_marker("Second scene");
 
         rec.stop();
         assert!(!rec.is_recording());
@@ -968,7 +1114,33 @@ mod tests {
             "video not tagged BT.709: {color:?}"
         );
 
+        // The markers must come back as chapter atoms in the muxed MP4 …
+        let chap = Command::new("ffprobe")
+            .args([
+                "-v",
+                "error",
+                "-show_chapters",
+                "-of",
+                "default=noprint_wrappers=1",
+            ])
+            .arg(&out)
+            .output()
+            .expect("run ffprobe");
+        let chap = String::from_utf8_lossy(&chap.stdout);
+        assert!(chap.contains("TAG:title=Opening"), "chapters: {chap:?}");
+        assert!(
+            chap.contains("TAG:title=Second scene"),
+            "chapters: {chap:?}"
+        );
+
+        // … and as the plain-text sidecar.
+        let sidecar = out.with_extension("chapters.txt");
+        let txt = fs::read_to_string(&sidecar).expect("chapter sidecar");
+        assert!(txt.contains("0:00 Opening"), "sidecar: {txt:?}");
+        assert!(txt.contains("0:00 Second scene"), "sidecar: {txt:?}");
+
         let _ = fs::remove_file(&out);
+        let _ = fs::remove_file(&sidecar);
     }
 
     /// End-to-end for the AVI backend: drive the Recorder with `RecordFormat::Avi`

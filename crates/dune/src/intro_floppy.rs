@@ -32,6 +32,20 @@ impl GameState {
         GameState::intro_floppy_scene_back,
     ];
 
+    // Port-only: chapter titles for the clip recorder, one per SCENES entry.
+    // While a recording is running, each scene's fade emits its marker through
+    // vga_transition's midpoint hook, at the fade's black moment.
+    const SCENE_CHAPTER_TITLES: [&'static str; 8] = [
+        "Starfield",
+        "Arrakis globe",
+        "Desert sky",
+        "Paul",
+        "Baron Harkonnen",
+        "Arrakis globe",
+        "Paul",
+        "Final still",
+    ];
+
     // = seg000:021c DOS skips the cutscenes when entered with ZF set (the intro
     // aborted with ESC); the port passes `skip` (= start's skip_intro), and
     // when set only the game-setup tail runs.
@@ -61,6 +75,8 @@ impl GameState {
         for scene in 1..9 {
             // = seg000:0232 bp = loc_002c1; seg000:0235 copy_pal_and_transition —
             // render scene `si` offscreen, then fade the visible screen to it.
+            // (The scene's chapter marker is emitted inside, at the fade's
+            // black moment.)
             self.intro_floppy_render_and_transition_to_scene(scene);
             // = seg000:0238 midi_duck_music_volume — drop the MIDI score to its
             // narration "duck" level for the voice line.
@@ -115,7 +131,14 @@ impl GameState {
         // (gfx_call_bp_with_front_buffer_as_screen) redirects the front buffer
         // to fb1 so the callback's draws land in fb1; vga_transition(0x10) then
         // dissolves the visible screen and reveals fb1 in the new palette.
-        self.transition(0x10, 0, Self::intro_floppy_draw_xplain9);
+        // Port-only: the chapter marker rides the midpoint hook (0x10 reveals
+        // progressively, so it fires as the dissolve starts).
+        self.transition_with_midpoint(
+            0x10,
+            0,
+            Self::intro_floppy_draw_xplain9,
+            Some(&|s: &mut GameState| s.recorder.add_marker("Night turns to day")),
+        );
 
         // = seg000:026c wait_interruptable(0xc8) — hold the night scene.
         self.wait_interruptable(0xc8);
@@ -256,8 +279,17 @@ impl GameState {
         self.intro_floppy_render_scene(scene);
         self.screen_buffer = saved_front;
 
+        // Port-only: the scene's chapter marker for the clip recorder, emitted
+        // through the midpoint hook so the chapter starts at the fade's black
+        // moment rather than during the old scene's fade-out.
+        let chapter = Self::SCENE_CHAPTER_TITLES[(scene - 1) as usize];
         // = seg000:c106 al = 0x3a; fall into transition (seg000:c108) — reveal fb1.
-        gfx::vga_transition(self, 0x3a, 0);
+        gfx::vga_transition(
+            self,
+            0x3a,
+            0,
+            Some(&|s: &mut GameState| s.recorder.add_marker(chapter)),
+        );
         // = seg000:c12a/c12d gfx_copy_whole_framebuf_to_screen + palette flush.
         self.gfx_copy_whole_framebuf_to_screen();
         self.update_screen_palette();

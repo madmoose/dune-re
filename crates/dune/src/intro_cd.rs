@@ -52,11 +52,11 @@ macro_rules! intro_stage {
 #[rustfmt::skip]
 const INTRO_SCRIPT: [IntroStage; 48] = [
     // Play VIRGIN.HNM.
-    intro_stage!(00,   0/ 0, 0/ 0, 0x3a,     1 ),
-    intro_stage!(01,   0/ 0, 0/ 0, 0x3a,     1 ),
+    intro_stage!(00,   0/ 0,  0/ 0, 0x3a,     1 ),
+    intro_stage!(01,   0/ 0,  0/ 0, 0x3a,     1 ),
 
     // Play CRYO.HNM.
-    intro_stage!(02,   0/ 0, 0/ 0, 0x30,     1 ),
+    intro_stage!(02,   0/ 0,  0/ 0, 0x30,     1 ),
 
     // Play CRYO2.HNM.
     intro_stage!(03,   0/ 0,  6/15, 0x30,    1 ),
@@ -190,6 +190,65 @@ const INTRO_SCRIPT: [IntroStage; 48] = [
     intro_stage!(47,   0/ 0, 17/ 0, 0x38,    1 ),
 ];
 
+// Port-only: chapter titles for the clip recorder, one slot per INTRO_SCRIPT
+// stage. While a recording is running, play_intro emits a chapter marker at a
+// titled stage's commit point — via vga_transition's midpoint hook (a fade's
+// black moment), or directly for transition-less stages; `None` marks a
+// continuation stage (a clear, a clip resuming, one still of a montage) that
+// belongs to the previous chapter. Titles follow the stage comments on
+// INTRO_SCRIPT above.
+#[rustfmt::skip]
+const STAGE_CHAPTER_TITLES: [Option<&str>; 48] = [
+    /* 00 */ Some("Virgin logo"),
+    /* 01 */ None,
+    /* 02 */ Some("Cryo logo"),
+    /* 03 */ None,
+    /* 04 */ None,
+    /* 05 */ Some("Presents"),
+    /* 06 */ Some("Princess Irulan's narration"),
+    /* 07 */ None,
+    /* 08 */ Some("Title"),
+    /* 09 */ None,
+    /* 10 */ None,
+    /* 11 */ Some("Desert sky"),
+    /* 12 */ Some("Flight to the palace"),
+    /* 13 */ Some("Palace equipment room"),
+    /* 14 */ Some("Lady Jessica"),
+    /* 15 */ Some("Duke Leto"),
+    /* 16 */ Some("Lady Jessica"),
+    /* 17 */ Some("Paul"),
+    /* 18 */ Some("Outside the palace"),
+    /* 19 */ Some("Flight to the sietch"),
+    /* 20 */ Some("Inside the sietch"),
+    /* 21 */ Some("Chani"),
+    /* 22 */ Some("Kynes"),
+    /* 23 */ Some("Stilgar"),
+    /* 24 */ Some("Midnight desert sky"),
+    /* 25 */ Some("Feyd-Rautha"),
+    /* 26 */ Some("Baron Harkonnen"),
+    /* 27 */ None,
+    /* 28 */ Some("Night attack on the sietch"),
+    /* 29 */ Some("Desert flyover"),
+    /* 30 */ Some("Still montage"),
+    /* 31 */ None,
+    /* 32 */ None,
+    /* 33 */ None,
+    /* 34 */ None,
+    /* 35 */ None,
+    /* 36 */ None,
+    /* 37 */ None,
+    /* 38 */ Some("Water ripples in the cave"),
+    /* 39 */ Some("Plant"),
+    /* 40 */ None,
+    /* 41 */ Some("Sandworm"),
+    /* 42 */ Some("Closing stills"),
+    /* 43 */ None,
+    /* 44 */ None,
+    /* 45 */ None,
+    /* 46 */ None,
+    /* 47 */ None,
+];
+
 // = seg001:1500 _stru_209B0_icon_list: the desert-sky icon list, (sprite, x, y)
 // triples terminated by 0xffff. Drawn from SUNRS.HSQ by the sky scenes (the
 // desert sky, midnight, and the Kynes backdrop).
@@ -275,9 +334,33 @@ impl GameState {
                     return;
                 }
 
+                // Port-only: the stage's chapter marker for the clip recorder.
+                // A transition stage emits it through the midpoint hook, so the
+                // chapter starts when the new scene commits (a fade's black
+                // moment) rather than during the old scene's fade-out; a
+                // transition-less stage has no such moment and emits directly.
+                // Exception: stage 0 emits up front — there is no old scene,
+                // and a `--record`ed intro's first chapter should start at
+                // 0:00, covering its own fade-in.
+                let mut chapter = STAGE_CHAPTER_TITLES[idx];
+                if idx == 0
+                    && let Some(title) = chapter.take()
+                {
+                    self.recorder.add_marker(title);
+                }
+
                 // = seg000:05c9 if transition >= 0: call transition; else skip.
                 if stage.transition >= 0 {
-                    gfx::vga_transition(self, stage.transition as u16, 0);
+                    gfx::vga_transition(
+                        self,
+                        stage.transition as u16,
+                        0,
+                        Some(&|s: &mut GameState| {
+                            if let Some(title) = chapter {
+                                s.recorder.add_marker(title);
+                            }
+                        }),
+                    );
 
                     // = seg000:05d6 call update_screen_palette — flush the new
                     // palette to the screen now the fade-out has finished ("load
@@ -290,6 +373,8 @@ impl GameState {
                     // (the 05ce `js` skips both for transition < 0); its own guard
                     // means it installs nothing for the intro's room values.
                     self.add_room_frame_task();
+                } else if let Some(title) = chapter {
+                    self.recorder.add_marker(title);
                 }
 
                 // = seg000:05e4 any_key_pressed; jb loc_005fd — a keypress
@@ -384,7 +469,14 @@ impl GameState {
                 // intro clips (e.g. VIRGIN).
                 s.hnm_load_first_frame("CREDITS.HNM", 24);
             });
-            gfx::vga_transition(self, 0x3a, 0);
+            // Port-only midpoint hook: the chapter marker for the clip
+            // recorder, emitted at the fade's black moment.
+            gfx::vga_transition(
+                self,
+                0x3a,
+                0,
+                Some(&|s: &mut GameState| s.recorder.add_marker("Credits")),
+            );
             // = seg000:c12a/c12d gfx_copy_whole_framebuf_to_screen + palette_flush.
             self.gfx_copy_whole_framebuf_to_screen();
             self.update_screen_palette();

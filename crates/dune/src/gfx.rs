@@ -36,6 +36,10 @@ pub fn palette_flush(state: &mut GameState) {
     state.screen_pal = state.palette.clone();
 }
 
+// The midpoint hook type for `vga_transition`: `&dyn Fn` so call sites can
+// pass a plain function or a capturing closure without allocation.
+pub type TransitionMidpoint<'a> = Option<&'a dyn Fn(&mut GameState)>;
+
 // = segvga:25e7 vga_transition — main transition dispatcher.
 // Forces `code` even, wraps modulo 0x3e, and dispatches via the per-handler match below.
 // Mirrors the `jmp word ptr transition_dispatch_table[bx]` at segvga:2616.
@@ -43,10 +47,28 @@ pub fn palette_flush(state: &mut GameState) {
 // `dx` is the caller's dx register. The vertical fold (code 0x04) reads its
 // low byte to pick the script-traversal direction; the page turn (codes
 // 0x0c/0x0e) reads its sign to pick the turn direction.
-pub fn vga_transition(state: &mut GameState, code: u16, dx: i16) {
+//
+// `midpoint` is a port-only hook, absent in DOS: when set, it runs exactly
+// once, at the effect's visual commit point — the instant before the new
+// framebuffer's pixels first reach the visible screen. For the palette fades
+// (0x36/0x38/0x3a) that is the black moment after the fade-out, before the
+// framebuffer copy (so anything the callback draws into fb1 rides along);
+// for the instant swap (0x30) it is the cut; for the progressive wipes it is
+// the start of the effect, whose reveal begins with its first frame.
+// Unimplemented codes fire it too, so a caller gets its one invocation
+// regardless of effect.
+pub fn vga_transition(state: &mut GameState, code: u16, dx: i16, midpoint: TransitionMidpoint) {
     let mut idx = code & 0xfe;
     while idx >= 0x3e {
         idx -= 0x3e;
+    }
+    // The fade/cut handlers fire `midpoint` themselves at their black moment
+    // or cut; every other effect starts revealing fb1 immediately, so its
+    // commit point is here, before the handler runs.
+    if !matches!(idx, 0x30 | 0x36 | 0x38 | 0x3a)
+        && let Some(midpoint) = midpoint
+    {
+        midpoint(state);
     }
     match idx {
         0x00 => transition_vertical_curtain(state, dx as u8),
@@ -58,9 +80,10 @@ pub fn vga_transition(state: &mut GameState, code: u16, dx: i16) {
         0x10 => transition_dotted_columns(state),
         0x2a => transition_spiral(state),
         0x34 => transition_dotted_columns_tall(state),
-        0x30 => transition_instant_swap(state),
-        0x36 => transition_fade_in_from_black(state),
-        0x3a => transition_fade_through_black(state),
+        0x30 => transition_instant_swap(state, midpoint),
+        0x36 => transition_fade_in_from_black(state, midpoint),
+        0x38 => transition_fade_out_to_black(state, midpoint),
+        0x3a => transition_fade_through_black(state, midpoint),
         0x3c => transition_dissolve_lfsr_slow(state),
         other => {
             println!("gfx: vga_transition unimpl code 0x{other:02x}");
@@ -398,7 +421,7 @@ pub fn vga_set_fb_row(state: &mut GameState, row: u16) {
     state.y_offset = row;
 }
 
-// = loc_segvga_026e3 inner step. Subtracts `step_size` from every component
+// = fade_palette_to_black (segvga:26e3) inner step. Subtracts `step_size` from every component
 // of every palette entry in `chunk_start..chunk_start+chunk_size`,
 // saturating at 0. Called `cycles` times per outer loop.
 fn fade_palette_to_black_step(
@@ -477,9 +500,10 @@ fn fade_palette_to_palette_step(
     }
 }
 
-// Run the fade-out kernel for `cycles` outer iterations, processing
-// `chunks` chunks of `per_chunk` palette entries each, and yielding one
-// frame to the driver between chunks (= seg000:0261d / vsync wait).
+// Run the fade-out kernel (= fade_palette_to_black, segvga:26e3) for
+// `cycles` outer iterations, processing `chunks` chunks of `per_chunk`
+// palette entries each, and yielding one frame to the driver between
+// chunks (= fade_vsync_wait, segvga:261d).
 fn run_fade_to_black(
     state: &mut GameState,
     cycles: u8,
@@ -519,7 +543,11 @@ fn run_fade_to_palette(
 // = loc_segvga_02757 (transition_dispatch_table entry 24) — code 0x30:
 // palette flush + copy framebuffer to screen. No fade — an immediate cut.
 // One frame-task tick is enough to let the driver emit the new screen.
-fn transition_instant_swap(state: &mut GameState) {
+fn transition_instant_swap(state: &mut GameState, midpoint: TransitionMidpoint) {
+    // Port-only midpoint hook: the cut — fb1 commits to the screen next.
+    if let Some(midpoint) = midpoint {
+        midpoint(state);
+    }
     state.gfx_copy_whole_framebuf_to_screen();
     palette_flush(state);
     state.present_transition_frame();
@@ -683,7 +711,7 @@ fn transition_expanding_box(state: &mut GameState) {
 // the palette back up to the saved target. Parameters from segvga:264a:
 // cx=0x60 (batch=96 bytes = 32 entries × 8 chunks), dx=320 (step=1
 // cycles=64).
-fn transition_fade_in_from_black(state: &mut GameState) {
+fn transition_fade_in_from_black(state: &mut GameState, midpoint: TransitionMidpoint) {
     const FADE_36_CYCLES: u8 = 64;
     const FADE_36_CHUNKS: u8 = 8;
     const FADE_36_PER_CHUNK: usize = 32;
@@ -694,6 +722,10 @@ fn transition_fade_in_from_black(state: &mut GameState) {
         state.palette.set(i, Color(0, 0, 0));
         state.screen_pal.set(i, Color(0, 0, 0));
     }
+    // Port-only midpoint hook: the palette is black; fb1 commits next.
+    if let Some(midpoint) = midpoint {
+        midpoint(state);
+    }
     state.gfx_copy_whole_framebuf_to_screen();
 
     run_fade_to_palette(
@@ -703,6 +735,56 @@ fn transition_fade_in_from_black(state: &mut GameState) {
         FADE_36_PER_CHUNK,
         FADE_36_STEP,
     );
+}
+
+// = segvga:26b0 transition_fade_out_to_black (transition_dispatch_table
+// entry 28) — code 0x38: fade the visible palette out to black, swap the
+// new framebuffer onto the screen while nothing is visible, then restore
+// the palette so what follows shows in full colour immediately. Unlike
+// 0x3a there is no fade back up — the restore is a snap (the DOS tail
+// `jmp palette_flush`, reached in the port through the caller's
+// update_screen_palette as well).
+//
+// Its only current caller is the CD intro's final stage (INTRO_SCRIPT
+// stage 47, init = clear): the new framebuffer is black, so the effect
+// reads as a plain fade-out that leaves the palette armed for whatever
+// comes next.
+//
+// Parameters from segvga:26b3/26b6: ax=0x40 (4 chunks of 64 entries),
+// dx=0x220 (step=2, cycles=32; 32 × 2 covers the full 6-bit DAC range).
+fn transition_fade_out_to_black(state: &mut GameState, midpoint: TransitionMidpoint) {
+    const FADE_38_CYCLES: u8 = 32;
+    const FADE_38_CHUNKS: u8 = 4;
+    const FADE_38_PER_CHUNK: usize = 64;
+    const FADE_38_STEP: u8 = 2;
+
+    // = segvga:26b0 call vga_copy_palette_to_fade_target — snapshot the
+    // working palette (palette_cache) so the fade below can destroy it.
+    state.palette_fade_target = state.palette.clone();
+
+    // = segvga:26b9 call fade_palette_to_black (ax=0x40, dx=0x220).
+    run_fade_to_black(
+        state,
+        FADE_38_CYCLES,
+        FADE_38_CHUNKS,
+        FADE_38_PER_CHUNK,
+        FADE_38_STEP,
+    );
+
+    // Port-only midpoint hook: the black moment — fb1 commits next.
+    if let Some(midpoint) = midpoint {
+        midpoint(state);
+    }
+
+    // = segvga:26bc..26c7 restore the caller's ds/es and vga_copy_screen —
+    // swap the new framebuffer in at the black moment.
+    state.gfx_copy_whole_framebuf_to_screen();
+
+    // = segvga:26ce..26d9 rep movsw palette_fade_target → palette_cache —
+    // bring the snapshotted palette back into the working palette.
+    state.palette = state.palette_fade_target.clone();
+    // = segvga:26e0 jmp palette_flush — upload the restored entries.
+    palette_flush(state);
 }
 
 // = loc_segvga_0272e (transition_dispatch_table entry 29) — code 0x3a:
@@ -719,7 +801,7 @@ fn transition_fade_in_from_black(state: &mut GameState) {
 //
 // Parameters from segvga:2745 (fade-out) and segvga:2751 (fade-up):
 // ax/cx=0xff (3 chunks of 85 entries), dx=0x316 (step=3 cycles=22).
-fn transition_fade_through_black(state: &mut GameState) {
+fn transition_fade_through_black(state: &mut GameState, midpoint: TransitionMidpoint) {
     const FADE_3A_CYCLES: u8 = 22;
     const FADE_3A_CHUNKS: u8 = 3;
     const FADE_3A_PER_CHUNK: usize = 85;
@@ -734,6 +816,11 @@ fn transition_fade_through_black(state: &mut GameState) {
         FADE_3A_PER_CHUNK,
         FADE_3A_STEP,
     );
+
+    // Port-only midpoint hook: the black moment — fb1 commits next.
+    if let Some(midpoint) = midpoint {
+        midpoint(state);
+    }
 
     // Palette is now all-zero — safe to swap the screen contents under it.
     state.gfx_copy_whole_framebuf_to_screen();
