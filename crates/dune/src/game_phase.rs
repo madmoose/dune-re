@@ -36,8 +36,9 @@ pub(crate) const PHASE_03_STILLSUIT_QUEST: u8 = 0x03;
 /// Callback 04: palace room 1 background steps back, locations 10 and 17
 /// appear, Jessica moves. Book: the harvester.
 pub(crate) const PHASE_04_STILLSUIT_MAKER_MET: u8 = 0x04;
-/// Book: the prospecting troop. Leto says the palace may hold secrets
-/// (0x05..0x07, +1).
+/// The prospector troop (troop id 3, at Carthag-Timin) is rallied: its chief's
+/// "our knowledge is appreciated" line (cond 474, +1). Book: the prospecting
+/// troop. Leto says the palace may hold secrets (0x05..0x07, +1).
 pub(crate) const PHASE_05_PROSPECTORS_FOUND: u8 = 0x05;
 /// Jessica accompanies Paul through the palace (cond 96: 0x06..0x08); the
 /// hidden door in room 2 (+4).

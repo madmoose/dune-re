@@ -84,7 +84,9 @@ pub(crate) const TROOPS: [Troop; 68] = [
         equipment: 0b00000000,
         population: 208,
     },
-    // [2]
+    // [2] the prospector troop (troop id 3): starts unhired at Carthag-Timin
+    // (locations[11], visible from the start); its chief's phase-4 line
+    // rallies it, and MOVE TROOP on it opens menu_map_move_prospectors.
     Troop {
         troop_id: 3,
         next_troop_id: 0,
