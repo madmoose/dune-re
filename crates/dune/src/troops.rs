@@ -1538,7 +1538,17 @@ pub(crate) const TROOPS: [Troop; 68] = [
     },
 ];
 
-use crate::{GameState, game_state::NearestLocation, locations, room_game_screen::NPC_STORY_BIT};
+use crate::{
+    GameState,
+    game_phase::{
+        PHASE_2D_GURNEY_TRAINING, PHASE_4C_LETO_KILLED, PHASE_30_BARON_ATTACK_RUSE,
+        PHASE_35_SABOTEURS_BEGIN, PHASE_60_FIND_CHANI, PHASE_64_ENDGAME, PHASE_68_CHANI_RESCUED,
+        PHASE_C8_GAME_WON,
+    },
+    game_state::NearestLocation,
+    locations,
+    room_game_screen::NPC_STORY_BIT,
+};
 
 /// = the for_condit_troop_* staging block at seg001:002c..004b, filled by
 /// troop_prepare_troop_data_for_condit for the troop behind the active
@@ -2270,7 +2280,7 @@ impl GameState {
             al = 0x64;
         }
         // = seg000:6f31..6f45 the endgame malus.
-        if (0x64..0x68).contains(&self.game_phase) {
+        if (PHASE_64_ENDGAME..PHASE_68_CHANI_RESCUED).contains(&self.game_phase) {
             al = al.wrapping_sub(0x28);
             if (al as i8) < 10 {
                 al = 10;
@@ -2286,10 +2296,10 @@ impl GameState {
         if self.troops[ti].dissatisfaction_and_speech & 0x800 == 0 {
             return;
         }
-        if !(0x60..0x64).contains(&self.game_phase) {
+        if !(PHASE_60_FIND_CHANI..PHASE_64_ENDGAME).contains(&self.game_phase) {
             return;
         }
-        self.set_game_phase_and_trigger_callbacks(0x64);
+        self.set_game_phase_and_trigger_callbacks(PHASE_64_ENDGAME);
     }
 
     // = seg000:6c6f run_troop_occupation_events — the per-time-period walk
@@ -2366,7 +2376,7 @@ impl GameState {
     // (the staged ds:66 count), the story advances to phase 0x30.
     fn gurney_training_phase_check(&mut self) {
         // = seg000:6c46..6c4d al = game_phase - 0x2d; cmp al,3; jnb ret.
-        if self.game_phase.wrapping_sub(0x2d) >= 3 {
+        if self.game_phase.wrapping_sub(PHASE_2D_GURNEY_TRAINING) >= 3 {
             return;
         }
         // = seg000:6c4f test persons_travelling_with,10h; jnz ret.
@@ -2385,7 +2395,7 @@ impl GameState {
             return;
         }
         // = seg000:6c69/6c6b.
-        self.set_game_phase_and_trigger_callbacks(0x30);
+        self.set_game_phase_and_trigger_callbacks(PHASE_30_BARON_ATTACK_RUSE);
     }
 
     // = seg000:6ced loc_06ced — the walk's moving-troop branch: the troop
@@ -3083,7 +3093,7 @@ impl GameState {
     // flagged, and message 3 ("There are saboteurs here in ...") is queued.
     fn troop_randomize_saboteurs(&mut self, ti: usize, li: usize) {
         // = seg000:71bc..71c8 the phase and dissatisfaction gates.
-        if self.game_phase < 0x35 {
+        if self.game_phase < PHASE_35_SABOTEURS_BEGIN {
             return;
         }
         if self.troops[ti].dissatisfaction_and_speech & 0x40 == 0 {
@@ -3275,7 +3285,7 @@ impl GameState {
     pub(crate) fn walk_facing_sprite(&self, id: u8, fremen2_index: u8) -> (u8, u8) {
         let troop = if id == 0x0e {
             self.fremen1_troop
-        } else if self.game_phase == 0xc8 {
+        } else if self.game_phase == PHASE_C8_GAME_WON {
             // = seg000:9143/9148 jz char_to_sprite_store_expr.
             return (id, 0);
         } else {
@@ -3858,7 +3868,7 @@ impl GameState {
         // = seg000:66da..66ea the rally count + the Leto-killed threshold.
         self.number_of_rallied_troops = self.number_of_rallied_troops.wrapping_add(1);
         if self.number_of_rallied_troops >= self.number_of_rallied_troops_for_leto_killed {
-            self.set_game_phase_and_trigger_callbacks(0x4c);
+            self.set_game_phase_and_trigger_callbacks(PHASE_4C_LETO_KILLED);
         }
         // = seg000:66ee/66f0 al = 1; call increase_charisma...
         self.increase_charisma(1);
@@ -3891,7 +3901,11 @@ impl GameState {
 mod tests {
     use std::sync::mpsc;
 
-    use crate::{GameState, dat_file::DatFile};
+    use crate::{
+        GameState,
+        dat_file::DatFile,
+        game_phase::{PHASE_2C_STILGAR_MET, PHASE_2D_GURNEY_TRAINING, PHASE_30_BARON_ATTACK_RUSE},
+    };
 
     // A moving troop (occupation bit 6) travels toward its destination one
     // period at a time (seg000:8308, 8 sub-steps with an ornithopter) and on
@@ -4507,7 +4521,7 @@ mod tests {
         }
         game.new_day_flag = 0;
         game.vegetation_started_on_dune = 0;
-        game.game_phase = 0x30;
+        game.game_phase = PHASE_30_BARON_ATTACK_RUSE;
         game.gurney_location_ptr = 0;
         game.room_persons[4].location_appearance = 0;
         game.troops[ti].occupation = 4;
@@ -4711,17 +4725,17 @@ mod tests {
         game.room_persons[4].location_appearance = ((li as u16 + 1) << 8) | 0x80;
 
         // Out of the window: nothing.
-        game.game_phase = 0x2c;
+        game.game_phase = PHASE_2C_STILGAR_MET;
         game.run_troop_occupation_events();
-        assert_eq!(game.game_phase, 0x2c);
+        assert_eq!(game.game_phase, PHASE_2C_STILGAR_MET);
         // In the window but Gurney travels with Paul: nothing.
-        game.game_phase = 0x2e;
+        game.game_phase = PHASE_2D_GURNEY_TRAINING + 1;
         game.persons_travelling_with = 0x10;
         game.run_troop_occupation_events();
-        assert_eq!(game.game_phase, 0x2e);
+        assert_eq!(game.game_phase, PHASE_2D_GURNEY_TRAINING + 1);
         // Gurney at the sietch: the phase advances.
         game.persons_travelling_with = 0;
         game.run_troop_occupation_events();
-        assert_eq!(game.game_phase, 0x30);
+        assert_eq!(game.game_phase, PHASE_30_BARON_ATTACK_RUSE);
     }
 }

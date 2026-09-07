@@ -40,6 +40,7 @@
 
 use crate::{
     GameState, Rect, cmd,
+    game_phase::{PHASE_10_TUONO_HARG_FOUND, PHASE_50_WORM_RIDDEN},
     game_ui::MouseHandlers,
     gfx,
     locations::location_index_from_ptr,
@@ -2541,7 +2542,7 @@ impl GameState {
             }
         };
 
-        let equipment_greyed = self.game_phase < 0x10;
+        let equipment_greyed = self.game_phase < PHASE_10_TUONO_HARG_FOUND;
         let ecology_greyed = self.bitfield_paul_events & 0x20 == 0;
         let menu = self.menu_buffer_mut(menu_ref);
 
@@ -2881,7 +2882,7 @@ impl GameState {
             free = free.saturating_sub(1);
         }
         // = seg000:804c..805f the player's own location keeps an orni.
-        if slot == 1 && li == self.last_location_index && self.game_phase < 0x50 {
+        if slot == 1 && li == self.last_location_index && self.game_phase < PHASE_50_WORM_RIDDEN {
             free = free.saturating_sub(1);
         }
         free
@@ -4567,6 +4568,7 @@ mod tests {
     use crate::{
         GameState, cmd,
         dat_file::DatFile,
+        game_phase::{PHASE_05_PROSPECTORS_FOUND, PHASE_10_TUONO_HARG_FOUND},
         gfx,
         menu_defs::{CMD_GREY, MenuRef},
         troop_map_screen::MapPanelRef,
@@ -5880,7 +5882,7 @@ mod tests {
         // is offered.
         game.troops[0].occupation = 0x08;
         game.bitfield_paul_events |= 0x20;
-        game.game_phase = 0x10;
+        game.game_phase = PHASE_10_TUONO_HARG_FOUND;
         game.menu_callback_choice_map_troop_dialogue_change_troop_occupation(
             cmd::CHANGE_TROOP_OCCUPATION,
             0,
@@ -6429,7 +6431,7 @@ mod tests {
         game.start(true);
         while rx.try_recv().is_ok() {}
 
-        game.game_phase = 5;
+        game.game_phase = PHASE_05_PROSPECTORS_FOUND;
         game.troops[2].occupation = 0x01;
         game.number_of_rallied_troops = 1;
         game.location_visibility_distance = 4;

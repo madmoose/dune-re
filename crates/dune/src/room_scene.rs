@@ -30,6 +30,10 @@
 
 use crate::{
     DrawOptions, GameState, Rect, RoomRenderer, RoomSheet, SpriteSheet, blit,
+    game_phase::{
+        PHASE_10_TUONO_HARG_FOUND, PHASE_24_ARMORY_FOUND, PHASE_54_GREENHOUSE_OPENED,
+        PHASE_C8_GAME_WON,
+    },
     room_game_screen::{NPC_COMPANION, NPC_LEFT_BEHIND, NPC_STORY_BIT},
     sal_position_markers, sal_position_markers_from_list, sprite_bank,
 };
@@ -716,7 +720,7 @@ impl GameState {
             room = (room & 0xff00) | home as u16;
             // = seg000:21cc..21d7 Gurney's room 6 is room 0x0a before game
             //   phase 0x24.
-            if home == 6 && self.game_phase < 0x24 {
+            if home == 6 && self.game_phase < PHASE_24_ARMORY_FOUND {
                 room = (room & 0xff00) | 0x0a;
             }
             let entry = &mut self.room_persons[i];
@@ -734,7 +738,7 @@ impl GameState {
             // = seg000:21fa..2200 al = rand_iterated(0x0a) + 2.
             let room = self.rand_iterated(0x0a) as u8 + 2;
             // = seg000:2202 cmp game_phase,54h; jnb ret.
-            if self.game_phase >= 0x54 {
+            if self.game_phase >= PHASE_54_GREENHOUSE_OPENED {
                 return room;
             }
             // = seg000:2209 cmp al,3; jz retry.
@@ -742,7 +746,7 @@ impl GameState {
                 continue;
             }
             // = seg000:220d cmp game_phase,24h; jnb ret.
-            if self.game_phase >= 0x24 {
+            if self.game_phase >= PHASE_24_ARMORY_FOUND {
                 return room;
             }
             // = seg000:2214/2218 cmp al,0bh / cmp al,6; jz retry.
@@ -803,7 +807,7 @@ impl GameState {
         //   Tuono-Harg; discovering it advances the story to phase 0x10.
         if first_name == 3 && last_name == 6 {
             // = seg000:427e call set_game_phase_and_trigger_callbacks(0x10).
-            self.set_game_phase_and_trigger_callbacks(0x10);
+            self.set_game_phase_and_trigger_callbacks(PHASE_10_TUONO_HARG_FOUND);
         }
     }
 
@@ -840,7 +844,7 @@ impl GameState {
         //   (seg000:16fc sets game_phase 0xc8 and runs the ending sequence).
         if new_room == 0x3002 {
             // = seg000:16fc mov [game_phase],0c8h.
-            self.game_phase = 0xc8;
+            self.game_phase = PHASE_C8_GAME_WON;
             // TODO: port the ending sequence game_phase_set_to_c8_game_ending
             //   falls into (loc_01771 onwards); the room redraw is skipped (DOS
             //   never returns here).
@@ -1629,6 +1633,7 @@ pub(crate) fn sky_palette_id_from_game_time(game_time: u16) -> usize {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::game_phase::PHASE_24_ARMORY_FOUND;
 
     #[test]
     fn calc_sal_index_thresholds() {
@@ -1911,7 +1916,10 @@ mod tests {
         let mut game = GameState::new(dat_file, tx);
         game.set_headless();
         game.start(true);
-        assert!(game.game_phase < 0x24, "the early-game room rules apply");
+        assert!(
+            game.game_phase < PHASE_24_ARMORY_FOUND,
+            "the early-game room rules apply"
+        );
 
         // The player arrives at Carthag (locations[1], slot 2, appearance 0x30).
         let dest = 1usize;

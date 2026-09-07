@@ -1468,6 +1468,35 @@ impl GameState {
         }
     }
 
+    // = seg000:491c play_worm_ride_clip — play the loaded VER.HNM worm-ride clip
+    // straight to the screen: flush the palette, start the looping SN8.VOC,
+    // then advance frames (a keypress skips) until the clip completes, ending
+    // the VOC loop at frame 0x0b; fb1 is the active framebuffer again after.
+    // The in-game twin of the intro's stage_41_play.
+    pub(crate) fn play_worm_ride_clip(&mut self) {
+        // = seg000:491c/491f set_screen_as_active_framebuffer;
+        //   update_screen_palette.
+        self.set_screen_as_active_framebuffer();
+        self.update_screen_palette();
+        // = seg000:4922 al = 8; call audio_start_voc — SN8.VOC.
+        self.audio_start_voc("SN8.VOC");
+        // = seg000:4927 call service_midi_music.
+        self.service_midi_music();
+        // = seg000:492a..4932 the frame loop: hnm_do_frame_skippable; jz done;
+        //   hnm_end_voc_loop_check_complete; jz loop.
+        loop {
+            if self.hnm_do_frame_skippable() {
+                break;
+            }
+            self.send_frame_to_display();
+            if self.hnm_end_voc_loop_check_complete() {
+                break;
+            }
+        }
+        // = seg000:4934 jmp set_fb1_as_active_framebuffer.
+        self.set_fb1_as_active_framebuffer();
+    }
+
     // = seg000:4937 hnm_end_voc_loop_check_complete (loc_04937). When the HNM
     // frame counter ([dbe8] _word_2D098_hnm_frame_counter, mirrored by the
     // decoder's current_frame) has low byte 0x0b, end the currently looping VOC

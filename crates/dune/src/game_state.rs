@@ -4,6 +4,7 @@ use crate::{
     attack::AttackState,
     blit, cmd,
     frame_slot::FrameSink,
+    game_phase::{PHASE_15_FIRST_VISION, PHASE_20_THUFIR_FOUND, PHASE_C8_GAME_WON},
     game_ui::{self, MouseHandlers, NavPanel, ROOM_MOUSE_HANDLERS, UI_ELEMENTS_INIT, UiElement},
     gfx::{self, palette_flush},
     globe_renderer::GlobeRenderer,
@@ -3206,7 +3207,7 @@ impl GameState {
                 // the call when nothing is pending.
                 if !self.talking_head.as_ref().is_some_and(|h| h.speaking)
                     && self.game_suspend_count == 0
-                    && self.game_phase < 0xc8
+                    && self.game_phase < PHASE_C8_GAME_WON
                 {
                     self.idle_room_message_check();
                     if self.new_time_period_pending != 0 {
@@ -4563,7 +4564,7 @@ impl GameState {
 
         // = seg000:1280 cmp [game_phase],15h; jb; cmp [game_phase],20h; ret —
         //   carry (the caller's skip) iff 0x15 <= game_phase < 0x20.
-        (0x15..0x20).contains(&self.game_phase)
+        (PHASE_15_FIRST_VISION..PHASE_20_THUFIR_FOUND).contains(&self.game_phase)
     }
 
     // = seg000:5b6e loc_05b6e — draw a 4-deep bevelled rectangle border. Starting

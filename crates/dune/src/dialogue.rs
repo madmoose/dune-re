@@ -32,7 +32,9 @@ use std::io::Cursor;
 use bytes_ext::ReadBytesExt;
 
 use crate::{
-    GameState, Rect, container, gfx,
+    GameState, Rect, container,
+    game_phase::{PHASE_10_TUONO_HARG_FOUND, PHASE_64_ENDGAME},
+    gfx,
     menu_defs::MenuRef,
     room_game_screen::{NPC_COMPANION, NPC_STORY_BIT},
     smugglers::smuggler_index_from_ptr,
@@ -1039,7 +1041,7 @@ impl GameState {
         // = seg000:9519..952f before phase 0x64 and for speakers < 9, the
         //   latest illness location's name fills the 0x81/0x82 placeholders
         //   ("There is a strange disease here in ....").
-        if self.game_phase >= 0x64 || id >= 9 {
+        if self.game_phase >= PHASE_64_ENDGAME || id >= 9 {
             return;
         }
         if self.latest_location_with_illness == 0 {
@@ -1599,7 +1601,7 @@ impl GameState {
     // keyed by the fulfilment class.
     fn dialogue_event_0f_duncan_idaho(&mut self) {
         // = seg000:24a3/24a8 cmp game_phase,10h; jnb loc_024b0.
-        if self.game_phase < 0x10 {
+        if self.game_phase < PHASE_10_TUONO_HARG_FOUND {
             // = seg000:24aa or room_persons[1].flags, 10h.
             self.room_persons[1].flags |= NPC_STORY_BIT;
             return;
@@ -1668,6 +1670,10 @@ mod tests {
     use crate::{
         GameState, container,
         dat_file::DatFile,
+        game_phase::{
+            PHASE_0C_COMM_ROOM_FOUND, PHASE_06_JESSICA_EXPLORES_PALACE, PHASE_08_HIDDEN_DOOR_FOUND,
+            PHASE_10_TUONO_HARG_FOUND,
+        },
         menu_defs::MenuRef,
         room_game_screen::{NPC_COMPANION, NPC_STORY_BIT},
     };
@@ -1696,7 +1702,7 @@ mod tests {
 
         // Into the palace communication room (0x2008) at phase 8, Jessica
         // standing there.
-        game.game_phase = 8;
+        game.game_phase = PHASE_08_HIDDEN_DOOR_FOUND;
         game.room_persons[1].location_and_room = 0x2008;
         game.room_persons[1].location_appearance = game.location_appearance;
         game.pending_room_action = 5;
@@ -1718,7 +1724,10 @@ mod tests {
             game.current_subtitle_id, 0x846,
             "It looks like a communication room..."
         );
-        assert_eq!(game.game_phase, 0x0c, "event 0x0c advanced the phase");
+        assert_eq!(
+            game.game_phase, PHASE_0C_COMM_ROOM_FOUND,
+            "event 0x0c advanced the phase"
+        );
         assert_eq!(
             game.scene_records[7].exits[1] & 0x80,
             0,
@@ -1966,7 +1975,7 @@ mod tests {
 
         // Phase 6, Jessica travelling with Paul (COME WITH ME) in the throne
         // room (0x200a).
-        game.game_phase = 6;
+        game.game_phase = PHASE_06_JESSICA_EXPLORES_PALACE;
         game.room_persons[1].flags |= NPC_COMPANION;
         game.room_persons[1].location_and_room = game.location_and_room;
         game.room_persons[1].location_appearance = game.location_appearance;
@@ -2009,7 +2018,10 @@ mod tests {
             game.current_subtitle_id, 0x83b,
             "I think there is a hidden door on the left."
         );
-        assert_eq!(game.game_phase, 8, "the discovery advanced the phase");
+        assert_eq!(
+            game.game_phase, PHASE_08_HIDDEN_DOOR_FOUND,
+            "the discovery advanced the phase"
+        );
     }
 
     #[test]
@@ -2095,7 +2107,7 @@ mod tests {
 
         // Duncan (speaker 3) before phase 0x10: only the story bit.
         game.current_lip_sync_resource_id = 3;
-        game.game_phase = 0x0f;
+        game.game_phase = PHASE_10_TUONO_HARG_FOUND - 1;
         game.dispatch_dialogue_line_event(0x0f, 0);
         assert_ne!(
             game.room_persons[1].flags & NPC_STORY_BIT,
@@ -2111,7 +2123,7 @@ mod tests {
         // Duncan from phase 0x10 with nothing ever paid (ds:be = 0, class
         // 5): the mission arms, he is sighted at location 0x0c and the
         // unpaid-shipment count bumps.
-        game.game_phase = 0x10;
+        game.game_phase = PHASE_10_TUONO_HARG_FOUND;
         game.for_condit_spice_shipment_ds_c0 = 0x1234;
         game.spice_shipment_fulfilment = 0;
         let ends = game.dialogue_end_request;

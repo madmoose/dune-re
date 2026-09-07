@@ -16,7 +16,10 @@
 //! Stage 2 adds the random idle frame task (`loc_099be`). Stage 3 wires the
 //! `.voc` lip-sync stream.
 
-use crate::{GameState, Lipsync, Rect, SpriteSheet, gfx, rect::rect, sprite_blitter};
+use crate::{
+    GameState, Lipsync, Rect, SpriteSheet, game_phase::PHASE_C8_GAME_WON, gfx, rect::rect,
+    sprite_blitter,
+};
 
 // = the resource-index → portrait list. DOS opens the head sheet with
 // open_spritesheet(al + 2); the resource table at seg001:3203 starts
@@ -549,7 +552,7 @@ impl GameState {
             (facing, 0x0f18)
         } else {
             // = 9a85 al = 5, bx = 0f38h; 9a8a..9a98 the Chani late-game bump.
-            let al = if lip_id == 7 && self.game_phase >= 0xc8 {
+            let al = if lip_id == 7 && self.game_phase >= PHASE_C8_GAME_WON {
                 6
             } else {
                 5

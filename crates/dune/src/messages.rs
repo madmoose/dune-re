@@ -8,6 +8,7 @@
 
 use crate::{
     GameState,
+    game_phase::PHASE_14_AWAITING_VISION,
     game_state::TaskId,
     gfx, locations,
     menu_defs::{MenuRef, item},
@@ -228,10 +229,10 @@ impl GameState {
         // = seg000:2b47..2b4f ax = the PIT counter; pre-vision phases idle
         // out; phase exactly 0x14 takes the first-vision trigger instead.
         let ticks = self.game_ticks() as u16;
-        if self.game_phase < 0x14 {
+        if self.game_phase < PHASE_14_AWAITING_VISION {
             return;
         }
-        if self.game_phase == 0x14 {
+        if self.game_phase == PHASE_14_AWAITING_VISION {
             self.first_vision_idle_check(ticks);
             return;
         }
@@ -1059,7 +1060,9 @@ impl GameState {
 mod tests {
     use std::sync::mpsc;
 
-    use crate::{GameState, dat_file::DatFile, menu_defs::MenuRef};
+    use crate::{
+        GameState, dat_file::DatFile, game_phase::PHASE_18_GURNEY_SEARCH, menu_defs::MenuRef,
+    };
 
     fn asset_game() -> Option<GameState> {
         let dat_path = concat!(env!("CARGO_MANIFEST_DIR"), "/../../assets/DUNE.DAT");
@@ -1192,7 +1195,7 @@ mod tests {
         game.pcm_player.set_enabled(true);
         // Visions enabled, past the first-vision phase.
         game.bitfield_paul_events |= 1;
-        game.game_phase = 0x18;
+        game.game_phase = PHASE_18_GURNEY_SEARCH;
         // Queue "A message has arrived in the palace." (0x201, sender class
         // 2) and put the sender in the room.
         game.queue_vision_message_without_location(0x201);
@@ -1338,7 +1341,7 @@ mod tests {
         let Some(mut game) = asset_game() else { return };
         game.pcm_player.set_enabled(true);
         game.bitfield_paul_events |= 1;
-        game.game_phase = 0x18;
+        game.game_phase = PHASE_18_GURNEY_SEARCH;
         game.queue_vision_message_without_location(0x201);
         game.persons_in_room = 0;
         game.game_clock_tick_base = (game.game_ticks() as u16).wrapping_sub(0x200);

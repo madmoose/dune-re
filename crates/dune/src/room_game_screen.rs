@@ -14,6 +14,9 @@ use crate::{
     Equipment, GameState, Location,
     attack::AttackState,
     cmd,
+    game_phase::{
+        PHASE_4F_WORM_CALL_UNLOCKED, PHASE_14_AWAITING_VISION, PHASE_32_TOWARDS_NEAREST_PLACE,
+    },
     game_ui::NAV_PANEL_RECORD_OFFSET,
     gfx, locations,
     menu_defs::{self, CMD_GREY, MenuCleanupFn, MenuItem, MenuItemCallback, MenuRef, item},
@@ -920,7 +923,7 @@ impl GameState {
         self.wait_run_events_and_present(target);
         // = seg000:0f84 cmp [game_phase],14h; jnz — only the 0x14 phase rewinds
         //   game_clock_tick_base (seg000:0f8e sub [game_clock_tick_base],3e8h).
-        if self.game_phase == 0x14 {
+        if self.game_phase == PHASE_14_AWAITING_VISION {
             self.game_clock_tick_base = self.game_clock_tick_base.wrapping_sub(0x3e8);
         }
     }
@@ -1625,7 +1628,9 @@ impl GameState {
                     // worm-summon verb greyed until game_phase >= 0x4f.
                     recs.push(CMD_MASSIVE_ATTACK);
                     recs.push(CMD_FIGHT_FOR_A_WHOLE_DAY);
-                    recs.push(CMD_CALL_A_WORM.grayed_if(self.game_phase < 0x4f));
+                    recs.push(
+                        CMD_CALL_A_WORM.grayed_if(self.game_phase < PHASE_4F_WORM_CALL_UNLOCKED),
+                    );
                 } else {
                     // = seg000:2f3d loc_02f3d — di = [current_location_ptr] (the current
                     // location pointer stashed there at room commit); call
@@ -1679,7 +1684,7 @@ impl GameState {
                 recs.push(CMD_BACK_TO_STARTING_POINT);
                 // = seg000:2fe4 cmp game_phase,32h; jb — from phase 0x32 the
                 // list also offers si=2204h "TOWARDS NEAREST PLACE".
-                if self.game_phase >= 0x32 {
+                if self.game_phase >= PHASE_32_TOWARDS_NEAREST_PLACE {
                     recs.push(CMD_TOWARDS_NEAREST_PLACE);
                 }
             } else {
@@ -1698,7 +1703,7 @@ impl GameState {
             // = seg000:2fb1 si=220ch; "SEE DUNE MAP".
             recs.push(CMD_SEE_DUNE_MAP);
             // = seg000:2fb6 si=2214h; "CALL A WORM" greyed until phase >= 0x4f.
-            recs.push(CMD_CALL_A_WORM.grayed_if(self.game_phase < 0x4f));
+            recs.push(CMD_CALL_A_WORM.grayed_if(self.game_phase < PHASE_4F_WORM_CALL_UNLOCKED));
             // = seg000:2fc6 the time-skip verb: "WAIT FOR EVENING" while the
             // in-game time-of-day phase is < 0x0b, else "WAIT FOR MORNING".
             if self.get_ingame_time_of_day() < 0x0b {
@@ -3295,7 +3300,19 @@ mod tests {
     use std::sync::mpsc;
 
     use super::{NAV_PANEL_RECORD_OFFSET, NPC_COMPANION, NPC_STORY_BIT, NPC_TALKED_TO};
-    use crate::{Equipment, GameState, dat_file::DatFile, gfx, menu_defs::MenuRef};
+    use crate::{
+        Equipment, GameState,
+        dat_file::DatFile,
+        game_phase::{
+            PHASE_00_START, PHASE_01_DUNCAN_AVAILABLE, PHASE_1C_ROOM_6_OPENED,
+            PHASE_02_TWO_TROOPS_RALLIED, PHASE_2C_STILGAR_MET, PHASE_04_STILLSUIT_MAKER_MET,
+            PHASE_4C_LETO_KILLED, PHASE_05_PROSPECTORS_FOUND, PHASE_06_JESSICA_EXPLORES_PALACE,
+            PHASE_08_HIDDEN_DOOR_FOUND, PHASE_10_TUONO_HARG_FOUND, PHASE_14_AWAITING_VISION,
+            PHASE_20_THUFIR_FOUND, PHASE_30_BARON_ATTACK_RUSE, PHASE_32_TOWARDS_NEAREST_PLACE,
+        },
+        gfx,
+        menu_defs::MenuRef,
+    };
 
     // = seg000:7f27/7f2a — the location available-equipment computation: the
     // location's equipment row minus each stationed troop's held equipment, per
@@ -3776,7 +3793,7 @@ mod tests {
 
         // After the stillsuits are acquired (game_phase > 3), with Gurney
         // standing in the equipment room (0x2002):
-        game.game_phase = 4;
+        game.game_phase = PHASE_04_STILLSUIT_MAKER_MET;
         game.room_persons[4].location_and_room = 0x2002;
         game.room_persons[4].location_appearance = game.location_appearance;
 
@@ -3794,7 +3811,7 @@ mod tests {
 
         // With Jessica also present at game_phase 6, she scans first (table
         // slot 1) and the first-speaker latch keeps Gurney quiet.
-        game.game_phase = 6;
+        game.game_phase = PHASE_06_JESSICA_EXPLORES_PALACE;
         game.room_persons[1].location_and_room = 0x2002;
         game.room_persons[1].location_appearance = game.location_appearance;
         game.pending_room_action = 5;
@@ -3910,19 +3927,19 @@ mod tests {
         game.set_headless();
         game.start(true);
 
-        game.game_phase = 0x14;
+        game.game_phase = PHASE_14_AWAITING_VISION;
         assert_eq!(
             game.character_sprite_map()[4],
             (4, 0),
             "standing before 0x15"
         );
-        game.game_phase = 0x1c;
+        game.game_phase = PHASE_1C_ROOM_6_OPENED;
         assert_eq!(
             game.character_sprite_map()[4],
             (0x11, 0x35),
             "= seg000:3d60/3d62"
         );
-        game.game_phase = 0x20;
+        game.game_phase = PHASE_20_THUFIR_FOUND;
         assert_eq!(
             game.character_sprite_map()[4],
             (4, 0),
@@ -3939,7 +3956,7 @@ mod tests {
 
         // His talking head gets no idle animator while he lies wounded
         // (seg000:9940 jb loc_0994e).
-        game.game_phase = 0x1c;
+        game.game_phase = PHASE_1C_ROOM_6_OPENED;
         game.remove_frame_task(crate::TaskId::TalkingHeadIdle);
         game.setup_talking_head(4, 0);
         assert!(
@@ -4177,7 +4194,7 @@ mod tests {
         // stage where she accompanies Paul to the Fremen). Enter dialogue with
         // her and ask.
         game.common_dialogue(0x1);
-        game.game_phase = 6;
+        game.game_phase = PHASE_06_JESSICA_EXPLORES_PALACE;
         game.menu_callback_choice_come_with_me(0, 0);
         assert_eq!(game.dialogue_interrupt_gate, 0xff, "gate must stay armed");
         assert_ne!(
@@ -4569,7 +4586,7 @@ mod tests {
         // Homing flight (travel_no_location_dest == 0): SKIP TO DESTINATION, then CHANGE
         // DESTINATION.
         game.travel_no_location_dest = 0;
-        game.game_phase = 0;
+        game.game_phase = PHASE_00_START;
         game.build_room_command_records();
         assert_eq!(game.active_menu_records().len(), 2);
         assert_eq!(
@@ -4586,7 +4603,7 @@ mod tests {
         // Directional flight before phase 0x32: BACK TO STARTING POINT alone
         // (the case the port previously got wrong, showing SKIP TO DESTINATION).
         game.travel_no_location_dest = 0xff;
-        game.game_phase = 0x20;
+        game.game_phase = PHASE_20_THUFIR_FOUND;
         game.build_room_command_records();
         assert_eq!(
             game.active_menu_records().len(),
@@ -4606,7 +4623,7 @@ mod tests {
 
         // Directional flight from phase 0x32: BACK TO STARTING POINT + TOWARDS
         // NEAREST PLACE, then CHANGE DESTINATION.
-        game.game_phase = 0x32;
+        game.game_phase = PHASE_32_TOWARDS_NEAREST_PLACE;
         game.build_room_command_records();
         assert_eq!(game.active_menu_records().len(), 3);
         assert_eq!(
@@ -4719,7 +4736,10 @@ mod tests {
         game.set_headless();
         game.start(true);
 
-        assert_eq!(game.game_phase, 0, "a new game starts in phase 0");
+        assert_eq!(
+            game.game_phase, PHASE_00_START,
+            "a new game starts in phase 0"
+        );
         assert_eq!(
             game.room_persons[3].location_appearance, 0xff80,
             "Duncan starts hidden"
@@ -4730,7 +4750,10 @@ mod tests {
         // so dispatch the event directly: phase 1 reveals Duncan Idaho.
         game.days_since_last_game_phase_change = 9;
         game.dispatch_dialogue_line_event(0x0b, 0);
-        assert_eq!(game.game_phase, 1, "event 0x0b advances the phase");
+        assert_eq!(
+            game.game_phase, PHASE_01_DUNCAN_AVAILABLE,
+            "event 0x0b advances the phase"
+        );
         assert_eq!(game.days_since_last_game_phase_change, 0, "ds:ff zeroed");
         // = seg000:100b — Duncan's location_slot high byte flipped to 1: he
         // now matches palace room 0x2004.
@@ -4741,7 +4764,10 @@ mod tests {
 
         // An already-spoken line (word0 bit 0x80) is a no-op (seg000:a219).
         game.dispatch_dialogue_line_event(0x0b, 0x80);
-        assert_eq!(game.game_phase, 1, "spoken bit gates a repeat");
+        assert_eq!(
+            game.game_phase, PHASE_01_DUNCAN_AVAILABLE,
+            "spoken bit gates a repeat"
+        );
 
         // The genuine data path: with the rally mission fulfilled (2 rallied
         // troops — the troop system that bumps the counter is unported),
@@ -4765,7 +4791,10 @@ mod tests {
                 game.menu_callback_choice_talk_to_me(0, 0);
             }
         }
-        assert_eq!(game.game_phase, 2, "Leto's mission line advances the phase");
+        assert_eq!(
+            game.game_phase, PHASE_02_TWO_TROOPS_RALLIED,
+            "Leto's mission line advances the phase"
+        );
         assert_eq!(
             game.current_subtitle_id & 0xfff,
             0x807,
@@ -4796,14 +4825,17 @@ mod tests {
         // scripted west exit: palace_rooms[1].exits[3] 0x8c -> 0x0c.
         assert_eq!(game.scene_records[1].exits[3], 0x8c, "door starts locked");
         game.set_game_phase_and_trigger_callbacks(8);
-        assert_eq!(game.game_phase, 8);
+        assert_eq!(game.game_phase, PHASE_08_HIDDEN_DOOR_FOUND);
         assert_eq!(game.scene_records[1].exits[3], 0x0c, "door unlocked");
 
         // = seg000:121f cmp al,[game_phase]; jbe ret — a lower phase is a
         // no-op: callback 4 (background dec + stillsuit-maker locations) must
         // not run.
         game.set_game_phase_and_trigger_callbacks(4);
-        assert_eq!(game.game_phase, 8, "phase never lowers");
+        assert_eq!(
+            game.game_phase, PHASE_08_HIDDEN_DOOR_FOUND,
+            "phase never lowers"
+        );
         assert_eq!(game.scene_records[1].background, 0x3a, "callback 4 skipped");
 
         // Discovering Tuono-Harg (first_name 3 / last_name 6) advances to
@@ -4817,7 +4849,7 @@ mod tests {
             .expect("Tuono-Harg in locations[]");
         assert_ne!(game.locations[th].status & 0x80, 0, "starts undiscovered");
         game.location_mark_discovered(th);
-        assert_eq!(game.game_phase, 0x10);
+        assert_eq!(game.game_phase, PHASE_10_TUONO_HARG_FOUND);
         assert_eq!(
             game.room_persons[0].location_and_room, 0x2005,
             "Leto in room 5"
@@ -4836,7 +4868,7 @@ mod tests {
         // room 8 (slot 0x180), Paul-event bit 0x10 set, and Stilgar's five
         // sietches revealed on the map.
         let charisma_before = game.charisma;
-        game.set_game_phase_and_trigger_callbacks(0x2c);
+        game.set_game_phase_and_trigger_callbacks(PHASE_2C_STILGAR_MET);
         assert_eq!(game.charisma, charisma_before + 0x14);
         assert_eq!(game.room_persons[2].location_and_room, 0x2008);
         assert_eq!(game.room_persons[2].location_appearance, 0x180);
@@ -4852,14 +4884,14 @@ mod tests {
         // Phase 0x30 queues vision message 4 — but only once Paul has had his
         // first vision (bitfield_Paul_events bit 0, seg000:29f0); without it
         // the message is dropped. The Baron's sighting is recorded either way.
-        game.set_game_phase_and_trigger_callbacks(0x30);
+        game.set_game_phase_and_trigger_callbacks(PHASE_30_BARON_ATTACK_RUSE);
         assert!(game.vision_messages.is_empty(), "vision gated on bit 0");
         assert_eq!(game.comm_sightings, vec![0x10b, 0x1409]);
 
         // Phase 0x4c (Leto killed) with the vision bit set: message 0x105
         // queues and Jessica moves to room 2.
         game.bitfield_paul_events |= 1;
-        game.set_game_phase_and_trigger_callbacks(0x4c);
+        game.set_game_phase_and_trigger_callbacks(PHASE_4C_LETO_KILLED);
         assert_eq!(game.vision_messages, vec![(0x105, 0)]);
         assert_eq!(game.room_persons[1].location_and_room, 0x2002);
 
@@ -5170,7 +5202,7 @@ mod tests {
         // Enter its audience room (room 2; in-room appearance (li+1)<<8 | 0x80).
         // = seg000:30fe the prospector's " Prospector Chief" text id (0x8f)
         //   replaces his chained record's only from game_phase 5 on.
-        game.game_phase = 5;
+        game.game_phase = PHASE_05_PROSPECTORS_FOUND;
         game.location_and_room = 0x0002;
         game.location_appearance = ((li as u16 + 1) << 8) | 0x80;
         game.build_room_command_records();

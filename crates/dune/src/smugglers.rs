@@ -4,7 +4,7 @@
 //! slots whose price byte has bit 7; the trade UI that spends them is not
 //! yet ported.
 
-use crate::GameState;
+use crate::{GameState, game_phase::PHASE_3C_SMUGGLERS_DEALT};
 
 /// = one 0x11-byte record of the smugglers table (seg001:10d8).
 #[derive(Clone, Copy)]
@@ -279,7 +279,7 @@ impl GameState {
     // 0..6 doubled).
     pub(crate) fn dialogue_event_08_smugglers(&mut self) {
         // = seg000:2388 al = 0x3c; call set_game_phase_and_trigger_callbacks.
-        self.set_game_phase_and_trigger_callbacks(0x3c);
+        self.set_game_phase_and_trigger_callbacks(PHASE_3C_SMUGGLERS_DEALT);
         // = seg000:238d..2393 ds:9e = rand_masked(3).
         self.for_condit_smuggler_arguing_count_ds_9e = self.rand_masked(3) as u8;
         // = seg000:2396..239d [record + 3] = today (di = room_persons[13].
@@ -348,7 +348,7 @@ mod tests {
     use std::sync::mpsc;
 
     use super::*;
-    use crate::dat_file::DatFile;
+    use crate::{dat_file::DatFile, game_phase::PHASE_3C_SMUGGLERS_DEALT};
 
     fn asset_game() -> Option<GameState> {
         let dat_path = concat!(env!("CARGO_MANIFEST_DIR"), "/../../assets/DUNE.DAT");
@@ -451,7 +451,7 @@ mod tests {
     fn smuggler_event_08_picks_the_next_stocked_slot() {
         let Some(mut game) = asset_game() else { return };
         game.game_time = 4 << 4;
-        game.game_phase = 0x3c; // already there: no phase side effects
+        game.game_phase = PHASE_3C_SMUGGLERS_DEALT; // already there: no phase side effects
         game.stage_smuggler_for_condit(0); // stock [1, 2, 0, 2, 2]
         game.string_subst_id_table[3] = 0xe8; // slot 0 offered last
         game.dialogue_event_08_smugglers();

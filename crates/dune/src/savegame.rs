@@ -1186,7 +1186,7 @@ mod tests {
     use std::sync::mpsc;
 
     use super::*;
-    use crate::dat_file::DatFile;
+    use crate::{dat_file::DatFile, game_phase::PHASE_28_STILGAR_SIETCH_KNOWN};
 
     // Port-only diagnostic: diff the port's fresh-game image against a
     // dune37s0.sav written by the original (DUNE37S0-ORIGINAL.SAV in the
@@ -1315,7 +1315,7 @@ mod tests {
         game.game_time = 0x123;
         game.charisma = 77;
         game.spice_in_stock = 4321;
-        game.game_phase = 0x28;
+        game.game_phase = PHASE_28_STILGAR_SIETCH_KNOWN;
         game.troops[3].occupation = 0x12;
         game.troops[3].population = 111;
         game.locations[7].spice_amount = 55;
@@ -1374,7 +1374,7 @@ mod tests {
         assert_eq!(fresh.game_time, 0x123);
         assert_eq!(fresh.charisma, 77);
         assert_eq!(fresh.spice_in_stock, 4321);
-        assert_eq!(fresh.game_phase, 0x28);
+        assert_eq!(fresh.game_phase, PHASE_28_STILGAR_SIETCH_KNOWN);
         assert_eq!(fresh.troops[3].occupation, 0x12);
         assert_eq!(fresh.troops[3].population, 111);
         assert_eq!(fresh.locations[7].spice_amount, 55);

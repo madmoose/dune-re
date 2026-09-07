@@ -11,6 +11,7 @@
 
 use crate::{
     FbId, GameState, Rect, TaskId, cmd,
+    game_phase::PHASE_50_WORM_RIDDEN,
     game_ui::MouseHandlers,
     gfx,
     locations::{location_index_from_ptr, location_ptr},
@@ -2659,6 +2660,41 @@ impl GameState {
         };
     }
 
+    // = seg000:47a0..47ca the worm-ride branch of
+    // play_travel_departure_transition (any map mode but the ornithopter's):
+    // take down a lingering subtitle and head overlay, set game phase 0x50
+    // (the first worm ride, callback_game_phase_change_50_after_riding_worm),
+    // blank the HUD head, wipe VER.HNM's first frame in under the sky palette
+    // and play the clip to its end with SN8.VOC looping under it, then stop
+    // the voice.
+    fn play_worm_departure_transition(&mut self) {
+        // = seg000:47a0 call restore_subtitle_and_tear_down_head —
+        //   subtitle_restore_prior, falling into
+        //   tear_down_prior_talking_head_overlay.
+        self.subtitle_restore_prior();
+        self.tear_down_prior_talking_head_overlay();
+        // = seg000:47a3 key_hit_scancode = 0.
+        self.kb_clear_scancode();
+        // = seg000:47a8 al = 0x50; call set_game_phase_and_trigger_callbacks.
+        self.set_game_phase_and_trigger_callbacks(PHASE_50_WORM_RIDDEN);
+        // = seg000:47ad/47b2 ui_hud_head_index = 0; call ui_hud_head_draw.
+        self.ui_hud_head_index = 0;
+        self.ui_hud_head_draw();
+        // = seg000:47b5..47ba transition(al = 0x10, bp = callback_transition_
+        //   04913): VER.HNM's first frame (hnm 0x0e) into the game area, then
+        //   set_sky_palette, wiped in with the dotted-columns effect.
+        self.transition(0x10, 0, |s| {
+            s.hnm_load_first_frame("VER.HNM", 0);
+            s.set_sky_palette();
+        });
+        // = seg000:47bd..47c5 suppress_sky_240_255 = 1 around play_worm_ride_clip.
+        self.data_0227d = 1;
+        self.play_worm_ride_clip();
+        self.data_0227d = 0;
+        // = seg000:47ca jmp pcm_stop_voc.
+        self.pcm_stop_voc();
+    }
+
     // = seg000:4795 play_travel_departure_transition — play the departure
     // transition for the mode the map screen was entered from (al = the
     // pre-confirm game_screen_mode_flags).
@@ -2671,14 +2707,7 @@ impl GameState {
         // = seg000:479c cmp al,4; jz loc_047ce — only the ornithopter map
         //   mode plays the takeoff.
         if old_mode_flags != 4 {
-            // = seg000:47a0..47ca the game-phase-0x50 branch (the worm and
-            //   globe flows, none ported): tear down the head overlay
-            //   (loc_098af), set game phase 0x50 with its transition
-            //   (transition al=0x10 bp=loc_04913, loc_0491c) and stop the
-            //   voice. TODO: port with CALL A WORM.
-            println!(
-                "play_travel_departure_transition: phase-0x50 branch (seg000:47a0) not ported"
-            );
+            self.play_worm_departure_transition();
             return;
         }
         // = seg000:47ce call prefetch_travel_hnm_resources (seg000:ce53) — a
@@ -2900,7 +2929,11 @@ mod tests {
     use std::sync::mpsc;
 
     use crate::{
-        GameState, dat_file::DatFile, menu_defs::MenuRef, room_game_screen::NPC_COMPANION,
+        GameState,
+        dat_file::DatFile,
+        game_phase::{PHASE_40_HARAH_HOME, PHASE_50_WORM_RIDDEN},
+        menu_defs::MenuRef,
+        room_game_screen::NPC_COMPANION,
     };
 
     #[test]
@@ -3005,7 +3038,7 @@ mod tests {
 
         // Teleport the flight three cells west of a discoverable landmark and
         // aim at it, so the scan arms room action 3 (GO TOWARDS THIS PLACE).
-        game.game_phase = 0x40;
+        game.game_phase = PHASE_40_HARAH_HOME;
         let idx = (0..game.locations.len())
             .find(|&i| {
                 let l = &game.locations[i];
@@ -4277,5 +4310,39 @@ mod tests {
         // (game_screen_mode_flags != 0) keeps further orni clicks inert.
         game.callback_main_ui_element_21_22();
         assert_eq!(game.get_active_menu_ref(), MenuRef::MenuCancel);
+    }
+
+    // = seg000:47a0..47ca the worm-ride departure: game phase 0x50 with its
+    // callback, the HUD head blanked, VER.HNM played through and the sky
+    // suppression restored. Asset-gated (plays the clip in real time):
+    //   cargo test -p dune -- --ignored worm_departure
+    #[test]
+    #[ignore = "needs assets/DUNE.DAT"]
+    fn worm_departure_sets_phase_50_and_plays_the_ride() {
+        let dat_path = concat!(env!("CARGO_MANIFEST_DIR"), "/../../assets/DUNE.DAT");
+        let Ok(dat_file) = DatFile::open(dat_path) else {
+            eprintln!("skipping: {dat_path} not found");
+            return;
+        };
+        let (tx, _rx) = mpsc::sync_channel(64);
+        let mut game = GameState::new(dat_file, tx);
+        game.set_headless();
+        game.start(true);
+        game.ui_hud_head_index = 3;
+        let charisma = game.charisma;
+
+        game.play_travel_departure_transition(0);
+
+        assert_eq!(game.game_phase, PHASE_50_WORM_RIDDEN);
+        assert_eq!(game.ui_hud_head_index, 0, "= seg000:47ad");
+        assert_eq!(
+            game.data_0227d, 0,
+            "= seg000:47c5 the sky suppression is lifted"
+        );
+        assert!(
+            game.charisma > charisma,
+            "= seg000:117b callback_game_phase_change_50 raised charisma"
+        );
+        assert!(game.hnm_is_complete(), "VER.HNM played to its end");
     }
 }

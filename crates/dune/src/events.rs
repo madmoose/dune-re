@@ -12,7 +12,10 @@
 //! (run_events_for_n_time_periods) call run_events_for_current_time_period
 //! whenever new_time_period_pending is up.
 
-use crate::GameState;
+use crate::{
+    GameState,
+    game_phase::{PHASE_3C_SMUGGLERS_DEALT, PHASE_5C_BOTANICAL_STATION, PHASE_5D_CURING_ILLNESS},
+};
 
 // = seg000:1d35 array_related_to_location_appearances — the top room number
 // of each location appearance; an NPC parked in a higher room than its
@@ -296,7 +299,7 @@ impl GameState {
     fn illness_pick_location_phase_5c(&mut self) {
         // = seg000:1e43..1e51 the day and phase gates.
         if self.get_ingame_day() < self.illness_plot_armed_after_ingame_day
-            || self.game_phase != 0x5c
+            || self.game_phase != PHASE_5C_BOTANICAL_STATION
         {
             return;
         }
@@ -384,7 +387,7 @@ impl GameState {
     // location (location_slot low byte 0x80), pin her to room 2 there and
     // return the location if it houses an ill troop (the DOS carry).
     fn chani_parked_at_ill_location(&mut self) -> Option<usize> {
-        if self.game_phase != 0x5d {
+        if self.game_phase != PHASE_5D_CURING_ILLNESS {
             return None;
         }
         let p = self.room_persons[7];
@@ -748,7 +751,7 @@ impl GameState {
     // suppressed for one firing, and needs a set rolling rand bit.
     fn actions_time_in_day_4(&mut self) {
         // = seg000:1f64..1f77 the arming gates.
-        if self.game_phase < 0x3c {
+        if self.game_phase < PHASE_3C_SMUGGLERS_DEALT {
             let (diff, borrow) = self
                 .game_time
                 .overflowing_sub(self.harkonnen_raids_armed_after_game_time);
@@ -870,7 +873,11 @@ impl GameState {
 mod tests {
     use std::sync::mpsc;
 
-    use crate::{GameState, dat_file::DatFile};
+    use crate::{
+        GameState,
+        dat_file::DatFile,
+        game_phase::{PHASE_5C_BOTANICAL_STATION, PHASE_5D_CURING_ILLNESS, PHASE_60_FIND_CHANI},
+    };
 
     // The first demand (loc_02090 from Paul's first vision) announces as the
     // fresh-demand sighting 0x20b: ds:be starts at 0x80 (nothing paid yet),
@@ -1069,7 +1076,7 @@ mod tests {
         game.troops[0].next_troop_id = 0;
         game.troops[0].offset_of_location = li_ptr;
         // Phase 0x5c with the day gate armed; cross one new day.
-        game.game_phase = 0x5c;
+        game.game_phase = PHASE_5C_BOTANICAL_STATION;
         game.illness_plot_armed_after_ingame_day = 0;
         game.run_events_for_n_time_periods(15);
         while rx.try_recv().is_ok() {}
@@ -1090,7 +1097,7 @@ mod tests {
 
         // Phase 0x5d: Chani parked at the ill location, one cure step from
         // done. The next period wraps the progress to 0 and cures.
-        game.game_phase = 0x5d;
+        game.game_phase = PHASE_5D_CURING_ILLNESS;
         game.room_persons[7].location_appearance = ((li as u16 + 1) << 8) | 0x80;
         game.persons_in_room &= !0x80;
         game.chani_troop_illness_cure_progress = 0xf8;
@@ -1114,6 +1121,9 @@ mod tests {
         );
         assert_eq!(game.number_of_locations_with_illness, 0);
         assert_eq!(game.latest_location_with_illness, 0, "nothing left ill");
-        assert_eq!(game.game_phase, 0x60, "the go-find-Chani phase fired");
+        assert_eq!(
+            game.game_phase, PHASE_60_FIND_CHANI,
+            "the go-find-Chani phase fired"
+        );
     }
 }

@@ -16,6 +16,154 @@ use crate::{
     room_game_screen::{NPC_DETACH_ON_TRAVEL, NPC_STORY_BIT},
 };
 
+// = seg001:002a game_phase — the story position. Multiples of 4 are the
+// callback phases: dialogue event 0x0c (seg000:a235) rounds the phase up to
+// the next multiple of 4 and set_game_phase_and_trigger_callbacks runs the
+// per-phase callback; event 0x0b (seg000:a219) adds 1 for the sub-steps.
+// Seven code paths set a value directly (noted per constant). CONDIT tests
+// the value at ds:2a; the ranges the dialogue data tests are noted too.
+
+/// Game opens: Leto sends Paul to find the Fremen, no sietch visited yet.
+pub(crate) const PHASE_00_START: u8 = 0x00;
+/// First sietch visited; the bump to 1 makes Duncan's palace entry visible
+/// (seg000:100b).
+pub(crate) const PHASE_01_DUNCAN_AVAILABLE: u8 = 0x01;
+/// Two troops rallied; Leto asks for stillsuits (cond 7, +1).
+pub(crate) const PHASE_02_TWO_TROOPS_RALLIED: u8 = 0x02;
+/// Looking for the stillsuit maker (cond 245).
+pub(crate) const PHASE_03_STILLSUIT_QUEST: u8 = 0x03;
+/// Callback 04: palace room 1 background steps back, locations 10 and 17
+/// appear, Jessica moves. Book: the harvester.
+pub(crate) const PHASE_04_STILLSUIT_MAKER_MET: u8 = 0x04;
+/// Book: the prospecting troop. Leto says the palace may hold secrets
+/// (0x05..0x07, +1).
+pub(crate) const PHASE_05_PROSPECTORS_FOUND: u8 = 0x05;
+/// Jessica accompanies Paul through the palace (cond 96: 0x06..0x08); the
+/// hidden door in room 2 (+4).
+pub(crate) const PHASE_06_JESSICA_EXPLORES_PALACE: u8 = 0x06;
+/// Callback 08: room 1 west exit unlocked. Jessica in the comm room
+/// (0x08..0x0c, +4).
+pub(crate) const PHASE_08_HIDDEN_DOOR_FOUND: u8 = 0x08;
+/// Callback 0c: rooms 6/7 exits unlocked, the comm-room gather cutscene.
+/// Duncan sends Paul after harvesters (0x0c..0x0f, +1).
+pub(crate) const PHASE_0C_COMM_ROOM_FOUND: u8 = 0x0c;
+/// Sub-step of the harvester search (cond 248).
+pub(crate) const PHASE_0D_HARVESTER_SEARCH: u8 = 0x0d;
+/// Set directly when Tuono-Harg is discovered (seg000:427c). Callback 10:
+/// Leto and Jessica move, Duncan sighting. EQUIPMENT and GO & SEARCH
+/// unlock. Book: the Emperor.
+pub(crate) const PHASE_10_TUONO_HARG_FOUND: u8 = 0x10;
+/// Sub-steps 0x11..0x13 (conds 11, 162, 251, 252, 487).
+pub(crate) const PHASE_11_AFTER_TUONO_HARG: u8 = 0x11;
+/// Callback 14: Harah's locations appear. The idle checker waits here for
+/// the first vision; the pre-vision cutscene script.
+pub(crate) const PHASE_14_AWAITING_VISION: u8 = 0x14;
+/// Set directly by the first vision (seg000:1076): visions enabled, Leto
+/// matchable, Gurney to room 0x0b, the shipment demand armed. Gurney lies
+/// wounded 0x15..0x1f.
+pub(crate) const PHASE_15_FIRST_VISION: u8 = 0x15;
+/// Leto: "Gurney Halleck has disappeared" (0x16..0x1b, +4).
+pub(crate) const PHASE_16_GURNEY_MISSING: u8 = 0x16;
+/// No-op callback; cutscene script 18. Jessica finds the hidden door in
+/// room 7 (0x18..0x1c, +4).
+pub(crate) const PHASE_18_GURNEY_SEARCH: u8 = 0x18;
+/// Callback 1c: room 6 east exit unlocked. Leto: "Go and see Thufir Hawat"
+/// (0x1c..0x20, +4).
+pub(crate) const PHASE_1C_ROOM_6_OPENED: u8 = 0x1c;
+/// Callback 20: Thufir visible. Book: the Mentat. Thufir disarms the
+/// armory trap in room 0x0b (below 0x25, +4).
+pub(crate) const PHASE_20_THUFIR_FOUND: u8 = 0x20;
+/// No-op callback. Book: the Harkonnens. Thufir posts a guard (+1). The
+/// early palace room rules end here.
+pub(crate) const PHASE_24_ARMORY_FOUND: u8 = 0x24;
+/// Sub-steps 0x25..0x2b. Harah points to Stilgar's sietch (0x26..0x28, +4).
+pub(crate) const PHASE_25_ARMORY_GUARDED: u8 = 0x25;
+/// Callback 28: Sihaya Clam on the map. Book: the ornithopter.
+pub(crate) const PHASE_28_STILGAR_SIETCH_KNOWN: u8 = 0x28;
+/// Callback 2c: Paul named Muad'Dib, +20 charisma, the household
+/// restationed, the raid timer stamped. Leto: "I trust Stilgar" (+1).
+pub(crate) const PHASE_2C_STILGAR_MET: u8 = 0x2c;
+/// Thufir: use Gurney to train the Fremen (0x2d..0x2f, +1). A troop in army
+/// training with Gurney present sets 0x30 (seg000:6c46).
+pub(crate) const PHASE_2D_GURNEY_TRAINING: u8 = 0x2d;
+/// Callback 30: "Something terrible has happened", the Baron sighting.
+/// Book: the Krys. Cutscene script 30.
+pub(crate) const PHASE_30_BARON_ATTACK_RUSE: u8 = 0x30;
+/// Leto plans a punitive expedition (0x31..0x32, +1).
+pub(crate) const PHASE_31_LETO_WANTS_REPRISAL: u8 = 0x31;
+/// TOWARDS NEAREST PLACE appears. Thufir: too early to attack, a new
+/// message (0x32..0x33, +4).
+pub(crate) const PHASE_32_TOWARDS_NEAREST_PLACE: u8 = 0x32;
+/// Callback 34: a sighting at location 0x28. Leto: "I'll never run away"
+/// (0x34..0x35, +1).
+pub(crate) const PHASE_34_LETO_DEFIANT: u8 = 0x34;
+/// Saboteur events start (seg000:71bc). Duncan: get ornis from the
+/// smugglers (0x35..0x3a, +4).
+pub(crate) const PHASE_35_SABOTEURS_BEGIN: u8 = 0x35;
+/// Callback 38: Leto hidden from the palace. Comm-room lines gate here.
+pub(crate) const PHASE_38_LETO_DEPARTED: u8 = 0x38;
+/// Days-since gates at 0x39 and 0x3a (conds 306, 405).
+pub(crate) const PHASE_39_LETO_ABSENT: u8 = 0x39;
+/// Set directly by the first smuggler deal (seg000:2388). Raids no longer
+/// need the timer. Harah thanks Paul at location 0x304 (+4).
+pub(crate) const PHASE_3C_SMUGGLERS_DEALT: u8 = 0x3c;
+/// Callback 40: Harah detaches on travel. Stilgar: "meet somebody"
+/// (0x40..0x44, +4).
+pub(crate) const PHASE_40_HARAH_HOME: u8 = 0x40;
+/// Callback 44: Oxtyn Tabr on the map.
+pub(crate) const PHASE_44_CHANI_SIETCH_KNOWN: u8 = 0x44;
+/// At Oxtyn Tabr, Chani present or not (conds 313, 314).
+pub(crate) const PHASE_45_CHANI_SIETCH_VISITED: u8 = 0x45;
+/// Callback 48: cutscene, +10 charisma, the Leto-killed rally threshold
+/// armed. The late-game theme from here.
+pub(crate) const PHASE_48_CHANI_MET: u8 = 0x48;
+/// Set directly when the rallied troops reach the threshold (seg000:66e8).
+/// Message 0x105, worm odds up. Jessica: "The Duke is dead" (+1).
+pub(crate) const PHASE_4C_LETO_KILLED: u8 = 0x4c;
+/// Thufir: "another means of transportation" (0x4d..0x4f, +1).
+pub(crate) const PHASE_4D_NEED_TRANSPORT: u8 = 0x4d;
+/// Alone-in-room gates (conds 315..317).
+pub(crate) const PHASE_4E_ALONE_FOR_WORM: u8 = 0x4e;
+/// CALL A WORM stops being greyed.
+pub(crate) const PHASE_4F_WORM_CALL_UNLOCKED: u8 = 0x4f;
+/// Set directly by the worm departure transition (seg000:47a8). Callback
+/// 50: +40 charisma. Book: the thumper. Thufir: "the answer is in this
+/// palace" (0x50..0x53, +1).
+pub(crate) const PHASE_50_WORM_RIDDEN: u8 = 0x50;
+/// Jessica travels with Paul again (cond 96); the hidden door in room 0x0b
+/// (0x51..0x54, +4).
+pub(crate) const PHASE_51_JESSICA_RETURNS: u8 = 0x51;
+/// Callback 54: the greenhouse door unlocked; room 3 allowed in the palace
+/// shuffle.
+pub(crate) const PHASE_54_GREENHOUSE_OPENED: u8 = 0x54;
+/// Kynes greets Chani (0x55..0x57, +4).
+pub(crate) const PHASE_55_KYNES_QUEST: u8 = 0x55;
+/// Callback 58: cutscene, Kynes' locations appear. Kynes: "Come in the next
+/// room" (0x58..0x5c, +4).
+pub(crate) const PHASE_58_KYNES_MET: u8 = 0x58;
+/// Callback 5c: Kynes to room 5, the illness plot armed for day + 3. Book:
+/// the wind-traps.
+pub(crate) const PHASE_5C_BOTANICAL_STATION: u8 = 0x5c;
+/// Chani cures the ill sietch by staying there (seg000:1e01). No line in
+/// the CD DIALOGUE data fires the +1 event at 0x5c, so this value is only
+/// reachable from a save.
+pub(crate) const PHASE_5D_CURING_ILLNESS: u8 = 0x5d;
+/// Set directly when the cure completes (seg000:11d0): Chani is held in the
+/// Arrakeen palace, room 2.
+pub(crate) const PHASE_60_FIND_CHANI: u8 = 0x60;
+/// Set by talking to a Fremen troop with speech bit 0x800 during
+/// 0x60..0x63 (seg000:1ed1). Motivation drops 0x64..0x67. Chani: "deliver
+/// me" (+4). The callback stations Chani.
+pub(crate) const PHASE_64_ENDGAME: u8 = 0x64;
+/// No-op callback. The final attack preparation (Stilgar's Water of Life
+/// and troop selection events).
+pub(crate) const PHASE_68_CHANI_RESCUED: u8 = 0x68;
+/// The last callback slot, no-op. Event 0x0e raises the attack stage.
+pub(crate) const PHASE_6C_FINAL_ATTACK: u8 = 0x6c;
+/// Set by the ending (seg000:16fc): the idle room loop stops, head
+/// animation 5, the final sprite mapping.
+pub(crate) const PHASE_C8_GAME_WON: u8 = 0xc8;
+
 impl GameState {
     // = seg000:100b callback_event_dialogue_line_0b_game_phase_01_make_Duncan_
     // Idaho_visible — mov byte [ds:100b], 1: write 1 into the high byte of
@@ -47,30 +195,34 @@ impl GameState {
         //   else call cs:[11e7 + phase/2] (array_callbacks_for_game_phase_
         //   change — real phases are multiples of 4, entry = phase/4 - 1).
         match self.game_phase {
-            0x04 => self.phase_callback_04_tuono_tabr(),
-            0x08 => self.phase_callback_08(),
-            0x0c => self.phase_callback_0c(),
-            0x10 => self.phase_callback_10(),
-            0x14 => self.phase_callback_14(),
+            PHASE_04_STILLSUIT_MAKER_MET => self.phase_callback_04_tuono_tabr(),
+            PHASE_08_HIDDEN_DOOR_FOUND => self.phase_callback_08(),
+            PHASE_0C_COMM_ROOM_FOUND => self.phase_callback_0c(),
+            PHASE_10_TUONO_HARG_FOUND => self.phase_callback_10(),
+            PHASE_14_AWAITING_VISION => self.phase_callback_14(),
             // = seg000:10b7 callback_game_phase_change_18_24_3c_68_6c: ret.
-            0x18 | 0x24 | 0x3c | 0x68 | 0x6c => {}
-            0x1c => self.phase_callback_1c(),
-            0x20 => self.phase_callback_20_make_thufir_hawat_visible(),
-            0x28 => self.phase_callback_28_mark_sihaya_clam_on_map(),
-            0x2c => self.phase_callback_2c_met_stilgar(),
-            0x30 => self.phase_callback_30_baron_pretends_sietch_devastated(),
-            0x34 => self.phase_callback_34(),
-            0x38 => self.phase_callback_38(),
-            0x40 => self.phase_callback_40(),
-            0x44 => self.phase_callback_44_mark_oxtyn_tabr_on_map(),
-            0x48 => self.phase_callback_48_met_chani(),
-            0x4c => self.phase_callback_4c_leto_killed(),
-            0x50 => self.phase_callback_50_after_riding_worm(),
-            0x54 => self.phase_callback_54_greenhouse(),
-            0x58 => self.phase_callback_58_met_liet_kynes(),
-            0x5c => self.phase_callback_5c(),
-            0x60 => self.phase_callback_60_go_find_chani(),
-            0x64 => {
+            PHASE_18_GURNEY_SEARCH
+            | PHASE_24_ARMORY_FOUND
+            | PHASE_3C_SMUGGLERS_DEALT
+            | PHASE_68_CHANI_RESCUED
+            | PHASE_6C_FINAL_ATTACK => {}
+            PHASE_1C_ROOM_6_OPENED => self.phase_callback_1c(),
+            PHASE_20_THUFIR_FOUND => self.phase_callback_20_make_thufir_hawat_visible(),
+            PHASE_28_STILGAR_SIETCH_KNOWN => self.phase_callback_28_mark_sihaya_clam_on_map(),
+            PHASE_2C_STILGAR_MET => self.phase_callback_2c_met_stilgar(),
+            PHASE_30_BARON_ATTACK_RUSE => self.phase_callback_30_baron_pretends_sietch_devastated(),
+            PHASE_34_LETO_DEFIANT => self.phase_callback_34(),
+            PHASE_38_LETO_DEPARTED => self.phase_callback_38(),
+            PHASE_40_HARAH_HOME => self.phase_callback_40(),
+            PHASE_44_CHANI_SIETCH_KNOWN => self.phase_callback_44_mark_oxtyn_tabr_on_map(),
+            PHASE_48_CHANI_MET => self.phase_callback_48_met_chani(),
+            PHASE_4C_LETO_KILLED => self.phase_callback_4c_leto_killed(),
+            PHASE_50_WORM_RIDDEN => self.phase_callback_50_after_riding_worm(),
+            PHASE_54_GREENHOUSE_OPENED => self.phase_callback_54_greenhouse(),
+            PHASE_58_KYNES_MET => self.phase_callback_58_met_liet_kynes(),
+            PHASE_5C_BOTANICAL_STATION => self.phase_callback_5c(),
+            PHASE_60_FIND_CHANI => self.phase_callback_60_go_find_chani(),
+            PHASE_64_ENDGAME => {
                 // = seg000:11e6 -> 1f13 callback_game_phase_change_64_main_
                 //   code — scan locations for the best-provisioned Atreides
                 //   sietch (location_do_accumulation_on_troops, troop system)
@@ -78,7 +230,7 @@ impl GameState {
                 //   (0x2b0a). TODO: port with the troop system.
                 println!("phase_callback_64: unported (needs the troop system)");
             }
-            p if p > 0x6c => {}
+            p if p > PHASE_6C_FINAL_ATTACK => {}
             // A phase that is not a multiple of 4 would make DOS read a
             // misaligned word out of the callback table and call garbage; no
             // caller passes one.
@@ -170,7 +322,7 @@ impl GameState {
     pub(crate) fn first_vision_phase_advance(&mut self) {
         // = seg000:1071/1076 ds:ff = 0; game_phase = 0x15.
         self.days_since_last_game_phase_change = 0;
-        self.game_phase = 0x15;
+        self.game_phase = PHASE_15_FIRST_VISION;
         // = seg000:107b data_00fdb = 1 — room_persons[0].location_appearance
         //   high byte (the visibility byte, cf. phase_callback_20).
         let rp = &mut self.room_persons[0];
@@ -379,7 +531,7 @@ impl GameState {
     pub(crate) fn phase_callback_60_go_find_chani(&mut self) {
         // = seg000:11cb/11d0 ds:ff = 0; game_phase = 0x60.
         self.days_since_last_game_phase_change = 0;
-        self.game_phase = 0x60;
+        self.game_phase = PHASE_60_FIND_CHANI;
         // = seg000:11d5 di = locations[1]; call location_entry_room_dx_bx;
         //   11db dl = 2 — room 2 instead of the entry room 1.
         let (dx, bx) = self.location_entry_room_codes(1);
@@ -443,7 +595,7 @@ impl GameState {
         //   touch ds:c9 either.
         self.comm_unread_count_ds_c9 = self.comm_unread_count_ds_c9.wrapping_add(1);
         // = seg000:2717..2728 the arrival notification.
-        if self.game_phase >= 0x38 && self.current_room != 8 {
+        if self.game_phase >= PHASE_38_LETO_DEPARTED && self.current_room != 8 {
             self.queue_vision_message_without_location(0x201);
         }
     }

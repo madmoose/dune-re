@@ -16,7 +16,9 @@
 //! index — 0x0e selects entry 7 and 0x10 entry 8 (seg000:172f `mov bx,ax`
 //! then `jmp [array + bx]`).
 
-use crate::{GameState, TaskId, menu_defs::MenuRef, panel::MapPanelRef};
+use crate::{
+    GameState, TaskId, game_phase::PHASE_48_CHANI_MET, menu_defs::MenuRef, panel::MapPanelRef,
+};
 
 // The script opcodes, as the byte offsets the DOS dispatcher consumes
 // (action index = byte / 2), named after their action callbacks.
@@ -465,7 +467,7 @@ impl GameState {
         // = seg000:1748 data_04774 = 0.
         self.is_dialogue_active = false;
         // = seg000:174b..1752 the music fade, skipped in phase 0x48.
-        if self.game_phase != 0x48 {
+        if self.game_phase != PHASE_48_CHANI_MET {
             // = seg000:1752 call midi_begin_song_fade_out. The port's music
             //   layer has no fade-out entry point yet. TODO.
         }

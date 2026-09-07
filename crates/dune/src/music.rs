@@ -20,7 +20,7 @@
 //! `process_frame_tasks`), with the order tables at seg001:37fa/3804 and the
 //! in-place shuffle (`music_cd_playlist_shuffle` = `loc_0acbf`).
 
-use crate::GameState;
+use crate::{GameState, game_phase::PHASE_48_CHANI_MET};
 
 /// = seg001:375c — the game-relative song table, indexed by the situation index
 /// from [`GameState::music_situation_index`]. The low 6 bits are the song number
@@ -55,7 +55,11 @@ impl GameState {
         // = aa98 cmp [data_04774],0; jnz — a special state overrides everything,
         // yielding index 0x0a only during game_phase 0x48.
         if self.is_dialogue_active {
-            return if self.game_phase == 0x48 { 0x0a } else { 0 };
+            return if self.game_phase == PHASE_48_CHANI_MET {
+                0x0a
+            } else {
+                0
+            };
         }
         // = loc_0aaa7 — the normal cascade; each test that fires returns its index.
         if self.pending_room_screen_request != 0 {
@@ -99,7 +103,11 @@ impl GameState {
                 // = aafb: after game_phase 0x48 the late-game theme (0x0a) takes
                 // over (appearance.lo 0x80 has bit 0 clear, so the shr path falls
                 // through to loc_0ab12).
-                if self.game_phase < 0x48 { al } else { 0x0a }
+                if self.game_phase < PHASE_48_CHANI_MET {
+                    al
+                } else {
+                    0x0a
+                }
             }
         } else {
             // = loc_0aadf — palace/interior: pick by the active screen mode.
