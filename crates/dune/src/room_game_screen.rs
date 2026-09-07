@@ -138,11 +138,36 @@ const CMD_FIGHT_FOR_A_WHOLE_DAY: MenuItem = item(cmd::FIGHT_FOR_A_WHOLE_DAY, 0x0
     println!("menu: FIGHT FOR A WHOLE DAY (seg000:0fc5) not ported")
 });
 
+// = the bits of RoomPerson.flags (entry byte +0xf). Bits 0x01 and 0x08 are
+// unused.
+//
+// The static table sets only NPC_DETACH_ON_TRAVEL and NPC_NO_COME_WITH_ME;
+// the rest are written at runtime.
+/// = bit 0x02 — a companion with this bit loses NPC_COMPANION when the player
+/// leaves by ornithopter (npc_travel_detach_companion, seg000:40e6). Static on
+/// the Atreides household and Chani; phase 0x40 sets it on Harah
+/// (seg000:112d) and phase 0x48 clears it on Chani (seg000:114b).
 pub(crate) const NPC_DETACH_ON_TRAVEL: u8 = 0x02;
+/// = bit 0x04 — set by the NPC shuffle (iterate_over_allied_NPCs_and_locations,
+/// seg000:2234, unported) when a moved entry lands in the player's current
+/// location (data_00009); cleared when the shuffle moves the entry on
+/// (seg000:21c8) and on every dialogue close (seg000:97e1).
 pub(crate) const NPC_LEFT_BEHIND: u8 = 0x04;
+/// = bit 0x10 — a per-entry story bit: Jessica (seg000:24aa) and Chani
+/// (seg000:1144) once their phase milestone is reached; on the Harkonnen
+/// captain (entry 12) it mirrors the troop's surrendered state
+/// (troop occupation bit 0x10, seg000:31c9) and picks the overpowered sprite
+/// (seg000:3d65) and the greyed COME WITH ME (seg000:90c0).
 pub(crate) const NPC_STORY_BIT: u8 = 0x10;
+/// = bit 0x20 — the player has talked to this person (set on every dialogue
+/// close, seg000:97dd).
 pub(crate) const NPC_TALKED_TO: u8 = 0x20;
+/// = bit 0x40 — the person travels with the player (COME WITH ME, seg000:9608;
+/// cleared by npc_clear_travelling). Flips the dialogue verb to STAY HERE and
+/// moves the entry to the second room scan pass (build_room_person_record_b).
 pub(crate) const NPC_COMPANION: u8 = 0x40;
+/// = bit 0x80 — the person never comes along: the COME WITH ME verb is greyed
+/// (seg000:90fd). Static on the Harkonnens, the Emperor and Fremen 2.
 pub(crate) const NPC_NO_COME_WITH_ME: u8 = 0x80;
 
 /// One entry of the seg001:0fd8 room-person table (= the chani `RoomPerson`
@@ -184,8 +209,9 @@ pub(crate) struct RoomPerson {
     /// 0..15, the bit position OR-ed into persons_in_room and the offset of the
     /// "&Person" text (0x78..0x87) the verb-menu record displays.
     pub(crate) person_index: u8,
-    /// Bit 0x40 splits the two scan passes (template loc_030b9 / loc_03120):
-    /// static-data values are 0x00 / 0x02 / 0x80, and bit 0x40 is set at
+    /// The NPC_* bits above. NPC_COMPANION splits the two scan passes
+    /// (template loc_030b9 / loc_03120): static-data values are 0 /
+    /// NPC_DETACH_ON_TRAVEL / NPC_NO_COME_WITH_ME, and NPC_COMPANION is set at
     /// runtime while the person travels with Paul (COME WITH ME, seg000:9608;
     /// cleared by npc_clear_travelling), flipping their dialogue verb to STAY
     /// HERE and their scan match to the second pass.
@@ -262,22 +288,22 @@ pub(crate) const ROOM_PERSON_TABLE_BASE: u16 = 0x0fd8;
 // The last four entries' (location_and_room, location_appearance) are
 // rewritten at runtime by init_room_persons + the loc_06603 classification.
 pub(crate) const ROOM_PERSON_TABLE_INIT: [RoomPerson; 16] = [
-    rp(0x200a, 0x0180, 0x92f2, 0x00, 0x02),
-    rp(0x2004, 0x0180, 0x92f7, 0x01, 0x02),
-    rp(0x2008, 0xff80, 0x92fc, 0x02, 0x02),
-    rp(0x2004, 0xff80, 0x9301, 0x03, 0x02),
-    rp(0x0002, 0x0d80, 0x9306, 0x04, 0x00),
-    rp(0x0402, 0x2e80, 0x930b, 0x05, 0x00),
-    rp(0x1002, 0x3f80, 0x9310, 0x06, 0x00),
-    rp(0x0503, 0x1b80, 0x9315, 0x07, 0x02),
-    rp(0x0703, 0x1180, 0x931a, 0x08, 0x00),
-    rp(0x3002, 0x0280, 0x931f, 0x09, 0x80),
-    rp(0x3002, 0x0280, 0x9324, 0x0a, 0x80),
-    rp(0x3002, 0x0280, 0x9329, 0x0b, 0x80),
-    rp(0x3002, 0x0080, 0x932e, 0x0c, 0x00),
-    rp(0x3002, 0x0080, 0x936f, 0x0d, 0x00),
-    rp(0x3002, 0x0080, 0x9373, 0x0e, 0x00),
-    rp(0x0202, 0x0080, 0x937e, 0x0f, 0x80),
+    rp(0x200a, 0x0180, 0x92f2, 0x00, NPC_DETACH_ON_TRAVEL),
+    rp(0x2004, 0x0180, 0x92f7, 0x01, NPC_DETACH_ON_TRAVEL),
+    rp(0x2008, 0xff80, 0x92fc, 0x02, NPC_DETACH_ON_TRAVEL),
+    rp(0x2004, 0xff80, 0x9301, 0x03, NPC_DETACH_ON_TRAVEL),
+    rp(0x0002, 0x0d80, 0x9306, 0x04, 0),
+    rp(0x0402, 0x2e80, 0x930b, 0x05, 0),
+    rp(0x1002, 0x3f80, 0x9310, 0x06, 0),
+    rp(0x0503, 0x1b80, 0x9315, 0x07, NPC_DETACH_ON_TRAVEL),
+    rp(0x0703, 0x1180, 0x931a, 0x08, 0),
+    rp(0x3002, 0x0280, 0x931f, 0x09, NPC_NO_COME_WITH_ME),
+    rp(0x3002, 0x0280, 0x9324, 0x0a, NPC_NO_COME_WITH_ME),
+    rp(0x3002, 0x0280, 0x9329, 0x0b, NPC_NO_COME_WITH_ME),
+    rp(0x3002, 0x0080, 0x932e, 0x0c, 0),
+    rp(0x3002, 0x0080, 0x936f, 0x0d, 0),
+    rp(0x3002, 0x0080, 0x9373, 0x0e, 0),
+    rp(0x0202, 0x0080, 0x937e, 0x0f, NPC_NO_COME_WITH_ME),
 ];
 
 impl GameState {
@@ -1814,7 +1840,7 @@ impl GameState {
         let pi = npc.person_index;
         let dynamic = if pi == 0x0c
             && (self.persons_in_room & 0x1000) != 0
-            && (self.room_persons[12].flags & 0x10) == 0
+            && (self.room_persons[12].flags & NPC_STORY_BIT) == 0
         {
             // = seg000:90c0 the Harkonnen-Captain prisoner: while the captain
             // (persons_in_room bit 0x1000) stands in the room and room_persons[12]
@@ -1845,12 +1871,12 @@ impl GameState {
         } else {
             // = seg000:90f7 the general NPC.
             let flags = npc.flags;
-            if (flags & 0x80) != 0 {
+            if (flags & NPC_NO_COME_WITH_ME) != 0 {
                 // = seg000:90fd greyed COME WITH ME (text 0x91 | 0x4000). DOS
                 // leaves the callback (dx) stale; the verb is disabled, so it is
                 // never dispatched.
                 item(0x4091, 0, |_, _, _| {})
-            } else if (flags & 0x40) != 0 {
+            } else if (flags & NPC_COMPANION) != 0 {
                 // = seg000:910d the NPC already travels with you, so offer STAY
                 // HERE (text 0x92, handler menu_callback_choice_stay_here).
                 item(0x92, 0x9533, GameState::menu_callback_choice_stay_here)
@@ -2532,7 +2558,7 @@ impl GameState {
     // speaker; then fall into the shared body.
     fn build_room_person_record_a(&mut self, index: u8) {
         // = seg000:30b9 test byte ptr [si+0fh], 40h; jnz ret.
-        if self.room_persons[index as usize].flags & 0x40 != 0 {
+        if self.room_persons[index as usize].flags & NPC_COMPANION != 0 {
             return;
         }
         // = seg000:30bf cmp [data_047aa], 0; jnz loc_030ca.
@@ -2553,7 +2579,7 @@ impl GameState {
     // runtime.
     fn build_room_person_record_b(&mut self, index: u8) {
         // = seg000:3120 test byte ptr [si+0fh], 40h; jnz loc_030ca.
-        if self.room_persons[index as usize].flags & 0x40 == 0 {
+        if self.room_persons[index as usize].flags & NPC_COMPANION == 0 {
             return;
         }
         self.build_room_person_record_body(index);
@@ -3266,7 +3292,7 @@ impl GameState {
 mod tests {
     use std::sync::mpsc;
 
-    use super::NAV_PANEL_RECORD_OFFSET;
+    use super::{NAV_PANEL_RECORD_OFFSET, NPC_COMPANION, NPC_STORY_BIT, NPC_TALKED_TO};
     use crate::{Equipment, GameState, dat_file::DatFile, gfx, menu_defs::MenuRef};
 
     // = seg000:7f27/7f2a — the location available-equipment computation: the
@@ -3902,7 +3928,7 @@ mod tests {
         );
 
         assert_eq!(game.character_sprite_map()[0x0c], (0x0c, 0));
-        game.room_persons[12].flags |= 0x10;
+        game.room_persons[12].flags |= NPC_STORY_BIT;
         assert_eq!(
             game.character_sprite_map()[0x0c],
             (0x12, 0),
@@ -4152,7 +4178,11 @@ mod tests {
         game.game_phase = 6;
         game.menu_callback_choice_come_with_me(0, 0);
         assert_eq!(game.dialogue_interrupt_gate, 0xff, "gate must stay armed");
-        assert_ne!(game.room_persons[1].flags & 0x40, 0, "flags bit 0x40");
+        assert_ne!(
+            game.room_persons[1].flags & NPC_COMPANION,
+            0,
+            "flags bit 0x40"
+        );
         assert_ne!(game.persons_travelling_with & 2, 0, "travelling bit");
         // time_joined was refreshed: game_time 2 minus the static-zero
         // time_dismissed passes the 2-tick debounce.
@@ -4168,7 +4198,11 @@ mod tests {
         assert_eq!(game.ui_hud_companion_blink[0], 0x10, "blink armed");
         assert_eq!(game.ui_elements[21].sprite_id, 0x42, "slot-1 portrait");
         // The cleanup also marks the speaker talked-to (seg000:97dd).
-        assert_ne!(game.room_persons[1].flags & 0x20, 0, "flags bit 0x20");
+        assert_ne!(
+            game.room_persons[1].flags & NPC_TALKED_TO,
+            0,
+            "flags bit 0x20"
+        );
 
         // The game-loop blink task (ui_hud_companion_blink_task, seg000:d7b7)
         // drains the 0x10 counter over 16 steps, blanking the fresh portrait
@@ -4249,7 +4283,11 @@ mod tests {
         // time_dismissed stays 0: the debounce reads time_joined (= game_time),
         // and game_time has not advanced 2 ticks since.
         game.menu_callback_choice_stay_here(0, 0);
-        assert_eq!(game.room_persons[1].flags & 0x40, 0, "flag cleared");
+        assert_eq!(
+            game.room_persons[1].flags & NPC_COMPANION,
+            0,
+            "flag cleared"
+        );
         assert_eq!(
             game.persons_travelling_with & 2,
             0,
@@ -4277,14 +4315,18 @@ mod tests {
         // slot 2 shifts down, and the newcomer takes slot 2.
         game.companions[0] = 3; // Duncan
         game.companions[1] = 4; // Gurney
-        game.room_persons[3].flags |= 0x40;
+        game.room_persons[3].flags |= NPC_COMPANION;
         game.persons_travelling_with |= 1 << 3;
         game.npc_assign_companion_slot(1);
         assert_eq!(
             game.pending_room_action, 0x67,
             "evictee encoded as 0x64 + 3"
         );
-        assert_eq!(game.room_persons[3].flags & 0x40, 0, "evictee detached");
+        assert_eq!(
+            game.room_persons[3].flags & NPC_COMPANION,
+            0,
+            "evictee detached"
+        );
         assert_eq!(game.persons_travelling_with & (1 << 3), 0);
         assert_eq!(game.companions[0], 4, "slot 2 shifted down");
         assert_eq!(game.companions[1], 1, "newcomer in slot 2");

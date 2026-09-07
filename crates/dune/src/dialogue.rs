@@ -32,7 +32,9 @@ use std::io::Cursor;
 use bytes_ext::ReadBytesExt;
 
 use crate::{
-    GameState, Rect, container, gfx, menu_defs::MenuRef, room_game_screen::NPC_COMPANION,
+    GameState, Rect, container, gfx,
+    menu_defs::MenuRef,
+    room_game_screen::{NPC_COMPANION, NPC_STORY_BIT},
     smugglers::smuggler_index_from_ptr,
 };
 
@@ -489,7 +491,7 @@ impl GameState {
     // npc_assign_companion_slot (seg000:96a1).
     pub(crate) fn npc_clear_travelling(&mut self, index: usize) {
         // = seg000:9556 and byte [si+0fh], 0bfh.
-        self.room_persons[index].flags &= !0x40;
+        self.room_persons[index].flags &= !NPC_COMPANION;
         // = seg000:955a bx = 2; call npc_refresh_travel_timestamp.
         self.npc_refresh_travel_timestamp(index, 2);
         // = seg000:9560..9568 cl = [si+0eh]; persons_travelling_with &=
@@ -1028,7 +1030,7 @@ impl GameState {
         self.for_condit_ds_18 = entry.flags;
         // = seg000:9505..9515 ds:16 = game_time - (+8 time_joined while
         //   travelling, else +0xa time_dismissed).
-        let stamp = if entry.flags & 0x40 != 0 {
+        let stamp = if entry.flags & NPC_COMPANION != 0 {
             entry.time_joined
         } else {
             entry.time_dismissed
@@ -1599,7 +1601,7 @@ impl GameState {
         // = seg000:24a3/24a8 cmp game_phase,10h; jnb loc_024b0.
         if self.game_phase < 0x10 {
             // = seg000:24aa or room_persons[1].flags, 10h.
-            self.room_persons[1].flags |= crate::room_game_screen::NPC_STORY_BIT;
+            self.room_persons[1].flags |= NPC_STORY_BIT;
             return;
         }
         // = seg000:24b0 call callback_event_dialogue_line_06_end_dialogue —
@@ -1663,7 +1665,12 @@ impl GameState {
 mod tests {
     use std::sync::mpsc;
 
-    use crate::{GameState, container, dat_file::DatFile, menu_defs::MenuRef};
+    use crate::{
+        GameState, container,
+        dat_file::DatFile,
+        menu_defs::MenuRef,
+        room_game_screen::{NPC_COMPANION, NPC_STORY_BIT},
+    };
 
     // Jessica's "It looks like a communication room, used to send and receive
     // long distance messages. I'm going to try to open this door on the
@@ -1879,8 +1886,8 @@ mod tests {
         // Leto (0) and Jessica (1) are travelling companions; neither stands
         // in the rendered room (no anchor -> the no-zoom dialogue path, as a
         // HUD-portrait click gives).
-        game.room_persons[0].flags |= 0x40;
-        game.room_persons[1].flags |= 0x40;
+        game.room_persons[0].flags |= NPC_COMPANION;
+        game.room_persons[1].flags |= NPC_COMPANION;
         game.character_screen_pos[0] = (0xffff, 0xffff);
         game.character_screen_pos[1] = (0xffff, 0xffff);
 
@@ -1960,7 +1967,7 @@ mod tests {
         // Phase 6, Jessica travelling with Paul (COME WITH ME) in the throne
         // room (0x200a).
         game.game_phase = 6;
-        game.room_persons[1].flags |= 0x40;
+        game.room_persons[1].flags |= NPC_COMPANION;
         game.room_persons[1].location_and_room = game.location_and_room;
         game.room_persons[1].location_appearance = game.location_appearance;
         game.persons_travelling_with |= 2;
@@ -2091,7 +2098,7 @@ mod tests {
         game.game_phase = 0x0f;
         game.dispatch_dialogue_line_event(0x0f, 0);
         assert_ne!(
-            game.room_persons[1].flags & crate::room_game_screen::NPC_STORY_BIT,
+            game.room_persons[1].flags & NPC_STORY_BIT,
             0,
             "= seg000:24aa"
         );

@@ -1538,7 +1538,7 @@ pub(crate) const TROOPS: [Troop; 68] = [
     },
 ];
 
-use crate::{GameState, game_state::NearestLocation, locations};
+use crate::{GameState, game_state::NearestLocation, locations, room_game_screen::NPC_STORY_BIT};
 
 /// = the for_condit_troop_* staging block at seg001:002c..004b, filled by
 /// troop_prepare_troop_data_for_condit for the troop behind the active
@@ -1756,7 +1756,7 @@ impl GameState {
             self.harkonnen_captain_troop = Some(ti);
             let occ_bit4 = t.occupation & 0x10;
             let rp = &mut self.room_persons[12];
-            rp.flags = (rp.flags & !0x10) | occ_bit4;
+            rp.flags = (rp.flags & !NPC_STORY_BIT) | occ_bit4;
             self.data_000ee = 0;
             self.data_000ed = if occ_bit4 != 0 { 0xff } else { t.motivation };
             12

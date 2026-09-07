@@ -29,8 +29,9 @@
 //! 0x3a -> room 9 + EQUI.HSQ.
 
 use crate::{
-    DrawOptions, GameState, Rect, RoomRenderer, RoomSheet, SpriteSheet, blit, sal_position_markers,
-    sal_position_markers_from_list, sprite_bank,
+    DrawOptions, GameState, Rect, RoomRenderer, RoomSheet, SpriteSheet, blit,
+    room_game_screen::{NPC_COMPANION, NPC_STORY_BIT},
+    sal_position_markers, sal_position_markers_from_list, sprite_bank,
 };
 
 // = SAL room sheets, resources 0xa1..0xa4 (calc_SAL_index result + 0xa1).
@@ -750,7 +751,7 @@ impl GameState {
             if entry.location_and_room == cur_room
                 && entry.location_appearance == cur_appearance
                 // = seg000:40c9 test byte [si+0eh],40h.
-                && entry.flags & 0x40 != 0
+                && entry.flags & NPC_COMPANION != 0
             {
                 // = seg000:40cf/40d1 — move the entry to the destination.
                 entry.location_and_room = location_and_room;
@@ -1206,7 +1207,7 @@ impl GameState {
         (0..0x17u8)
             .map(|id| match id {
                 4 if self.is_gurney_between_phases_15_and_20(id) => (0x11, 0x35),
-                0x0c if self.room_persons[12].flags & 0x10 != 0 => (0x12, 0),
+                0x0c if self.room_persons[12].flags & NPC_STORY_BIT != 0 => (0x12, 0),
                 // = seg000:3d4f jb loc_03d58 — ids below 0x0f leave the global
                 //   alone, and 0x0e ignores it anyway (it reads fremen1_troop).
                 0x0e => (

@@ -2899,7 +2899,9 @@ impl GameState {
 mod tests {
     use std::sync::mpsc;
 
-    use crate::{GameState, dat_file::DatFile, menu_defs::MenuRef};
+    use crate::{
+        GameState, dat_file::DatFile, menu_defs::MenuRef, room_game_screen::NPC_COMPANION,
+    };
 
     #[test]
     #[ignore = "needs assets/DUNE.DAT"]
@@ -2990,7 +2992,7 @@ mod tests {
         game.cmd_args_memory |= 0x10;
         game.start(true);
         // Gurney travels with us.
-        game.room_persons[4].flags |= 0x40;
+        game.room_persons[4].flags |= NPC_COMPANION;
         game.persons_travelling_with |= 1 << 4;
         game.npc_assign_companion_slot(4);
         while rx.try_recv().is_ok() {}

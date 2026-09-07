@@ -11,7 +11,10 @@
 //! effects (motivation, the phase-0x64 location scan), the palace-plan
 //! locked-door icon-list truncation, and the string substitution table.
 
-use crate::{GameState, cmd, room_game_screen::NPC_DETACH_ON_TRAVEL};
+use crate::{
+    GameState, cmd,
+    room_game_screen::{NPC_DETACH_ON_TRAVEL, NPC_STORY_BIT},
+};
 
 impl GameState {
     // = seg000:100b callback_event_dialogue_line_0b_game_phase_01_make_Duncan_
@@ -294,7 +297,7 @@ impl GameState {
         println!("phase_callback_48_met_chani: start_scripted_dialogue unported");
         // = seg000:1144..114b room_persons[7].flags = (flags | 0x10) & ~0x02.
         let rp = &mut self.room_persons[7];
-        rp.flags = (rp.flags | 0x10) & !0x02;
+        rp.flags = (rp.flags | NPC_STORY_BIT) & !NPC_DETACH_ON_TRAVEL;
         // = seg000:114e..1153 the Leto-killed threshold = rallied + 2.
         self.number_of_rallied_troops_for_leto_killed =
             self.number_of_rallied_troops.wrapping_add(2);
