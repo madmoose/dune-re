@@ -30,7 +30,8 @@ pub(crate) const PHASE_00_START: u8 = 0x00;
 pub(crate) const PHASE_01_DUNCAN_AVAILABLE: u8 = 0x01;
 /// Two troops rallied; Leto asks for stillsuits (cond 7, +1).
 pub(crate) const PHASE_02_TWO_TROOPS_RALLIED: u8 = 0x02;
-/// Looking for the stillsuit maker (cond 245).
+/// Looking for the stillsuit maker: the Carthag-Tuek chief points east
+/// (location 0x205, +1); cond 245 holds away from Tuono-Tabr (0x303).
 pub(crate) const PHASE_03_STILLSUIT_QUEST: u8 = 0x03;
 /// Callback 04: palace room 1 background steps back, locations 10 and 17
 /// appear, Jessica moves. Book: the harvester.
@@ -109,7 +110,7 @@ pub(crate) const PHASE_38_LETO_DEPARTED: u8 = 0x38;
 /// 405).
 pub(crate) const PHASE_39_VILLAGE_LORE: u8 = 0x39;
 /// Set directly by the first smuggler deal (seg000:2388). Raids no longer
-/// need the timer. Harah thanks Paul at location 0x304 (+4).
+/// need the timer. Harah thanks Paul at Tuono-Timin (location 0x304, +4).
 pub(crate) const PHASE_3C_SMUGGLERS_DEALT: u8 = 0x3c;
 /// Callback 40: Harah detaches on travel. Stilgar: "meet somebody"
 /// (0x40..0x44, +4).
