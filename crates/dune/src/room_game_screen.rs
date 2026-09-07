@@ -771,12 +771,15 @@ impl GameState {
     }
 
     // = seg000:0e47 menu_callback_choice_multiple_restart_game — the RESTART
-    // GAME verb of the game-over menu (and the mirror-room menu). DOS loads
-    // the fresh-game image dune37s0.sav (cl = 0xff is the slot the load's
-    // `add cl,31h` turns into the '0' digit), draining the pending game-over
-    // request on the way (loc_00e49). The port restores the same image from
-    // memory (initial_game_image, taken where create_save_cl wrote the file)
-    // and runs the load's two halves around it, so no save file is needed.
+    // GAME verb of the game-over menu (menu_restart_load_exit_game) and the
+    // mirror-room menu (menu_palace_mirror_room). DOS loads the fresh-game
+    // image dune37s0.sav (cl = 0xff is the slot the load's `add cl,31h`
+    // turns into the '0' digit), draining a pending game-over request on the
+    // way (loc_00e49: DEAD2.HNM, then the request and lip-sync id cleared —
+    // the load entry seg000:b3b0 shares that drain, so the port keeps it in
+    // pre_load_fixups). The port restores the same image from memory
+    // (initial_game_image, taken where create_save_cl wrote the file) and
+    // runs the load's two halves around it, so no save file is needed.
     pub(crate) fn menu_callback_choice_multiple_restart_game(
         &mut self,
         _text_id: u16,
@@ -5914,5 +5917,48 @@ we might make in the deep desert of Arrakis where the great worms roam";
         // And a further desert step, which rebuilds the panel again, keeps it.
         game.ui_click_move_down();
         assert_eq!(game.ui_elements[CENTRE].flags, 0x20);
+    }
+
+    // = seg000:0e47 RESTART GAME from the mirror-room menu (seg001:20c2 row
+    // 0): the fresh-game image comes back, the mirror menu is gone and the
+    // throne room is up again. Asset-gated:
+    //   cargo test -p dune -- --ignored restart_from_the_mirror
+    #[test]
+    #[ignore = "needs assets/DUNE.DAT"]
+    fn restart_from_the_mirror_room_reloads_the_fresh_game() {
+        let dat_path = concat!(env!("CARGO_MANIFEST_DIR"), "/../../assets/DUNE.DAT");
+        let Ok(dat_file) = DatFile::open(dat_path) else {
+            eprintln!("skipping: {dat_path} not found");
+            return;
+        };
+        let (tx, _rx) = mpsc::sync_channel(256);
+        let mut game = GameState::new(dat_file, tx);
+        game.set_headless();
+        game.start(true);
+        let start_time = game.game_time;
+
+        // Some play: the clock ran, Paul talked to Leto, then LOOK AT MIRROR.
+        game.game_time = start_time.wrapping_add(0x40);
+        game.room_persons[0].flags |= NPC_TALKED_TO;
+        game.look_at_mirror();
+        assert_eq!(game.get_active_menu_ref(), MenuRef::MenuPalaceMirrorRoom);
+
+        // The RESTART GAME row is the menu's first record.
+        let record = game.active_menu_records()[0];
+        assert_eq!(record.text_id, crate::cmd::RESTART_GAME);
+        (record.callback)(&mut game, record.text_id, 0);
+
+        assert_eq!(game.game_time, start_time, "the clock is back at the start");
+        assert_eq!(
+            game.room_persons[0].flags & NPC_TALKED_TO,
+            0,
+            "Leto not yet talked to"
+        );
+        assert_eq!(
+            game.get_active_menu_ref(),
+            MenuRef::CommandMenuBuf,
+            "the mirror menu is gone"
+        );
+        assert_eq!(game.game_screen_mode_flags, 0, "back in the room view");
     }
 }
