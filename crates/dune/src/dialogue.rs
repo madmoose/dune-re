@@ -732,11 +732,16 @@ impl GameState {
     // that line's phrase id (show_voice_subtitle), so re-running the
     // loc_09efd load-and-play chain speaks it again with fresh lip-sync.
     pub(crate) fn menu_callback_choice_what(&mut self, _text_id: u16, _index: usize) {
-        // = seg000:9ed5..9ee6 a room speaker (< 0x10): spin loc_09985 until
-        //   the idle head animation reaches a frame boundary (data_047ce & 7)
-        //   and re-arm the portrait part-2 flag (data_047e1 0x81 -> 1). The
-        //   port's TalkingHead paces its idle frames internally and re-syncs
-        //   when the voice starts, and data_047e1 is not modelled.
+        // = seg000:9ed5..9ee6 a room speaker (< 0x10): run the idle head to
+        //   an 8-frame window boundary (loc_09985) and, when the speaker sign
+        //   is up and drawn (data_047e1 == 0x81), re-arm it to state 1 so the
+        //   replayed line raises and draws it again.
+        if self.current_lip_sync_resource_id < 0x10 {
+            self.idle_run_to_window_boundary();
+            if self.head_sign_state == 0x81 {
+                self.head_sign_state = 1;
+            }
+        }
         // = seg000:9eeb call arm_npc_menu_idle_timer.
         self.arm_npc_menu_idle_timer();
         // = seg000:9eee al = [last_line_voc_bank_flag]; falls into
@@ -1062,10 +1067,10 @@ impl GameState {
 
     // = seg000:c85b arm_npc_menu_idle_timer — (re)arm the NPC-actions-menu
     // inactivity timer: base = the PIT counter now, limit = 0x1770 (6000 ticks,
-    // 30 s). The room mouse hook loc_01ae7 (seg000:1ae7, unported) watches the
+    // 30 s). The room idle hook room_idle_npc_menu_zoom (seg000:1ae7) watches the
     // pair while menu_NPC_actions is the active menu and fires
     // loc_0c868 on expiry.
-    fn arm_npc_menu_idle_timer(&mut self) {
+    pub(crate) fn arm_npc_menu_idle_timer(&mut self) {
         self.npc_menu_idle_timer_base = self.game_ticks() as u16;
         self.npc_menu_idle_timer_limit = 0x1770;
     }
@@ -1155,6 +1160,14 @@ impl GameState {
             //   (loc_08895), so only the balloon stamps. The balloon is on top
             //   in fb1 (tiled over the head the port drew early), so the stamp
             //   captures the balloon, not the head, into the backdrop.
+            // = seg000:979c call loc_09908 (inside start_room_lip_sync) —
+            //   re-arm the lively idle for this line: a fresh lively
+            //   animation, settled cleared, budget = 4 × the line's word
+            //   count (the subtitle above was laid out first). The voice
+            //   start below settles it again (idle_settle_for_voice) before
+            //   the next idle tick; with digital sound off the gesturing
+            //   plays out.
+            self.idle_arm_lively();
             let has_balloon = self.subtitle_bubble.as_ref().is_some_and(|b| !b.strip);
             if has_balloon {
                 let rect = self.subtitle_bubble.as_ref().unwrap().rect;

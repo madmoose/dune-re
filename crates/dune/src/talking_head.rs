@@ -233,12 +233,13 @@ pub struct TalkingHead {
     /// finishes so the mouth stops moving once the head goes quiet.
     pub settled: bool,
 
-    /// = `data_047ce` — the lively-idle budget, decremented each idle frame
-    /// (`loc_099f6`). It starts at `data_0478c * 4` (loc_09908); `data_0478c` is
-    /// 0, so the budget is spent on the first animation and the head settles
-    /// (`loc_09a1d` `cmp data_047ce,0; js loc_09a3b`) into the calm resting
-    /// expression at the next animation boundary — giving the long rest-hold
-    /// pauses between idle gestures.
+    /// = `data_047ce` — the signed idle window budget, decremented each idle
+    /// frame (`loc_099f6`). The lively phase starts it at `data_0478c * 4`
+    /// (loc_09908): four frames per word of the last laid-out subtitle
+    /// (`subtitle_word_count`). It is only tested at an animation end
+    /// (`loc_09a1d` `cmp data_047ce,0; js loc_09a3b`), where a spent budget
+    /// settles the head into the calm resting idle; the settled phase then
+    /// reloads it to 8 per calm window (loc_09a74) or 0x14 for a raised sign.
     pub idle_countdown: i32,
 
     /// Speech (lip-sync) mouth stream from the `.voc` type-5 comment block —
@@ -292,6 +293,76 @@ impl GameState {
             (facing - 1) as usize
         };
         idx.min(idle_count - 1)
+    }
+
+    // = seg000:996c loc_0996c — the first frame of the lively run. A banked
+    // head (facing != 0: Paul, the smuggler, the Fremen chiefs) keeps its
+    // calm windows and its lively run in ONE 64-frame animation: frames 0..31
+    // are the four 8-frame calm windows loc_09a7b's `rand & 0x18` starts at,
+    // frames 32..63 the lively run, so DOS skips 32 zero-terminated frame
+    // records before playing. A named head (facing == 0) has separate lively
+    // animations and skips nothing.
+    fn lively_start_frame(&self) -> usize {
+        let Some(head) = self.talking_head.as_ref() else {
+            return 0;
+        };
+        if head.facing == 0 {
+            return 0;
+        }
+        let len = head
+            .lipsync
+            .animations
+            .get(head.anim)
+            .map(|a| a.frames.len())
+            .unwrap_or(0);
+        32.min(len.saturating_sub(1))
+    }
+
+    // = seg000:9908 loc_09908 without its install tail — (re-)arm the lively
+    // idle phase. DOS runs this for every presented line (start_room_lip_sync
+    // seg000:979c, reached from seg000:a0b9 after the line's subtitle is laid
+    // out), not only when a head is first shown: pick the lively animation
+    // (loc_0994f), clear the settled flag (data_047d1 = 0xc0), budget =
+    // data_0478c * 4 (four frames per subtitle word), and point the frame
+    // pointer at the lively run's first frame (loc_0996c). Nothing is drawn.
+    // For a voiced line idle_settle_for_voice follows before the next idle
+    // tick, so the lively gesturing shows only with digital sound off or when
+    // the voice fails to load.
+    pub(crate) fn idle_arm_lively(&mut self) {
+        if self.talking_head.is_none() {
+            return;
+        }
+        let anim = self.pick_idle_anim();
+        if let Some(head) = self.talking_head.as_mut() {
+            head.anim = anim;
+        }
+        let frame = self.lively_start_frame();
+        let budget = self.subtitle_word_count as i32 * 4;
+        if let Some(head) = self.talking_head.as_mut() {
+            head.frame = frame;
+            head.settled = false;
+            head.idle_countdown = budget;
+        }
+    }
+
+    // = seg000:9985 loc_09985 — run the idle animator (frame_task_callback_
+    // 099be) back to back until the window budget data_047ce & 7 == 0, i.e.
+    // the head sits on an 8-frame window boundary. No pacing: DOS draws each
+    // frame straight away. Called before a scene teardown, after an HNM
+    // completes, at an intro line's end and by the WHAT ? verb so the head is
+    // not left frozen mid-blink.
+    pub(crate) fn idle_run_to_window_boundary(&mut self) {
+        if !self.has_frame_task(crate::TaskId::TalkingHeadIdle) {
+            return;
+        }
+        // A bound the DOS spin never needs (a window is at most 8 frames
+        // away) — it only guards against a head with no frames.
+        for _ in 0..64 {
+            match self.talking_head.as_ref() {
+                Some(head) if head.idle_countdown & 7 != 0 => self.tick_talking_head_idle(),
+                _ => return,
+            }
+        }
     }
 
     // = seg000:a25b callback_event_dialogue_line_0a — the spoken line wants the
@@ -625,12 +696,17 @@ impl GameState {
         // the right moment (and under the new palette). Copying to the screen
         // here would flash the new pixels under the old palette during the
         // dissolve (a black silhouette of the head).
+        // = seg000:9910 loc_0994f + 9927 loc_0996c — the lively animation and
+        //   its first frame (32 for a banked head, see lively_start_frame).
         let anim = self.pick_idle_anim();
         if let Some(head) = self.talking_head.as_mut() {
             head.anim = anim;
-            head.frame = 0;
         }
-        self.composite_head_frame(anim, 0);
+        let frame = self.lively_start_frame();
+        if let Some(head) = self.talking_head.as_mut() {
+            head.frame = frame;
+        }
+        self.composite_head_frame(anim, frame);
 
         // = copy_non_pcm_lip_sync_data_and_draw_talking_head's [460a]->[4540]
         // copy (seg000:9d18): record this first pose as the previous frame so
@@ -641,7 +717,7 @@ impl GameState {
         let first_images = self
             .talking_head
             .as_ref()
-            .map(|h| flatten_frame(&h.lipsync, anim, 0))
+            .map(|h| flatten_frame(&h.lipsync, anim, frame))
             .unwrap_or_default();
         if let Some(head) = self.talking_head.as_mut() {
             head.prev_images = first_images;
@@ -760,8 +836,9 @@ impl GameState {
             anim: 0,
             frame: 0,
             settled: false,
-            // = loc_09908: data_047ce = data_0478c * 4, and data_0478c is 0.
-            idle_countdown: 0,
+            // = loc_09908 (seg000:9918..9921): data_047ce = data_0478c * 4 —
+            //   four lively frames per word of the last laid-out subtitle.
+            idle_countdown: self.subtitle_word_count as i32 * 4,
             voc_lipsync: Vec::new(),
             voc_total_samples: 0,
             voc_baseline: 0,
@@ -778,10 +855,11 @@ impl GameState {
     //
     //   - LIVELY (loc_0994f path, data_047d1 sign clear): play the lively idle
     //     animation (data_047d0 == 0 -> random {0..3}; the player -> the fixed
-    //     game_time-derived animation `facing-1`), which moves the mouth,
-    //     spending one budget unit per frame. The budget starts at [478ch]*4 = 0,
-    //     so it runs out during the first animation; at that boundary
-    //     (loc_09a1d `js loc_09a3b`) the head settles (data_047d1 |= 0x10).
+    //     game_time-derived animation `facing-1`, from its frame 32), which
+    //     moves the mouth, spending one budget unit per frame. The budget
+    //     starts at [478ch]*4 (four frames per subtitle word, idle_arm_lively);
+    //     once it is spent, the next animation boundary (loc_09a1d
+    //     `js loc_09a3b`) settles the head (data_047d1 |= 0x10).
     //   - SETTLED (loc_09a40 path): the calm resting idle. Play the resting
     //     animation chosen by loc_09a7b (data_047d0 == 0 -> animation 4, or 5 for
     //     Chani late game; the player -> the SAME animation `facing-1` as the
@@ -873,17 +951,23 @@ impl GameState {
         // Pick the next lively animation at a boundary — unless we just settled,
         // in which case this tick finishes the current animation's last frame and
         // the settled branch runs from the next tick.
+        // = seg000:9a2c loc_0994f + 9a32 loc_0996c — the fresh animation
+        //   restarts at the lively run's first frame.
         let next_anim = if advance && !self.talking_head.as_ref().unwrap().settled {
-            Some(self.pick_idle_anim())
+            let anim = self.pick_idle_anim();
+            if let Some(head) = self.talking_head.as_mut() {
+                head.anim = anim;
+            }
+            Some((anim, self.lively_start_frame()))
         } else {
             None
         };
 
         let (anim, frame) = {
             let head = self.talking_head.as_mut().unwrap();
-            if let Some(anim) = next_anim {
+            if let Some((anim, start)) = next_anim {
                 head.anim = anim;
-                head.frame = 0;
+                head.frame = start;
             } else if !advance {
                 head.frame += 1;
             }
@@ -1698,6 +1782,67 @@ mod tests {
     // and enabling it in a test would put real audio out of the speakers.
     // Asset-gated:
     //   cargo test -p dune -- --ignored sfx_gates
+    // = seg000:9908 loc_09908 + seg000:996c loc_0996c — the lively idle is
+    // armed with four frames per word of the last laid-out subtitle
+    // (data_0478c * 4), and a banked head (Paul, facing != 0) starts its
+    // lively run at frame 32 of its single 64-frame animation, past the four
+    // calm windows; a named head (Leto) starts a separate lively animation at
+    // frame 0. Asset-gated:
+    //   cargo test -p dune -- --ignored lively_idle_arms
+    #[test]
+    #[ignore = "needs assets/DUNE.DAT"]
+    fn lively_idle_arms_from_the_subtitle_word_count_past_the_calm_bank() {
+        let dat_path = concat!(env!("CARGO_MANIFEST_DIR"), "/../../assets/DUNE.DAT");
+        let Ok(dat_file) = DatFile::open(dat_path) else {
+            eprintln!("skipping: {dat_path} not found");
+            return;
+        };
+        let (tx, _rx) = mpsc::sync_channel(256);
+        let mut game = GameState::new(dat_file, tx);
+        game.start(true);
+
+        // = seg000:8ea3 three words laid out -> a 12-frame lively budget.
+        game.subtitle_word_count = 3;
+        game.setup_talking_head(0x2d, 0);
+        let head = game.talking_head.as_ref().unwrap();
+        assert_ne!(head.facing, 0, "Paul is a banked head");
+        assert_eq!(
+            head.idle_countdown, 12,
+            "= loc_09908 data_047ce = data_0478c * 4"
+        );
+        assert_eq!(
+            head.frame, 32,
+            "= loc_0996c the banked lively run starts past the calm bank"
+        );
+        assert_eq!(head.lipsync.animations[head.anim].frames.len(), 64);
+
+        // = seg000:9a2c/9a32 the restart at the animation end lands on frame 32
+        //   again while the budget is unspent.
+        game.subtitle_word_count = 0xff;
+        game.idle_arm_lively();
+        let head = game.talking_head.as_ref().unwrap();
+        assert_eq!(head.idle_countdown, 0xff * 4);
+        assert!(!head.settled);
+        for _ in 0..40 {
+            game.tick_talking_head_idle();
+        }
+        let head = game.talking_head.as_ref().unwrap();
+        assert!(!head.settled, "the budget is far from spent");
+        assert!(
+            head.frame >= 32,
+            "the lively run never dips into the calm bank: frame {}",
+            head.frame
+        );
+
+        // A named head keeps separate lively animations and starts at 0.
+        game.subtitle_word_count = 5;
+        game.setup_talking_head(0, 0);
+        let head = game.talking_head.as_ref().unwrap();
+        assert_eq!(head.facing, 0);
+        assert_eq!(head.frame, 0);
+        assert_eq!(head.idle_countdown, 20);
+    }
+
     #[test]
     #[ignore = "needs assets/DUNE.DAT"]
     fn sfx_gates_skip_the_resource_when_pcm_is_off() {

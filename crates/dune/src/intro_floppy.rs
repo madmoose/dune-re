@@ -411,6 +411,8 @@ impl GameState {
         });
         // = seg000:0960 copy_active_framebuffer_to_framebuffer_2 (inside
         // setup_talking_head); seg000:0965 al=0x2d (PAUL); dx=0; loc_009c7.
+        // = seg000:09d0 data_0478c = 1eh (loc_009c7), then seg000:096a data_0478c = 1 — Paul's lively idle budget is 4 frames.
+        self.subtitle_word_count = 1;
         self.setup_talking_head(0x2d, 0);
         // = seg000:096f jmp start_room_lip_sync — installs the lip-sync frame
         // task that animates the head over the narration voice. Not invoked here
@@ -430,6 +432,8 @@ impl GameState {
         });
         // = seg000:09b9 copy_active_framebuffer_to_framebuffer_2 (inside
         // setup_talking_head); seg000:09bc al=9 (BARO); dx=0x52; loc_009c7.
+        // = seg000:09d0 data_0478c = 1eh (loc_009c7) — the intro head's lively idle budget, 4 × 0x1e frames.
+        self.subtitle_word_count = 0x1e;
         self.setup_talking_head(9, 0x52);
         // = seg000:09c4 jmp start_room_lip_sync — same caveat as scene_paul.
     }

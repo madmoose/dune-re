@@ -8,7 +8,7 @@
 //! dispatch through `hit_test_ui_elements` + `dispatch_ui_click` from the
 //! game loop's LMB press path (game_loop_dispatch_lmb_press).
 
-use crate::{GameState, MapPanelRef, Rect, gfx, mouse::CursorShapeId};
+use crate::{GameState, MapPanelRef, Rect, gfx, menu_defs::MenuRef, mouse::CursorShapeId};
 
 const UI_ELEMENT_CLEAR_FLAG: u16 = 0x40;
 const UI_ELEMENT_SKIP_SPRITE_FLAG: u16 = 0x20;
@@ -307,7 +307,7 @@ pub(crate) struct MouseHandlers {
 /// is a no-op (fn_0d917_noop) — the HUD element hit-test + dispatch runs in the
 /// game loop (game_loop_dispatch_lmb_press) for every screen, not here. The RMB
 /// and release/drag slots are no-ops too (the room arms no drag target), and the
-/// idle handler's body (loc_01ae7) is a stub.
+/// idle handler is room_idle_npc_menu_zoom.
 pub(crate) static ROOM_MOUSE_HANDLERS: MouseHandlers = MouseHandlers {
     idle: GameState::room_mouse_idle,
     lmb: GameState::room_mouse_lmb,
@@ -1138,14 +1138,37 @@ impl GameState {
         eprintln!("unhandled ui_element[{i}] click handler: 0x{func_ptr:04x}");
     }
 
-    // = seg000:1ae7 loc_01ae7 — the room-screen record's idle handler ([si] at
-    // seg000:d88c). game_loop calls highlight_hovered_text_action_item just
-    // before this on the idle path. DOS: if the active menu is
-    // menu_NPC_actions and the npc_menu_idle_timer (base/limit pair armed by
-    // arm_npc_menu_idle_timer, seg000:c85b) has expired, drive the NPC
-    // idle/glance animation (loc_0c868) and re-arm the timer.
-    // TODO: port the loc_01ae7 NPC idle-glance body; no-op stub meanwhile.
-    fn room_mouse_idle(&mut self) {}
+    // = seg000:1ae7 room_idle_npc_menu_zoom — the room-screen record's idle
+    // handler ([si] at seg000:d88c); game_loop calls
+    // highlight_hovered_text_action_item just before it on the idle path.
+    // While the NPC actions menu is up and the player has done nothing for
+    // npc_menu_idle_timer_limit ticks (30 s, armed by arm_npc_menu_idle_timer
+    // on every line, verb and replay), run the short random zoom-in close-up
+    // of the talking head (loc_0c868: one of the two 2-step sequences, a hold
+    // on the close-up, then back to 1:1) and re-arm the timer, so an idle
+    // conversation is punctuated by a camera push every half minute.
+    fn room_mouse_idle(&mut self) {
+        // = seg000:1ae7 get_active_screen_element; cmp bp, menu_npc_actions;
+        //   jnz ret.
+        if self.get_active_menu_ref() != MenuRef::MenuNpcActions {
+            return;
+        }
+        // = seg000:1af0..1af9 evaluate once per PIT tick (data_04770 holds the
+        //   last counter value seen).
+        let now = self.game_ticks() as u16;
+        if now == self.npc_menu_idle_last_tick {
+            return;
+        }
+        self.npc_menu_idle_last_tick = now;
+        // = seg000:1afc..1b04 elapsed = now - base; jb ret while under the
+        //   limit.
+        if now.wrapping_sub(self.npc_menu_idle_timer_base) < self.npc_menu_idle_timer_limit {
+            return;
+        }
+        // = seg000:1b06 call arm_npc_menu_idle_timer; 1b09 call loc_0c868.
+        self.arm_npc_menu_idle_timer();
+        self.scene_zoom_in_reveal();
+    }
 
     // = seg000:d8fe..d914 the left-button press dispatch. DOS runs the ui_element
     // hit-test HERE in the game loop, NOT inside the per-screen record handler, so

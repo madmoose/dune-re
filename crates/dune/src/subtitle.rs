@@ -852,6 +852,8 @@ impl GameState {
     // DOS reports 200 lines so every rect rejects it).
     fn layout_lines(&mut self, text: &[u8], rect: Rect) -> Option<Vec<SubLine>> {
         let budget = (rect.x1 - rect.x0) as u16 - self.subtitle_pad_left - self.subtitle_pad_right;
+        // = seg000:8e18 data_0478c = 0 — the word count restarts per layout.
+        self.subtitle_word_count = 0;
         let mut lines = Vec::new();
         let mut words: Vec<Vec<u8>> = Vec::new();
         let mut remaining = budget as i32;
@@ -939,6 +941,12 @@ impl GameState {
         if lines.is_empty() {
             return None;
         }
+        // = seg000:8ea3 add [data_0478c], al — each committed line adds its
+        //   word count (a byte add, so it wraps). The talking head's lively
+        //   idle budget (loc_09908) is 4 × this.
+        self.subtitle_word_count = lines
+            .iter()
+            .fold(0u8, |n, l| n.wrapping_add(l.words.len() as u8));
         Some(lines)
     }
 

@@ -1775,10 +1775,14 @@ pub struct GameState {
     // npc_menu_idle_timer_limit — the NPC-actions-menu inactivity timer
     // arm_npc_menu_idle_timer (seg000:c85b) arms: base = PIT counter at the last
     // spoken line, limit = 0x1770 (6000 ticks, 30 s). The room mouse hook
-    // loc_01ae7 (seg000:1ae7, unported) watches them while menu_NPC_actions is
-    // the active menu and fires loc_0c868 on expiry.
+    // room_idle_npc_menu_zoom (seg000:1ae7) watches them while menu_NPC_actions
+    // is the active menu and fires loc_0c868 on expiry.
     pub(crate) npc_menu_idle_timer_base: u16,
     pub(crate) npc_menu_idle_timer_limit: u16,
+    // = seg001:4770 npc_menu_idle_last_tick — the PIT counter value
+    // room_idle_npc_menu_zoom last evaluated, so the timer is checked once per
+    // tick rather than once per game-loop pass.
+    pub(crate) npc_menu_idle_last_tick: u16,
 
     // = seg001:4774 data_04774 — nonzero while a dialogue is active; routes
     // ui_draw_room_command_panel to the dialogue renderer and suppresses the
@@ -1813,6 +1817,12 @@ pub struct GameState {
     // from the phrase id dialogue_interpret_record pulls out of the matched
     // sentence). 0 = none.
     pub(crate) current_subtitle_id: u16,
+
+    // = seg001:478c data_0478c — word count of the last laid-out subtitle
+    // (zeroed by layout_subtitle_lines, summed per committed line at
+    // seg000:8ea3). loc_09908 seeds the talking head's lively idle budget with
+    // 4 × this; the intro stores 0x1e (loc_009c7) and 1 (loc_00965) directly.
+    pub(crate) subtitle_word_count: u8,
 
     // = seg001:4784/4786/4788/478a subtitle_pad_left/right/top/bottom — the
     // text insets inside the subtitle/bubble rect, staged per context
@@ -2800,6 +2810,7 @@ impl GameState {
             location_condit: Default::default(),
             npc_menu_idle_timer_base: 0,
             npc_menu_idle_timer_limit: 0,
+            npc_menu_idle_last_tick: 0,
             is_dialogue_active: false,
             sequence_saved_scene: (0, 0),
             sequence_return_cursor: None,
@@ -2807,6 +2818,7 @@ impl GameState {
             sequence_cursor: 0,
             dialogue_current_record_ptr: 0,
             current_subtitle_id: 0,
+            subtitle_word_count: 0,
             subtitle_pad_left: 0,
             subtitle_pad_right: 0,
             subtitle_pad_top: 0,
@@ -4400,26 +4412,22 @@ impl GameState {
         // (label, value) rows. The value column is placed at a fixed pixel x
         // past the widest label, so the values line up even though the glyph
         // font is proportional (space-padding would not align them).
-        let rows: [(&str, String); 5] = [
-            (
-                "PHASE",
-                // format!("{:#04x} ({})", self.game_phase, self.game_phase),
-                format!("{}", self.game_phase),
-            ),
+        let rows: &[(&str, String)] = &[
+            ("PHASE", format!("{}", self.game_phase)),
             // (
             //     "LOC",
             //     format!("{:#06x} room {}", self.location_and_room, self.current_room),
             // ),
             // ("APPEAR", format!("{:#06x}", self.location_appearance)),
             // ("DAY", format!("{}  time {:#06x}", day, self.game_time)),
-            // ("CHARISMA", format!("{}", self.charisma)),
+            ("CHARISMA", format!("{}", self.charisma)),
             ("SIETCHES", format!("{}", self.number_of_sietches_visited)),
             ("RALLIED", format!("{}", self.number_of_rallied_troops)),
             // ("MET", format!("{:#06x}", self.persons_met)),
             // ("TRAVEL", format!("{:#06x}", self.persons_travelling_with)),
             // ("IN ROOM", format!("{:#06x}", self.persons_in_room)),
-            ("EXHAUSTION", format!("{}", self.desert_exhaustion_counter)),
-            ("DESERT STEPS", format!("{}", self.desert_step_counter)),
+            // ("EXHAUSTION", format!("{}", self.desert_exhaustion_counter)),
+            // ("DESERT STEPS", format!("{}", self.desert_step_counter)),
         ];
 
         let pad = 2u16;

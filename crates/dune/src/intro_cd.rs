@@ -888,6 +888,8 @@ impl GameState {
         self.persons_in_room = 0;
         self.draw_location_room(0x200a, 0x180);
         // = seg000:099b xor al,al (LETO); seg000:099d loc_0099d xor dx,dx.
+        // = seg000:09d0 data_0478c = 1eh (loc_009c7) — the intro head's lively idle budget, 4 × 0x1e frames.
+        self.subtitle_word_count = 0x1e;
         self.setup_talking_head(0, 0);
     }
 
@@ -914,6 +916,8 @@ impl GameState {
         self.persons_in_room = 0;
         self.draw_location_room(0x2004, 0x180);
         // = seg000:0777 mov al,1 (JESS); seg000:0779 jmp loc_0099d.
+        // = seg000:09d0 data_0478c = 1eh (loc_009c7) — the intro head's lively idle budget, 4 × 0x1e frames.
+        self.subtitle_word_count = 0x1e;
         self.setup_talking_head(1, 0);
     }
 
@@ -950,6 +954,8 @@ impl GameState {
         // copy_active_framebuffer_to_framebuffer_2 that saves the red backdrop
         // into fb2. (DOS's [478ch]=1 override only shortens the idle countdown,
         // which no longer freezes the head — see tick_talking_head_idle.)
+        // = seg000:09d0 data_0478c = 1eh (loc_009c7), then seg000:096a data_0478c = 1 — Paul's lively idle budget is 4 frames.
+        self.subtitle_word_count = 1;
         self.setup_talking_head(0x2d, 0);
     }
 
@@ -1021,6 +1027,8 @@ impl GameState {
     // transition = 0xffff, so the head must reach the screen via the play
     // step, not a fade — see stage_21_play.)
     fn stage_21_init(&mut self) {
+        // = seg000:09d0 data_0478c = 1eh (loc_009c7) — the intro head's lively idle budget, 4 × 0x1e frames.
+        self.subtitle_word_count = 0x1e;
         self.setup_talking_head(7, 0);
     }
 
@@ -1072,6 +1080,8 @@ impl GameState {
             let _ = gfx::draw_sprite_on_framebuffer(s, sheet, 1, 0x54, 0x0b);
         });
         // = seg000:07be mov al,6 (KYNE); loc_0099d xor dx,dx.
+        // = seg000:09d0 data_0478c = 1eh (loc_009c7) — the intro head's lively idle budget, 4 × 0x1e frames.
+        self.subtitle_word_count = 0x1e;
         self.setup_talking_head(6, 0);
     }
 
@@ -1099,6 +1109,8 @@ impl GameState {
         // = seg000:07d5 mov word ptr [12h], 0 — reset after the room is drawn.
         self.persons_in_room = 0;
         // = seg000:07db mov al,5 (STIL).
+        // = seg000:09d0 data_0478c = 1eh (loc_009c7) — the intro head's lively idle budget, 4 × 0x1e frames.
+        self.subtitle_word_count = 0x1e;
         self.setup_talking_head(5, 0);
     }
 
@@ -1169,6 +1181,8 @@ impl GameState {
         });
 
         // = seg000:08ab mov al,0ah (FEYD); mov dx,3ah; loc_009c7.
+        // = seg000:09d0 data_0478c = 1eh (loc_009c7) — the intro head's lively idle budget, 4 × 0x1e frames.
+        self.subtitle_word_count = 0x1e;
         self.setup_talking_head(0x0a, 0x3a);
     }
 
@@ -1196,6 +1210,8 @@ impl GameState {
         });
 
         // = seg000:09bc mov al,9 (BARO); mov dx,52h.
+        // = seg000:09d0 data_0478c = 1eh (loc_009c7) — the intro head's lively idle budget, 4 × 0x1e frames.
+        self.subtitle_word_count = 0x1e;
         self.setup_talking_head(9, 0x52);
     }
 

@@ -191,10 +191,13 @@ impl GameState {
             return;
         }
 
-        // = select the step sequence. [227dh] is 1 in the intro, so the full
-        // pull-back sequence is used; the [227dh]==0 branch (a random short
-        // sequence) is preserved for the in-game callers.
-        let seq: &[i8] = if zoom_uses_full_sequence() {
+        // = seg000:c889..c8a0 select the step sequence on suppress_sky_240_255
+        //   (data_0227d): non-zero (the intro, and the cutscene brackets that
+        //   inc/dec it) plays the full pull-back sequence seg001:2792; in the
+        //   game (seg000:029d zeroes it at start) the idle handler's call from
+        //   room_idle_npc_menu_zoom picks one of the two short close-ups at
+        //   random: 5,hold,4,3 or 4,hold,3.
+        let seq: &[i8] = if self.data_0227d != 0 {
             &ZOOM_SEQ_FULL
         } else if self.rand_masked(1) == 0 {
             &ZOOM_SEQ_RAND_A
@@ -220,11 +223,4 @@ impl GameState {
         self.gfx_copy_whole_framebuf_to_screen();
         self.send_frame_to_display();
     }
-}
-
-// = cmp byte ptr [227dh], 0 — [227dh] (seg001:227d) is statically 1 and never
-// written, so the full sequence is always selected. Factored out so the
-// random-sequence branch above stays exercised/visible.
-fn zoom_uses_full_sequence() -> bool {
-    true
 }
