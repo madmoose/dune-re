@@ -1743,7 +1743,7 @@ impl GameState {
         }
     }
 
-    // = seg000:316e callback_troop_location_0316e — classify one troop of the
+    // = seg000:316e callback_troop_classify_for_room — classify one troop of the
     // current location into a dynamic room-person slot for the room the
     // player just entered. The troop appears in room 2 (the audience room),
     // or room 3 when it has the no-more-orders bit in a Harkonnen fortress
@@ -1849,9 +1849,10 @@ impl GameState {
     }
 
     // = seg000:331e prepare_location_data_for_condit — stage the location's
-    // CONDIT block (ds:4d..5b) from its record. The derived pieces
-    // (location_033be, sub_03385 and the
-    // compute_location_available_equipment mask at ds:53) are not yet ported.
+    // CONDIT block (ds:4d..5b) from its record, the troop strength words
+    // (condit_stage_location_strengths) and the troop tally. The derived
+    // pieces still missing: sub_03385 and the
+    // compute_location_available_equipment mask at ds:53.
     pub(crate) fn prepare_location_data_for_condit(&mut self, loc_index: usize) {
         // = seg000:331e mov [data_011ce], di — the staged location.
         self.condit_staged_location = loc_index;

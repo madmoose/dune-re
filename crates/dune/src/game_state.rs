@@ -820,8 +820,8 @@ pub struct GameState {
     // = seg001:0fd8 room_persons — the 16-entry room-person table walked by
     // scan_current_room_npcs. Mutable copy of ROOM_PERSON_TABLE_INIT;
     // init_room_persons rewrites entries 12..16 (addresses data_0109a / 10aa /
-    // 10ba / 10ca) and the loc_06603 classification path also touches
-    // entries 12, 14, 15 plus (selectively) 13.
+    // 10ba / 10ca) and its special-room branch (init_room_persons_special)
+    // also touches entries 12, 14, 15 plus (selectively) 13.
     pub(crate) room_persons: [RoomPerson; 16],
 
     // = seg001:10d8 smugglers — the six smuggler inventories (region,

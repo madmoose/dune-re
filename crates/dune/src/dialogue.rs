@@ -2384,9 +2384,9 @@ mod event_08_tests {
         game.room_persons[7].location_appearance = game.location_appearance;
         game.persons_travelling_with |= 0x80;
         game.persons_in_room |= 0x80;
-        // = the room scan's CONDIT staging of the location (seg000:335a
-        //   condit_stage_location_strengths fills ds:5e).
-        game.prepare_location_data_for_condit(li);
+        // The room entry's init_room_persons_special (seg000:316a) staged the
+        // location for CONDIT: ds:5e carries the illness bit.
+        assert_eq!(game.condit_staged_location, li);
         assert_ne!(
             game.location_condit.combined_dissatisfaction & 0x400,
             0,

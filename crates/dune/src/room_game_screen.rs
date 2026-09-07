@@ -184,8 +184,9 @@ pub(crate) const NPC_NO_COME_WITH_ME: u8 = 0x80;
 /// GameState owns a 16-entry mutable copy of this table (`room_persons`).
 /// Entries 12..16 have their `(location_and_room, location_appearance)` overwritten
 /// at runtime: `init_room_persons` resets `location_appearance` to 0x7f80, and the
-/// (not-yet-ported) loc_06603 + loc_0316e classification path on the special-
-/// room branch writes fresh values that make those entries match the room.
+/// special-room branch (init_room_persons_special, seg000:3140) classifies the
+/// location's troops into them (callback_troop_classify_for_room) and reveals
+/// the smuggler, writing values that make those entries match the room.
 #[derive(Clone, Copy)]
 pub(crate) struct RoomPerson {
     /// Matched against `location_and_room` in scan_current_room_npcs.
@@ -291,7 +292,7 @@ pub(crate) const ROOM_PERSON_TABLE_BASE: u16 = 0x0fd8;
 // = seg001:0fd8 room_persons — the static initializer of the 16-entry
 // room-person table. GameState owns a mutable copy in `room_persons`.
 // The last four entries' (location_and_room, location_appearance) are
-// rewritten at runtime by init_room_persons + the loc_06603 classification.
+// rewritten at runtime by init_room_persons + init_room_persons_special.
 pub(crate) const ROOM_PERSON_TABLE_INIT: [RoomPerson; 16] = [
     rp(0x200a, 0x0180, 0x92f2, 0x00, NPC_DETACH_ON_TRAVEL), // Duke Leto Atreides
     rp(0x2004, 0x0180, 0x92f7, 0x01, NPC_DETACH_ON_TRAVEL), // Lady Jessica Atreides
@@ -2675,18 +2676,16 @@ impl GameState {
     //     that do match.
     //
     // The location_appearance.lo == 0x80 special-room branch (most rooms, including
-    // the palace at 0x180) classifies the room-person linked list reachable
-    // through current_location_ptr: walks data_00009[current_location_ptr] via the
-    // shared loc_06603 iterator with bp = loc_0316e (which buckets entries by
-    // travel-mate/day/etc. and writes back into room_persons[12], [14], [15]
-    // plus data_0476a/b), then specially handles data_00008[current_location_ptr]
-    // == 0x21 by writing room_persons[13] and calling loc_02318, then runs
-    // loc_0331e. The port has none of those structures yet: current_location_ptr,
-    // the loc_06906 entry decoder, loc_0316e, loc_0331e, loc_02318. While
-    // those are stubs the dynamic slots stay at 0x7f80, which is what the
-    // unconditional reset above already establishes — so the scan behaves
-    // exactly as DOS does for the "no classification ran" steady state, with
-    // entries 12..16 contributing nothing to the verb panel.
+    // the palace at 0x180) is init_room_persons_special (troops.rs): it walks the
+    // current location's troop chain (call_callback_on_all_troops_in_location,
+    // seg000:6603) with callback_troop_classify_for_room, which buckets each
+    // troop into room_persons[12] (the Harkonnen captain), [14] (the Fremen
+    // chief) or [15] (the Fremen-2 round robin, growing data_0476a/b); a
+    // smuggler den (appearance 0x21) reveals room_persons[13] and stages the
+    // smuggler (smuggler_stage_encounter); and the location's CONDIT block is
+    // staged (prepare_location_data_for_condit). In a room without that branch
+    // the dynamic slots stay at 0x7f80 and contribute nothing to the verb
+    // panel.
     fn init_room_persons(&mut self) {
         // = seg000:3127..312f mov byte ptr [data_0476b], 0; same for 0476a.
         self.data_0476a = 0;
@@ -4902,7 +4901,7 @@ mod tests {
     }
 
     // Entering a sietch runs the room-entry troop classification
-    // (init_room_persons -> callback_troop_location_0316e): the location's
+    // (init_room_persons -> callback_troop_classify_for_room): the location's
     // rallied-troop chief (occupation bit 7) fills the dynamic Fremen-1 slot
     // (room_persons[14]) for room 2, appears in the verb panel, and is
     // talkable (ui_dialogue_related_to_Fremen1, seg000:9373). His COME WITH
