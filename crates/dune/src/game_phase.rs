@@ -67,16 +67,18 @@ pub(crate) const PHASE_16_GURNEY_MISSING: u8 = 0x16;
 /// No-op callback; cutscene script 18. Jessica finds the hidden door in
 /// room 7 (0x18..0x1c, +4).
 pub(crate) const PHASE_18_GURNEY_SEARCH: u8 = 0x18;
-/// Callback 1c: room 6 east exit unlocked. Leto: "Go and see Thufir Hawat"
+/// Callback 1c: room 6 east exit unlocked. The wounded Gurney warns of the
+/// trapped door (0x1c..0x1f, +1); Leto: "Go and see Thufir Hawat"
 /// (0x1c..0x20, +4).
-pub(crate) const PHASE_1C_ROOM_6_OPENED: u8 = 0x1c;
+pub(crate) const PHASE_1C_GURNEY_FOUND: u8 = 0x1c;
 /// Callback 20: Thufir visible. Book: the Mentat. Thufir disarms the
 /// armory trap in room 0x0b (below 0x25, +4).
 pub(crate) const PHASE_20_THUFIR_FOUND: u8 = 0x20;
 /// No-op callback. Book: the Harkonnens. Thufir posts a guard (+1). The
 /// early palace room rules end here.
 pub(crate) const PHASE_24_ARMORY_FOUND: u8 = 0x24;
-/// Sub-steps 0x25..0x2b. Harah points to Stilgar's sietch (0x26..0x28, +4).
+/// Sub-steps 0x25..0x2b: a Fremen chief names Stilgar (0x25..0x28, +1),
+/// Harah points to his sietch (0x26..0x28, +4).
 pub(crate) const PHASE_25_ARMORY_GUARDED: u8 = 0x25;
 /// Callback 28: Sihaya Clam on the map. Book: the ornithopter.
 pub(crate) const PHASE_28_STILGAR_SIETCH_KNOWN: u8 = 0x28;
@@ -102,8 +104,10 @@ pub(crate) const PHASE_34_LETO_DEFIANT: u8 = 0x34;
 pub(crate) const PHASE_35_SABOTEURS_BEGIN: u8 = 0x35;
 /// Callback 38: Leto hidden from the palace. Comm-room lines gate here.
 pub(crate) const PHASE_38_LETO_DEPARTED: u8 = 0x38;
-/// Days-since gates at 0x39 and 0x3a (conds 306, 405).
-pub(crate) const PHASE_39_LETO_ABSENT: u8 = 0x39;
+/// Stilgar tells of the villages (0x38..0x39, +1), Harah of the village
+/// tale (0x39..0x3a, +1); days-since gates at 0x39 and 0x3a (conds 306,
+/// 405).
+pub(crate) const PHASE_39_VILLAGE_LORE: u8 = 0x39;
 /// Set directly by the first smuggler deal (seg000:2388). Raids no longer
 /// need the timer. Harah thanks Paul at location 0x304 (+4).
 pub(crate) const PHASE_3C_SMUGGLERS_DEALT: u8 = 0x3c;
@@ -112,8 +116,10 @@ pub(crate) const PHASE_3C_SMUGGLERS_DEALT: u8 = 0x3c;
 pub(crate) const PHASE_40_HARAH_HOME: u8 = 0x40;
 /// Callback 44: Oxtyn Tabr on the map.
 pub(crate) const PHASE_44_CHANI_SIETCH_KNOWN: u8 = 0x44;
-/// At Oxtyn Tabr, Chani present or not (conds 313, 314).
-pub(crate) const PHASE_45_CHANI_SIETCH_VISITED: u8 = 0x45;
+/// Chani's first greeting, "I've heard about you, Paul Atreides" (+1 on
+/// her not-yet-met flag); at Oxtyn Tabr with or without her (conds 313,
+/// 314).
+pub(crate) const PHASE_45_CHANI_GREETED: u8 = 0x45;
 /// Callback 48: cutscene, +10 charisma, the Leto-killed rally threshold
 /// armed. The late-game theme from here.
 pub(crate) const PHASE_48_CHANI_MET: u8 = 0x48;
@@ -122,7 +128,8 @@ pub(crate) const PHASE_48_CHANI_MET: u8 = 0x48;
 pub(crate) const PHASE_4C_LETO_KILLED: u8 = 0x4c;
 /// Thufir: "another means of transportation" (0x4d..0x4f, +1).
 pub(crate) const PHASE_4D_NEED_TRANSPORT: u8 = 0x4d;
-/// Alone-in-room gates (conds 315..317).
+/// Alone with Stilgar: "for you worms mean danger" (0x4e, +1); the
+/// alone-in-room gates (conds 315..317).
 pub(crate) const PHASE_4E_ALONE_FOR_WORM: u8 = 0x4e;
 /// CALL A WORM stops being greyed.
 pub(crate) const PHASE_4F_WORM_CALL_UNLOCKED: u8 = 0x4f;
@@ -136,7 +143,8 @@ pub(crate) const PHASE_51_JESSICA_RETURNS: u8 = 0x51;
 /// Callback 54: the greenhouse door unlocked; room 3 allowed in the palace
 /// shuffle.
 pub(crate) const PHASE_54_GREENHOUSE_OPENED: u8 = 0x54;
-/// Kynes greets Chani (0x55..0x57, +4).
+/// Chani in the greenhouse: "Even my father doesn't..." (0x54..0x57, +1).
+/// Kynes greets her (0x55..0x57, +4).
 pub(crate) const PHASE_55_KYNES_QUEST: u8 = 0x55;
 /// Callback 58: cutscene, Kynes' locations appear. Kynes: "Come in the next
 /// room" (0x58..0x5c, +4).
@@ -144,9 +152,9 @@ pub(crate) const PHASE_58_KYNES_MET: u8 = 0x58;
 /// Callback 5c: Kynes to room 5, the illness plot armed for day + 3. Book:
 /// the wind-traps.
 pub(crate) const PHASE_5C_BOTANICAL_STATION: u8 = 0x5c;
-/// Chani cures the ill sietch by staying there (seg000:1e01). No line in
-/// the CD DIALOGUE data fires the +1 event at 0x5c, so this value is only
-/// reachable from a save.
+/// Chani told to STAY HERE in room 2 of the ill sietch: "OK Paul! I'm
+/// staying here to cure the Fremen" (+1, condition 366 on ds:5e bit 0x400).
+/// Her cure progresses while Paul is away (seg000:1e01).
 pub(crate) const PHASE_5D_CURING_ILLNESS: u8 = 0x5d;
 /// Set directly when the cure completes (seg000:11d0): Chani is held in the
 /// Arrakeen palace, room 2.
@@ -206,7 +214,7 @@ impl GameState {
             | PHASE_3C_SMUGGLERS_DEALT
             | PHASE_68_CHANI_RESCUED
             | PHASE_6C_FINAL_ATTACK => {}
-            PHASE_1C_ROOM_6_OPENED => self.phase_callback_1c(),
+            PHASE_1C_GURNEY_FOUND => self.phase_callback_1c(),
             PHASE_20_THUFIR_FOUND => self.phase_callback_20_make_thufir_hawat_visible(),
             PHASE_28_STILGAR_SIETCH_KNOWN => self.phase_callback_28_mark_sihaya_clam_on_map(),
             PHASE_2C_STILGAR_MET => self.phase_callback_2c_met_stilgar(),

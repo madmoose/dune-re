@@ -33,7 +33,7 @@ use bytes_ext::ReadBytesExt;
 
 use crate::{
     GameState, Rect, container,
-    game_phase::{PHASE_10_TUONO_HARG_FOUND, PHASE_64_ENDGAME},
+    game_phase::{PHASE_01_DUNCAN_AVAILABLE, PHASE_10_TUONO_HARG_FOUND, PHASE_64_ENDGAME},
     gfx,
     menu_defs::MenuRef,
     room_game_screen::{NPC_COMPANION, NPC_STORY_BIT},
@@ -1245,7 +1245,7 @@ impl GameState {
                 self.run_game_phase_triggers();
                 // = seg000:a22a..a231 a bump to phase 1 additionally reveals
                 //   Duncan Idaho.
-                if self.game_phase == 1 {
+                if self.game_phase == PHASE_01_DUNCAN_AVAILABLE {
                     self.make_duncan_idaho_visible();
                 }
             }
@@ -2155,7 +2155,13 @@ mod tests {
 mod event_08_tests {
     use std::sync::mpsc;
 
-    use crate::{GameState, dat_file::DatFile, menu_defs::MenuRef};
+    use crate::{
+        GameState,
+        dat_file::DatFile,
+        game_phase::{PHASE_5C_BOTANICAL_STATION, PHASE_5D_CURING_ILLNESS},
+        menu_defs::MenuRef,
+        room_game_screen::NPC_COMPANION,
+    };
 
     fn asset_game() -> Option<GameState> {
         let dat_path = concat!(env!("CARGO_MANIFEST_DIR"), "/../../assets/DUNE.DAT");
@@ -2339,5 +2345,65 @@ mod event_08_tests {
         hook(&mut game);
         assert_ne!(game.bitfield_paul_events & 8, 0, "= seg000:2ccf");
         assert_eq!(game.pending_room_screen_request, 0, "= seg000:2cd9 jnz ret");
+    }
+
+    // = seg000:9533 menu_callback_choice_stay_here on Chani at a sietch with
+    // an ill troop: her STAY HERE topic's "OK Paul! I'm staying here to cure
+    // the Fremen" line (condition 366: ds:5e bit 0x400 and room 2) carries
+    // event 0x0b, the only step from phase 0x5c to 0x5d. Asset-gated:
+    //   cargo test -p dune -- --ignored chani_stays
+    #[test]
+    #[ignore = "needs assets/DUNE.DAT"]
+    fn chani_stays_behind_to_cure_the_sietch_and_the_phase_steps_to_5d() {
+        let dat_path = concat!(env!("CARGO_MANIFEST_DIR"), "/../../assets/DUNE.DAT");
+        let Ok(dat_file) = DatFile::open(dat_path) else {
+            eprintln!("skipping: {dat_path} not found");
+            return;
+        };
+        let (tx, _rx) = mpsc::sync_channel(256);
+        let mut game = GameState::new(dat_file, tx);
+        game.set_headless();
+        game.start(true);
+
+        // An ill Fremen troop chained to a visible sietch.
+        let li = (0..game.locations.len())
+            .find(|&i| game.locations[i].appearance < 0x20 && game.locations[i].status & 0x80 == 0)
+            .expect("a sietch");
+        game.locations[li].troop_id = 1;
+        game.troops[0].occupation = 0x02;
+        game.troops[0].next_troop_id = 0;
+        game.troops[0].offset_of_location = crate::locations::location_ptr_from_index(li);
+        game.troops[0].dissatisfaction_and_speech |= 0x400;
+        game.game_phase = PHASE_5C_BOTANICAL_STATION;
+
+        // Paul walks into the sietch and on to room 2 with Chani in tow.
+        let (room, appearance) = game.arrive_at_location(li);
+        game.commit_room_move((room & 0xff00) | 2, appearance);
+        game.room_persons[7].flags |= NPC_COMPANION;
+        game.room_persons[7].location_and_room = game.location_and_room;
+        game.room_persons[7].location_appearance = game.location_appearance;
+        game.persons_travelling_with |= 0x80;
+        game.persons_in_room |= 0x80;
+        // = the room scan's CONDIT staging of the location (seg000:335a
+        //   condit_stage_location_strengths fills ds:5e).
+        game.prepare_location_data_for_condit(li);
+        assert_ne!(
+            game.location_condit.combined_dissatisfaction & 0x400,
+            0,
+            "ds:5e carries the illness bit"
+        );
+
+        game.common_dialogue(7);
+        game.menu_callback_choice_stay_here(0, 0);
+
+        assert_eq!(
+            game.game_phase, PHASE_5D_CURING_ILLNESS,
+            "OK Paul! I'm staying here to cure the Fremen."
+        );
+        assert_eq!(
+            game.room_persons[7].flags & NPC_COMPANION,
+            0,
+            "Chani stays behind"
+        );
     }
 }

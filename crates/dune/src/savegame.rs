@@ -334,6 +334,11 @@ impl GameState {
         w8(b, 0x0053, lc.unused_equipment);
         w8(b, 0x0054, lc.water);
         b[0x0055..0x005c].copy_from_slice(&lc.equipment);
+        w16(b, 0x005c, lc.combined_bitfield_10);
+        w16(b, 0x005e, lc.combined_dissatisfaction);
+        w16(b, 0x0094, lc.harkonnen_strength);
+        w16(b, 0x0096, lc.fremen_strength);
+        w8(b, 0x009c, lc.battle_balance);
 
         w16(b, 0x00a0, self.spice_in_stock);
         w16(b, 0x00a2, self.area_controlled_by_atreides);
@@ -677,6 +682,11 @@ impl GameState {
         lc.unused_equipment = r8(b, 0x0053);
         lc.water = r8(b, 0x0054);
         lc.equipment.copy_from_slice(&b[0x0055..0x005c]);
+        lc.combined_bitfield_10 = r16(b, 0x005c);
+        lc.combined_dissatisfaction = r16(b, 0x005e);
+        lc.harkonnen_strength = r16(b, 0x0094);
+        lc.fremen_strength = r16(b, 0x0096);
+        lc.battle_balance = r8(b, 0x009c);
 
         self.spice_in_stock = r16(b, 0x00a0);
         self.area_controlled_by_atreides = r16(b, 0x00a2);

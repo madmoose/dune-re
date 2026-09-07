@@ -1646,6 +1646,23 @@ pub(crate) struct LocationCondit {
     /// sit at [30], [31] and [32 + nibble]. [48] unhired troops (occupation
     /// 0x80). [49] = [0] + [30], [50] = [1] + [31] (ds:91/92).
     pub(crate) troop_counts: [u8; 0x33],
+    /// = seg001:005c for_condit_combined_troops_bitfield_10_at_location_ds_5c
+    /// — the OR of bitfield_10 over the location's Fremen troops
+    /// (condit_stage_location_strengths).
+    pub(crate) combined_bitfield_10: u16,
+    /// = seg001:005e for_condit_combined_troops_dissatisfactionAndSpeech_at_
+    /// location_ds_5e — the OR of dissatisfaction_and_speech over the
+    /// location's Fremen troops: bit 0x400 = someone here is ill.
+    pub(crate) combined_dissatisfaction: u16,
+    /// = seg001:0094 for_condit_ds_94 — the summed battle strength of the
+    /// location's Harkonnen troops.
+    pub(crate) harkonnen_strength: u16,
+    /// = seg001:0096 for_condit_fremen_strength_ds_96 — the summed battle
+    /// strength of the location's Fremen troops.
+    pub(crate) fremen_strength: u16,
+    /// = seg001:009c for_condit_battle_balance_ds_9c — the strength ratio
+    /// (condit_battle_balance): Fremen lose below 0x80, Harkonnen above.
+    pub(crate) battle_balance: u8,
 }
 
 impl Default for LocationCondit {
@@ -1660,6 +1677,11 @@ impl Default for LocationCondit {
             water: 0,
             equipment: [0; 7],
             troop_counts: [0; 0x33],
+            combined_bitfield_10: 0,
+            combined_dissatisfaction: 0,
+            harkonnen_strength: 0,
+            fremen_strength: 0,
+            battle_balance: 0,
         }
     }
 }
@@ -1854,7 +1876,8 @@ impl GameState {
             loc.equipment.atomics,
             loc.equipment.bulbs,
         ];
-        // = seg000:335a location_033be. TODO: not yet ported.
+        // = seg000:335a call condit_stage_location_strengths.
+        self.condit_stage_location_strengths(loc_index);
         // = seg000:335d.
         self.condit_tally_troops_at_location(loc_index);
         // = seg000:3360..3379 compute_location_available_equipment -> the
@@ -1863,6 +1886,117 @@ impl GameState {
         self.location_condit.unused_equipment = 0;
         // = seg000:3380 call condit_scan_nearest_locations.
         self.condit_scan_nearest_locations(loc_index);
+    }
+
+    // = seg000:33be condit_stage_location_strengths — stage the location's
+    // troop strength words for CONDIT: zero ds:94/96/5c/5e, accumulate over
+    // the location's troop chain (callback_troop_accumulate_strength), then
+    // ds:9c = the battle balance.
+    fn condit_stage_location_strengths(&mut self, loc_index: usize) {
+        // = seg000:33be..33c9 the four words cleared.
+        let lc = &mut self.location_condit;
+        lc.harkonnen_strength = 0;
+        lc.fremen_strength = 0;
+        lc.combined_bitfield_10 = 0;
+        lc.combined_dissatisfaction = 0;
+        // = seg000:33cc/33cf call_callback_on_all_troops_in_location with
+        //   callback_troop_accumulate_strength (seg000:3406).
+        self.for_each_troop_in_location(loc_index, |s, ti| {
+            let t = s.troops[ti];
+            // = seg000:3406 test occupation,20h; jnz ret — a troop that is
+            //   away is skipped.
+            if t.occupation & 0x20 != 0 {
+                return;
+            }
+            // = seg000:340c call troop_battle_strength.
+            let strength = s.troop_battle_strength(ti);
+            let lc = &mut s.location_condit;
+            // = seg000:340f test bitfield_10,80h — a Harkonnen troop adds to
+            //   ds:94 (seg000:3428); a Fremen troop to ds:96 and ORs its two
+            //   bitfields into ds:5c/5e (seg000:3415..3423).
+            if t.bitfield_10 & 0x80 != 0 {
+                lc.harkonnen_strength = lc.harkonnen_strength.wrapping_add(strength);
+            } else {
+                lc.fremen_strength = lc.fremen_strength.wrapping_add(strength);
+                lc.combined_bitfield_10 |= t.bitfield_10;
+                lc.combined_dissatisfaction |= t.dissatisfaction_and_speech;
+            }
+        });
+        // = seg000:33d2/33d5 ds:9c = condit_battle_balance.
+        self.location_condit.battle_balance = self.condit_battle_balance();
+    }
+
+    // = seg000:33d9 condit_battle_balance — the ratio of the stronger side to
+    // the weaker, times 128, capped at 0xfc, negated when the Harkonnen side
+    // is the stronger: 0 when both are empty... except that an empty weaker
+    // side reads as the 0xfc cap.
+    fn condit_battle_balance(&self) -> u8 {
+        let fremen = self.location_condit.fremen_strength;
+        let harkonnen = self.location_condit.harkonnen_strength;
+        // = seg000:33d9..33e5 ax = ds:96, dx = ds:94; cmp; pushf; the larger
+        //   goes to ax.
+        let fremen_weaker = fremen < harkonnen;
+        let (larger, smaller) = if fremen_weaker {
+            (harkonnen, fremen)
+        } else {
+            (fremen, harkonnen)
+        };
+        // = seg000:33e6..33fb cx = the smaller; 0 -> 0xfc. dx:ax = larger <<
+        //   8; a quotient that would not fit -> 0xfc; else (dx:ax / cx) >> 1,
+        //   capped at 0xfc.
+        let ratio = if smaller == 0 || (larger >> 8) >= smaller {
+            0xfc
+        } else {
+            let q = ((larger as u32) << 8) / smaller as u32;
+            ((q >> 1) as u16).min(0xfc)
+        };
+        // = seg000:3400..3403 popf; jnb; neg al.
+        let al = ratio as u8;
+        if fremen_weaker { al.wrapping_neg() } else { al }
+    }
+
+    // = seg000:342d troop_battle_strength — a troop's battle strength for the
+    // CONDIT balance: al = 2 * motivation modifier + army skill (saturating
+    // at 0xff), times population, / 16; then each of equipment bits 5, 4, 3
+    // and 2 adds that base times 2, 4, 8 and 16, an overflow saturating the
+    // word. The high byte is the strength; a zero strength counts 1 for any
+    // troop with people in it.
+    fn troop_battle_strength(&self, ti: usize) -> u16 {
+        let t = &self.troops[ti];
+        // = seg000:342d..3439 al = 2 * modifier + army_skill, 0xff on carry.
+        let modifier = self.troop_compute_motivation_modifier(ti);
+        let al = modifier.wrapping_add(modifier).saturating_add(t.army_skill);
+        // = seg000:343b..3446 ax = al * population >> 4; dx = ax.
+        let mut ax = ((al as u16) * (t.population as u16)) >> 4;
+        let mut dx = ax;
+        // = seg000:3448..3475 bl = equipment << 2, then four shl/test rounds:
+        //   bits 5, 4, 3, 2 each add the doubled base; a carry -> 0xffff.
+        let mut bl = t.equipment << 2;
+        let mut overflow = false;
+        for _ in 0..4 {
+            dx <<= 1;
+            let bit = bl & 0x80 != 0;
+            bl <<= 1;
+            if bit {
+                let (sum, carry) = ax.overflowing_add(dx);
+                ax = sum;
+                if carry {
+                    overflow = true;
+                    break;
+                }
+            }
+        }
+        if overflow {
+            ax = 0xffff;
+        }
+        // = seg000:347a..3487 al = ah; a zero result counts 1 when the troop
+        //   has at least one member.
+        let strength = ax >> 8;
+        if strength == 0 && t.population >= 1 {
+            1
+        } else {
+            strength
+        }
     }
 
     // = seg000:34a5 prepare_location_data_for_condit_sub_034a5 — clear the

@@ -67,6 +67,11 @@ fn condit_var_name(addr: u16) -> Option<(&'static str, bool)> {
         0x51 => ("location.status", false),
         0x52 => ("location.spice_density", false),
         0x54 => ("location.water", false),
+        0x5c => ("location.combined_bitfield_10", true),
+        0x5e => ("location.combined_dissatisfaction", true),
+        0x94 => ("location.harkonnen_strength", true),
+        0x96 => ("location.fremen_strength", true),
+        0x9c => ("location.battle_balance", false),
         0xa2 => ("area_controlled_by_atreides", true),
         0xa4 => ("area_controlled_by_harkonnen", true),
         0xa6 => ("todays_spice_production", true),
@@ -230,6 +235,8 @@ impl GameState {
             0x53 => self.location_condit.unused_equipment,
             0x54 => self.location_condit.water,
             0x55..=0x5b => self.location_condit.equipment[(addr - 0x55) as usize],
+            // = seg001:009c for_condit_battle_balance_ds_9c.
+            0x9c => self.location_condit.battle_balance,
             // = seg001:0060..0092 array_for_condit_ds_60 — the staged
             // location's troop tally (condit_tally_troops_at_location).
             0x60..=0x92 => self.location_condit.troop_counts[(addr - 0x60) as usize],
@@ -336,6 +343,14 @@ impl GameState {
             0x4a => self.troop_condit.ds_4a,
             // = seg001:004e the staged location area+name word.
             0x4e => self.location_condit.area_and_name,
+            // = seg001:005c/005e the OR of the location's Fremen troops'
+            //   bitfield_10 / dissatisfaction_and_speech; 0094/0096 the
+            //   summed Harkonnen / Fremen battle strengths
+            //   (condit_stage_location_strengths).
+            0x5c => self.location_condit.combined_bitfield_10,
+            0x5e => self.location_condit.combined_dissatisfaction,
+            0x94 => self.location_condit.harkonnen_strength,
+            0x96 => self.location_condit.fremen_strength,
             // = seg001:0020 current_smuggler_bill_value_ds_20.
             0x20 => self.current_smuggler_bill_value_ds_20,
             // = seg001:00a0 spice_in_stock — the player's spice, in 10 kg

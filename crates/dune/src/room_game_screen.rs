@@ -3304,7 +3304,7 @@ mod tests {
         Equipment, GameState,
         dat_file::DatFile,
         game_phase::{
-            PHASE_00_START, PHASE_01_DUNCAN_AVAILABLE, PHASE_1C_ROOM_6_OPENED,
+            PHASE_00_START, PHASE_01_DUNCAN_AVAILABLE, PHASE_1C_GURNEY_FOUND,
             PHASE_02_TWO_TROOPS_RALLIED, PHASE_2C_STILGAR_MET, PHASE_04_STILLSUIT_MAKER_MET,
             PHASE_4C_LETO_KILLED, PHASE_05_PROSPECTORS_FOUND, PHASE_06_JESSICA_EXPLORES_PALACE,
             PHASE_08_HIDDEN_DOOR_FOUND, PHASE_10_TUONO_HARG_FOUND, PHASE_14_AWAITING_VISION,
@@ -3933,7 +3933,7 @@ mod tests {
             (4, 0),
             "standing before 0x15"
         );
-        game.game_phase = PHASE_1C_ROOM_6_OPENED;
+        game.game_phase = PHASE_1C_GURNEY_FOUND;
         assert_eq!(
             game.character_sprite_map()[4],
             (0x11, 0x35),
@@ -3956,7 +3956,7 @@ mod tests {
 
         // His talking head gets no idle animator while he lies wounded
         // (seg000:9940 jb loc_0994e).
-        game.game_phase = PHASE_1C_ROOM_6_OPENED;
+        game.game_phase = PHASE_1C_GURNEY_FOUND;
         game.remove_frame_task(crate::TaskId::TalkingHeadIdle);
         game.setup_talking_head(4, 0);
         assert!(
