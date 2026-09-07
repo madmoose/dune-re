@@ -415,7 +415,7 @@ pub struct GameState {
     // = seg001:0009 data_00009 — the current location slot byte (the
     // location_appearance high byte), 0xff while out in the desert. Written
     // alongside data_00008 by the walk-out/arrival paths; the NPC shuffle
-    // (iterate_over_allied_NPCs_and_locations, not ported) reads it.
+    // (npc_shuffle_on_arrival) reads it as "where the player is now".
     pub(crate) data_00009: u8,
 
     // = seg001:000a bitfield_Paul_events — Paul's story-progress bitfield. Bit 0x10

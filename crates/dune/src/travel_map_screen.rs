@@ -1865,7 +1865,7 @@ impl GameState {
 
     // = seg000:5344 iterate_over_locations_and_coordinates — the nearest
     // non-hidden location to the map position (x = longitude, lat).
-    fn iterate_over_locations_and_coordinates(&self, x: u16, lat: i16) -> usize {
+    pub(crate) fn iterate_over_locations_and_coordinates(&self, x: u16, lat: i16) -> usize {
         // = seg000:5345 bp = 0ffffh — the best distance so far.
         let mut best_dist = u16::MAX;
         let mut best = 0;

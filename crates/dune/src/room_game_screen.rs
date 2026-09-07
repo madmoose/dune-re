@@ -148,10 +148,12 @@ const CMD_FIGHT_FOR_A_WHOLE_DAY: MenuItem = item(cmd::FIGHT_FOR_A_WHOLE_DAY, 0x0
 /// the Atreides household and Chani; phase 0x40 sets it on Harah
 /// (seg000:112d) and phase 0x48 clears it on Chani (seg000:114b).
 pub(crate) const NPC_DETACH_ON_TRAVEL: u8 = 0x02;
-/// = bit 0x04 — set by the NPC shuffle (iterate_over_allied_NPCs_and_locations,
-/// seg000:2234, unported) when a moved entry lands in the player's current
-/// location (data_00009); cleared when the shuffle moves the entry on
-/// (seg000:21c8) and on every dialogue close (seg000:97e1).
+/// = bit 0x04 — an NPC told to STAY HERE in the open desert has found their
+/// own way to the location the player just arrived at: set by the arrival
+/// shuffle when it snaps the stranded entry to the nearest location and that
+/// is the player's (npc_snap_desert_position_to_location, seg000:2234).
+/// Cleared when the shuffle moves the entry on (seg000:21c8) and on every
+/// dialogue close (seg000:97e1); CONDIT reads it through ds:18.
 pub(crate) const NPC_LEFT_BEHIND: u8 = 0x04;
 /// = bit 0x10 — a per-entry story bit: Jessica (seg000:24aa) and Chani
 /// (seg000:1144) once their phase milestone is reached; on the Harkonnen

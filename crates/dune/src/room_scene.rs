@@ -30,7 +30,7 @@
 
 use crate::{
     DrawOptions, GameState, Rect, RoomRenderer, RoomSheet, SpriteSheet, blit,
-    room_game_screen::{NPC_COMPANION, NPC_STORY_BIT},
+    room_game_screen::{NPC_COMPANION, NPC_LEFT_BEHIND, NPC_STORY_BIT},
     sal_position_markers, sal_position_markers_from_list, sprite_bank,
 };
 
@@ -309,6 +309,13 @@ fn compass_move_target(location_and_room: u16, exits: [u8; 4], direction: usize)
     //   then records its low byte into pending_destination_room (seg000:3faa).
     Some((location_and_room & 0xff00) | exit as u16)
 }
+
+// = seg001:144d npc_palace_home_rooms — the palace room each household NPC
+// returns to, indexed by person_index: Leto 0x0a, Jessica 9, Thufir 8, Duncan
+// 4, Gurney 6, Stilgar 5, Kynes 5. The DOS table has seven bytes; Chani and
+// Harah (7, 8) would read past it into desert_step_deltas[0] (0x0209), which
+// the last two entries reproduce.
+const NPC_PALACE_HOME_ROOMS: [u8; 9] = [0x0a, 9, 8, 4, 6, 5, 5, 0x09, 0x02];
 
 impl GameState {
     // = the four direction-exit bytes of the scene record selected by the
@@ -615,9 +622,161 @@ impl GameState {
         if new_room >> 8 >= 0x20 {
             self.locations[loc_index].status |= 0x10;
         }
-        // = seg000:4054 call iterate_over_allied_NPCs_and_locations — the
-        //   companion/NPC room shuffle on arrival. TODO: not ported.
+        // = seg000:4054 call npc_shuffle_on_arrival — the household NPCs
+        //   elsewhere settle into their rooms.
+        self.npc_shuffle_on_arrival();
         (new_room, new_appearance)
+    }
+
+    // = seg000:2170 npc_shuffle_on_arrival — on the player's arrival at a
+    // location, walk room_persons[0..9] (Leto..Harah) and settle each NPC who
+    // is not travelling with the player:
+    //   - Duncan (entry 3) parked in the palace slot (0x180) is moved to room 4.
+    //   - an entry whose location_appearance low byte is not 0x80 holds desert
+    //     coordinates (a companion told to STAY HERE in the open): snap it to
+    //     the nearest visible location (npc_snap_desert_position_to_location).
+    //   - an entry in a sietch/palace entry room (room 1, appearance < 0x21)
+    //     away from the player (slot != data_00009) at a location without
+    //     saboteurs (status bit 2 clear) moves one room deeper; in the palace
+    //     (slot 1) it goes to its home room instead (NPC_PALACE_HOME_ROOMS),
+    //     drops NPC_LEFT_BEHIND, and Gurney's room 6 is room 0x0a before game
+    //     phase 0x24.
+    //   - entries from Stilgar on (5..) parked in the palace but not in room 1
+    //     get a random room (npc_random_palace_room).
+    pub(crate) fn npc_shuffle_on_arrival(&mut self) {
+        // = seg000:2173/2176 si = room_persons; cx = 9.
+        for i in 0..9 {
+            let entry = self.room_persons[i];
+            // = seg000:2179 test [si+0fh],40h; jnz next — companions travel
+            //   with the player and are not shuffled.
+            if entry.flags & NPC_COMPANION != 0 {
+                continue;
+            }
+            // = seg000:217f/2181 dx = location_and_room; bx = location_slot.
+            let mut room = entry.location_and_room;
+            let slot = entry.location_appearance;
+            // = seg000:2184..2192 Duncan in the palace slot: dl = 4, stored.
+            if i == 3 && slot == 0x180 {
+                room = (room & 0xff00) | 4;
+                self.room_persons[i].location_and_room = room;
+            }
+            // = seg000:2194 cmp bl,80h; jnz — not parked in a location slot:
+            //   the entry holds desert coordinates.
+            if slot & 0xff != 0x80 {
+                self.npc_snap_desert_position_to_location(i);
+                continue;
+            }
+            let slot_hi = (slot >> 8) as u8;
+            // = seg000:2199 cmp dl,1; jnz loc_021dc.
+            if room & 0xff != 1 {
+                // = seg000:21dc npc_shuffle_parked_in_palace — only entries
+                //   from Stilgar (room_persons[5]) on, and only in the palace
+                //   slot: a random palace room.
+                if i < 5 || slot_hi != 1 {
+                    continue;
+                }
+                // = seg000:21e7 call npc_random_palace_room; 21ea [si] = al.
+                let r = self.npc_random_palace_room();
+                self.room_persons[i].location_and_room = (room & 0xff00) | r as u16;
+                continue;
+            }
+            // = seg000:219e cmp dh,21h; jnb next — only sietches and the
+            //   palace have rooms to move deeper into.
+            if room >> 8 >= 0x21 {
+                continue;
+            }
+            // = seg000:21a3 cmp bh,[data_00009]; jz next — the NPC is where
+            //   the player just arrived: leave them for the room scan.
+            if slot_hi == self.data_00009 {
+                continue;
+            }
+            // = seg000:21a9..21b6 di = locations + (bh - 1) * 0x1c (the 0xe4
+            //   base is locations - 0x1c); test [di+0ah],2; jnz next — no
+            //   walking deeper into a location with saboteurs. DOS reads past
+            //   the table for a hidden slot (0xff); the port skips it.
+            let Some(loc) = (slot_hi as usize)
+                .checked_sub(1)
+                .and_then(|li| self.locations.get(li))
+            else {
+                continue;
+            };
+            if loc.status & 0x02 != 0 {
+                continue;
+            }
+            // = seg000:21b8 inc byte ptr [si] — one room deeper.
+            room = (room & 0xff00) | ((room as u8).wrapping_add(1) as u16);
+            self.room_persons[i].location_and_room = room;
+            // = seg000:21ba cmp bh,1; jnz next — the rest is palace-only.
+            if slot_hi != 1 {
+                continue;
+            }
+            // = seg000:21bf..21c6 xlat npc_palace_home_rooms[person_index];
+            //   [si] = al; 21c8 and [si+0fh],0fbh.
+            let home = NPC_PALACE_HOME_ROOMS[entry.person_index as usize];
+            room = (room & 0xff00) | home as u16;
+            // = seg000:21cc..21d7 Gurney's room 6 is room 0x0a before game
+            //   phase 0x24.
+            if home == 6 && self.game_phase < 0x24 {
+                room = (room & 0xff00) | 0x0a;
+            }
+            let entry = &mut self.room_persons[i];
+            entry.location_and_room = room;
+            entry.flags &= !NPC_LEFT_BEHIND;
+        }
+    }
+
+    // = seg000:21fa npc_random_palace_room — a random palace room 2..=0x0b
+    // (rand_iterated(0x0a) + 2) for a parked NPC. Before game phase 0x54 room
+    // 3 (the greenhouse) is redrawn; before phase 0x24 rooms 0x0b and 6 are
+    // redrawn too.
+    fn npc_random_palace_room(&mut self) -> u8 {
+        loop {
+            // = seg000:21fa..2200 al = rand_iterated(0x0a) + 2.
+            let room = self.rand_iterated(0x0a) as u8 + 2;
+            // = seg000:2202 cmp game_phase,54h; jnb ret.
+            if self.game_phase >= 0x54 {
+                return room;
+            }
+            // = seg000:2209 cmp al,3; jz retry.
+            if room == 3 {
+                continue;
+            }
+            // = seg000:220d cmp game_phase,24h; jnb ret.
+            if self.game_phase >= 0x24 {
+                return room;
+            }
+            // = seg000:2214/2218 cmp al,0bh / cmp al,6; jz retry.
+            if room == 0x0b || room == 6 {
+                continue;
+            }
+            return room;
+        }
+    }
+
+    // = seg000:221d npc_snap_desert_position_to_location — an NPC left in the
+    // open desert (location_and_room = the longitude, location_appearance =
+    // the packed latitude word the walk-out stored): find the nearest visible
+    // location and park the entry in its entry room. When that is the location
+    // the player just arrived at, the NPC found their own way here:
+    // NPC_LEFT_BEHIND is set for the dialogue CONDIT to see.
+    fn npc_snap_desert_position_to_location(&mut self, i: usize) {
+        let entry = self.room_persons[i];
+        // = seg000:221f dx = [si]; bx = [si+2] (still loaded by the caller);
+        //   2221 call iterate_over_locations_and_coordinates.
+        let li = self.iterate_over_locations_and_coordinates(
+            entry.location_and_room,
+            entry.location_appearance as i16,
+        );
+        // = seg000:2224 call location_entry_room_dx_bx; 2229/222b stored.
+        let room = ((self.locations[li].appearance as u16) << 8) | 1;
+        let slot = ((li as u16 + 1) << 8) | 0x80;
+        let entry = &mut self.room_persons[i];
+        entry.location_and_room = room;
+        entry.location_appearance = slot;
+        // = seg000:222e cmp bh,[data_00009]; jnz ret; 2234 or [si+0fh],4.
+        if (slot >> 8) as u8 == self.data_00009 {
+            entry.flags |= NPC_LEFT_BEHIND;
+        }
     }
 
     // = seg000:425b location_mark_discovered — first arrival at an
@@ -1727,5 +1886,105 @@ mod tests {
                 .expect("write png");
             eprintln!("wrote /tmp/orni_room1.png");
         }
+    }
+
+    // = seg000:2170 npc_shuffle_on_arrival + seg000:221d
+    // npc_snap_desert_position_to_location, driven through arrive_at_location
+    // (seg000:4054). Asset-gated:
+    //   cargo test -p dune -- --ignored npc_shuffle
+    #[test]
+    #[ignore = "needs assets/DUNE.DAT"]
+    fn npc_shuffle_settles_the_household_on_arrival() {
+        use std::sync::mpsc;
+
+        use crate::{
+            dat_file::DatFile,
+            room_game_screen::{NPC_COMPANION, NPC_LEFT_BEHIND},
+        };
+
+        let dat_path = concat!(env!("CARGO_MANIFEST_DIR"), "/../../assets/DUNE.DAT");
+        let Ok(dat_file) = DatFile::open(dat_path) else {
+            eprintln!("skipping: {dat_path} not found");
+            return;
+        };
+        let (tx, _rx) = mpsc::sync_channel(64);
+        let mut game = GameState::new(dat_file, tx);
+        game.set_headless();
+        game.start(true);
+        assert!(game.game_phase < 0x24, "the early-game room rules apply");
+
+        // The player arrives at Carthag (locations[1], slot 2, appearance 0x30).
+        let dest = 1usize;
+        assert_eq!(game.locations[dest].status & 0x80, 0, "Carthag is visible");
+        // A sietch elsewhere without saboteurs for Stilgar to sit in.
+        let sietch = game
+            .locations
+            .iter()
+            .position(|l| l.appearance < 0x20 && l.status & 0x02 == 0)
+            .expect("a sietch");
+        let sietch_slot = (sietch as u16 + 1) << 8 | 0x80;
+
+        // Leto: a companion, untouched even in the palace entry room.
+        game.room_persons[0].location_and_room = 0x2001;
+        game.room_persons[0].location_appearance = 0x180;
+        game.room_persons[0].flags = NPC_COMPANION;
+        // Duncan: parked in the palace slot in room 7 -> room 4.
+        game.room_persons[3].location_and_room = 0x2007;
+        game.room_persons[3].location_appearance = 0x180;
+        game.room_persons[3].flags = 0;
+        // Gurney: the palace entry room -> his home room 6, which is 0x0a
+        // before phase 0x24; NPC_LEFT_BEHIND drops.
+        game.room_persons[4].location_and_room = 0x2001;
+        game.room_persons[4].location_appearance = 0x180;
+        game.room_persons[4].flags = NPC_LEFT_BEHIND;
+        // Stilgar: a sietch entry room -> one room deeper.
+        game.room_persons[5].location_and_room =
+            (game.locations[sietch].appearance as u16) << 8 | 1;
+        game.room_persons[5].location_appearance = sietch_slot;
+        game.room_persons[5].flags = 0;
+        // Kynes: left standing in the desert on Carthag's own map cell (the
+        // walk-out form: longitude, then the packed latitude word).
+        game.room_persons[6].location_and_room = game.locations[dest].map_x as u16;
+        game.room_persons[6].location_appearance = (game.locations[dest].map_y as u8) as u16;
+        game.room_persons[6].flags = 0;
+        // Chani: already at Carthag's entry room — the arrival leaves her.
+        game.room_persons[7].location_and_room = 0x3001;
+        game.room_persons[7].location_appearance = 0x0280;
+        game.room_persons[7].flags = 0;
+        // Harah: parked in the palace in room 5 -> a random room.
+        game.room_persons[8].location_and_room = 0x2005;
+        game.room_persons[8].location_appearance = 0x180;
+        game.room_persons[8].flags = 0;
+
+        game.arrive_at_location(dest);
+        assert_eq!(game.data_00009, 2);
+
+        assert_eq!(game.room_persons[0].location_and_room, 0x2001, "companion");
+        assert_eq!(game.room_persons[3].location_and_room, 0x2004, "Duncan");
+        assert_eq!(game.room_persons[4].location_and_room, 0x200a, "Gurney");
+        assert_eq!(game.room_persons[4].flags & NPC_LEFT_BEHIND, 0);
+        assert_eq!(
+            game.room_persons[5].location_and_room,
+            (game.locations[sietch].appearance as u16) << 8 | 2,
+            "Stilgar one room deeper"
+        );
+        assert_eq!(
+            game.room_persons[6].location_and_room, 0x3001,
+            "Kynes snapped"
+        );
+        assert_eq!(game.room_persons[6].location_appearance, 0x0280);
+        assert_ne!(
+            game.room_persons[6].flags & NPC_LEFT_BEHIND,
+            0,
+            "found his way here"
+        );
+        assert_eq!(game.room_persons[7].location_and_room, 0x3001, "Chani");
+        let harah = game.room_persons[8].location_and_room;
+        assert_eq!(harah >> 8, 0x20);
+        let room = harah as u8;
+        assert!(
+            (2..=0x0b).contains(&room) && ![3, 6, 0x0b].contains(&room),
+            "Harah room {room:#x}"
+        );
     }
 }
