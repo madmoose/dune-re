@@ -3753,7 +3753,7 @@ impl GameState {
             let r = self.troop_icons[icon_index].rect;
             (r.x0, r.y0)
         };
-        // = data_018df, the record's own colours; the placement writes its
+        // = seg000:18df data_018df, the record's own colours; the placement writes its
         //   rect.
         self.map_place_popup_panel(MapPanelRef::TroopInfo, ix, iy, 0x64);
         // = seg000:78e4/78e6 data_01955 = the id (not modelled); falls into
@@ -4297,7 +4297,7 @@ impl GameState {
         if m.y < 0 {
             return false;
         }
-        // = location_info_panel_record's own colours; the placement writes its
+        // = seg001:1668 location_info_panel_record's own colours; the placement writes its
         //   rect.
         self.map_place_popup_panel(MapPanelRef::LocationInfo, m.x, m.y, h);
         true

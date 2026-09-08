@@ -37,16 +37,16 @@ use crate::{
 /// (`apply_ofs`) is the seg000 offset of the audio-apply callback.
 #[derive(Clone, Copy)]
 pub(crate) struct SettingsRecord {
-    /// = `[si+0]` — the 0..0xf0 slider/indicator value byte.
+    /// `[si+0]` — the 0..0xf0 slider/indicator value byte.
     pub value: u8,
-    /// = `[si+1]` — set to 1 once drawn; gates the drag hit-test (loc_0a685).
+    /// `[si+1]` — set to 1 once drawn; gates the drag hit-test (loc_0a685).
     pub drawn_flag: u8,
-    /// = `[si+2]` — panel-local x of the slider track / indicator.
+    /// `[si+2]` — panel-local x of the slider track / indicator.
     pub x: i16,
-    /// = `[si+4]` — panel-local y of the handle, recomputed each draw for the
+    /// `[si+4]` — panel-local y of the handle, recomputed each draw for the
     /// volume sliders; static for the balance knobs.
     pub y: i16,
-    /// = `[si+6]` — seg000 offset of the audio-apply callback the drag commits
+    /// `[si+6]` — seg000 offset of the audio-apply callback the drag commits
     /// (loc_0a637 PCM voices / loc_0a650 MIDI music / loc_0d917 no-op),
     /// dispatched by `settings_ui_apply`.
     pub apply_ofs: u16,
@@ -121,11 +121,11 @@ impl GameState {
     // the active menu). Wired as the CMD_MIXER_PANEL verb's callback. `pub` so
     // headless renders can open the panel directly.
     pub fn open_mixer_panel(&mut self) {
-        // = a3f0 mov ax,1ad6h; call loc_0d95e — select the mixer handler table.
+        // = seg000:a3f0 mov ax,1ad6h; call loc_0d95e — select the mixer handler table.
         self.active_mouse_handlers = &crate::game_ui::MIXER_MOUSE_HANDLERS;
-        // = a3f6 call dismiss_stacked_overlays.
+        // = seg000:a3f6 call dismiss_stacked_overlays.
         self.dismiss_stacked_menus();
-        // = a3f9 fall into settings_ui_draw.
+        // = seg000:a3f9 fall into settings_ui_draw.
         self.settings_ui_draw();
     }
 
@@ -135,26 +135,26 @@ impl GameState {
     // interaction (loc_0a5db / loc_0a5c8), in which case the panel is already
     // the active element so the insert is a no-op.
     fn settings_ui_draw(&mut self) {
-        // = a3f9 push [active_seg]; set_screen_as_active_framebuffer.
+        // = seg000:a3f9 push [active_seg]; set_screen_as_active_framebuffer.
         let saved = self.active_fb();
         self.set_screen_as_active_framebuffer();
-        // = a400 open MIXR; a406 draw sprite 0 (the panel background) at the
+        // = seg000:a400 open MIXR; a406 draw sprite 0 (the panel background) at the
         // global offset.
         self.open_sprite_bank(sprite_bank::MIXR);
         self.draw_active_bank_sprite(0, SETTINGS_RECT.x0, SETTINGS_RECT.y0);
-        // = a413 pop [active_seg].
+        // = seg000:a413 pop [active_seg].
         self.active_fb = saved;
-        // = a417 call settings_ui_draw_volume_sliders.
+        // = seg000:a417 call settings_ui_draw_volume_sliders.
         self.settings_ui_draw_volume_sliders();
-        // = a41a call settings_ui_draw_balance_knobs — the stereo balance knobs.
+        // = seg000:a41a call settings_ui_draw_balance_knobs — the stereo balance knobs.
         self.settings_ui_draw_balance_knobs();
-        // = a41d call settings_ui_draw_language_buttons.
+        // = seg000:a41d call settings_ui_draw_language_buttons.
         self.settings_ui_draw_language_buttons();
-        // = a420 call loc_0a44c — the voice/subtitle-mode button.
+        // = seg000:a420 call loc_0a44c — the voice/subtitle-mode button.
         self.settings_ui_draw_voice_mode_button();
-        // = a423 call loc_0ac3a — the music-playlist element flags (deferred).
+        // = seg000:a423 call loc_0ac3a — the music-playlist element flags (deferred).
         self.settings_ui_update_music_playlist_flags();
-        // = a426 mov bx,0a541h; a429 jmp loc_0d32f — insert the panel as the
+        // = seg000:a426 mov bx,0a541h; a429 jmp loc_0d32f — insert the panel as the
         // active menu WITH the command-panel fold transition (bx is the
         // cleanup func loc_0a541, settings_ui_cleanup). loc_0d32f
         // chains screen_overlay_request_transition -> screen_element_stack_insert
@@ -199,22 +199,22 @@ impl GameState {
     // After each group, a clear settings_flags adjust-bit (0x4 PCM, 0x400
     // music/voice) resets the slider's drawn flag so it is not draggable.
     fn settings_ui_draw_volume_sliders(&mut self) {
-        // = a4c6 call check_pcm_enabled; jz skip the PCM slider.
+        // = seg000:a4c6 call check_pcm_enabled; jz skip the PCM slider.
         if self.check_pcm_enabled() {
-            // = a4cb si=288e; draw the PCM slider.
+            // = seg000:a4cb si=288e; draw the PCM slider.
             self.settings_ui_draw_slider(0);
-            // = a4d1 test settings_flags,4; when clear, reset the drawn flag
+            // = seg000:a4d1 test settings_flags,4; when clear, reset the drawn flag
             // (data_0288f = 0) so the PCM slider is not draggable.
             if self.settings_flags & 0x4 == 0 {
                 self.settings_records[SETTINGS_RECORD_VOLUME_VOICES].drawn_flag = 0;
             }
         }
-        // = a4de call loc_0ae28; jz skip the music + voice sliders.
+        // = seg000:a4de call loc_0ae28; jz skip the music + voice sliders.
         if self.settings_music_enabled() {
-            // = a4e3 si=2896; a4e9 si=289e — the music + voice sliders.
+            // = seg000:a4e3 si=2896; a4e9 si=289e — the music + voice sliders.
             self.settings_ui_draw_slider(1);
             self.settings_ui_draw_slider(2);
-            // = a4ef test settings_flags,400h; when clear, reset both drawn
+            // = seg000:a4ef test settings_flags,400h; when clear, reset both drawn
             // flags (data_02897 = data_0289f = 0).
             if self.settings_flags & 0x400 == 0 {
                 self.settings_records[SETTINGS_RECORD_VOLUME_MUSIC].drawn_flag = 0;
@@ -229,27 +229,27 @@ impl GameState {
     // into the record's y, and draw the handle sprite (2). Marks the record
     // drawn (drawn_flag = 1) so it becomes draggable.
     fn settings_ui_draw_slider(&mut self, i: usize) {
-        // = a502 push [active_seg]; set_screen_as_active_framebuffer.
+        // = seg000:a502 push [active_seg]; set_screen_as_active_framebuffer.
         let saved = self.active_fb();
         self.set_screen_as_active_framebuffer();
-        // = a50a open MIXR.
+        // = seg000:a50a open MIXR.
         self.open_sprite_bank(sprite_bank::MIXR);
-        // = a510 dx=record.dx, bx=34; add_global_offset — the track position.
+        // = seg000:a510 dx=record.dx, bx=34; add_global_offset — the track position.
         let track_x = self.settings_records[i].x + SETTINGS_RECT.x0;
         let track_y = 34 + SETTINGS_RECT.y0;
-        // = a519 draw sprite 1 (the slider track).
+        // = seg000:a519 draw sprite 1 (the slider track).
         self.draw_active_bank_sprite(1, track_x, track_y);
-        // = a520 al=value; a521 mark drawn (record.drawn_flag = 1).
+        // = seg000:a520 al=value; a521 mark drawn (record.drawn_flag = 1).
         let value = self.settings_records[i].value;
         self.settings_records[i].drawn_flag = 1;
-        // = a524 ax=~value; a526 al >>= 2; a52a cbw; a52b ax += track_y — the
+        // = seg000:a524 ax=~value; a526 al >>= 2; a52a cbw; a52b ax += track_y — the
         // handle's screen y.
         let handle_y = ((!value) >> 2) as i16 + track_y;
-        // = a52f ax -= gy; a533 store the handle's panel-local y in record.y.
+        // = seg000:a52f ax -= gy; a533 store the handle's panel-local y in record.y.
         self.settings_records[i].y = handle_y - SETTINGS_RECT.y0;
-        // = a536 draw sprite 2 (the slider handle) at (track_x, handle_y).
+        // = seg000:a536 draw sprite 2 (the slider handle) at (track_x, handle_y).
         self.draw_active_bank_sprite(2, track_x, handle_y);
-        // = a53c pop [active_seg].
+        // = seg000:a53c pop [active_seg].
         self.active_fb = saved;
     }
 
@@ -257,14 +257,14 @@ impl GameState {
     // knobs (records 3..6) gated by settings_flags: bit 0x8 draws the voices
     // knob, bit 0x800 draws the music and music-during-voices knobs.
     fn settings_ui_draw_balance_knobs(&mut self) {
-        // = a47d test settings_flags,8.
+        // = seg000:a47d test settings_flags,8.
         if self.settings_flags & 0x8 != 0 {
-            // = a485 si=28a6; call settings_ui_draw_balance_knob.
+            // = seg000:a485 si=28a6; call settings_ui_draw_balance_knob.
             self.settings_ui_draw_balance_knob(3);
         }
-        // = a48b test settings_flags,800h.
+        // = seg000:a48b test settings_flags,800h.
         if self.settings_flags & 0x800 != 0 {
-            // = a493 si=28ae; a499 si=28b6.
+            // = seg000:a493 si=28ae; a499 si=28b6.
             self.settings_ui_draw_balance_knob(4);
             self.settings_ui_draw_balance_knob(5);
         }
@@ -275,30 +275,30 @@ impl GameState {
     // left<->right over value 0..0xf0, drawn at the record's (x, y) +
     // global offset. Marks the record drawn.
     fn settings_ui_draw_balance_knob(&mut self, i: usize) {
-        // = a49c push [active_seg]; set_screen_as_active_framebuffer.
+        // = seg000:a49c push [active_seg]; set_screen_as_active_framebuffer.
         let saved = self.active_fb();
         self.set_screen_as_active_framebuffer();
-        // = a4a3 open MIXR.
+        // = seg000:a4a3 open MIXR.
         self.open_sprite_bank(sprite_bank::MIXR);
-        // = a4a9 lodsb value; a4aa aam 0ah; al=value/10; a4b0 add al,3 — sprite.
+        // = seg000:a4a9 lodsb value; a4aa aam 0ah; al=value/10; a4b0 add al,3 — sprite.
         let sprite = (self.settings_records[i].value / 10 + 3) as u16;
-        // = a4b2 mark drawn (record.drawn_flag = 1).
+        // = seg000:a4b2 mark drawn (record.drawn_flag = 1).
         self.settings_records[i].drawn_flag = 1;
-        // = a4b6 x=record.x, bx=record.y; add_global_offset.
+        // = seg000:a4b6 x=record.x, bx=record.y; add_global_offset.
         let x = self.settings_records[i].x + SETTINGS_RECT.x0;
         let y = self.settings_records[i].y + SETTINGS_RECT.y0;
-        // = a4be draw the indicator sprite.
+        // = seg000:a4be draw the indicator sprite.
         self.draw_active_bank_sprite(sprite, x, y);
-        // = a4c1 pop [active_seg].
+        // = seg000:a4c1 pop [active_seg].
         self.active_fb = saved;
     }
 
     // = seg000:a42c settings_ui_draw_language_buttons — open MIXR, then draw the
     // current language_setting's button (loc_0a435).
     fn settings_ui_draw_language_buttons(&mut self) {
-        // = a42f open MIXR.
+        // = seg000:a42f open MIXR.
         self.open_sprite_bank(sprite_bank::MIXR);
-        // = a432 al = language_setting; fall into loc_0a435.
+        // = seg000:a432 al = language_setting; fall into loc_0a435.
         self.settings_ui_draw_button(self.language_setting);
     }
 
@@ -306,23 +306,23 @@ impl GameState {
     // `voice_subtitle_mode + 8` into the shared button draw (loc_0a435). Relies
     // on MIXR already being the active bank (the preceding language-button draw).
     fn settings_ui_draw_voice_mode_button(&mut self) {
-        // = a44c al = voice_subtitle_mode + 8; jmp loc_0a435.
+        // = seg000:a44c al = voice_subtitle_mode + 8; jmp loc_0a435.
         self.settings_ui_draw_button(self.voice_subtitle_mode + 8);
     }
 
     // = seg000:a435 loc_0a435 — draw a panel button for input `al`: its sprite
     // is `al * 2 + 28`, drawn at the position loc_0a465 computes from `al`.
     fn settings_ui_draw_button(&mut self, al: u8) {
-        // = a435 push [active_seg]; set_screen_as_active_framebuffer.
+        // = seg000:a435 push [active_seg]; set_screen_as_active_framebuffer.
         let saved = self.active_fb();
         self.set_screen_as_active_framebuffer();
-        // = a43d call loc_0a465 — the draw position (al preserved across it).
+        // = seg000:a43d call loc_0a465 — the draw position (al preserved across it).
         let (x, y) = self.settings_ui_button_pos(al);
-        // = a440 shl ax,1; add al,1ch — the button sprite.
+        // = seg000:a440 shl ax,1; add al,1ch — the button sprite.
         let sprite = (al as u16) * 2 + 28;
-        // = a444 draw the button sprite.
+        // = seg000:a444 draw the button sprite.
         self.draw_active_bank_sprite(sprite, x, y);
-        // = a447 pop [active_seg].
+        // = seg000:a447 pop [active_seg].
         self.active_fb = saved;
     }
 
@@ -331,9 +331,9 @@ impl GameState {
     // button_grid_rect.y0 + gy. The input `al` itself is preserved (the DOS
     // push/pop ax), so loc_0a435 can still derive the sprite from it.
     fn settings_ui_button_pos(&self, al: u8) -> (i16, i16) {
-        // = a466 dx = [data_028c7] = button_grid_rect.x0.
+        // = seg000:a466 dx = [data_028c7] = button_grid_rect.x0.
         let x = SETTINGS_BUTTON_GRID_RECT.x0 + SETTINGS_RECT.x0;
-        // = a46a xlat through settings_language_sprite_xlat; a46e *7; a474 add
+        // = seg000:a46a xlat through settings_language_sprite_xlat; a46e *7; a474 add
         // [data_028c9] = button_grid_rect.y0.
         let row = SETTINGS_LANGUAGE_SPRITE_XLAT[al as usize];
         let y = row as i16 * 7 + SETTINGS_BUTTON_GRID_RECT.y0 + SETTINGS_RECT.y0;
@@ -372,13 +372,13 @@ impl GameState {
         // on clean background and the next redraw_mouse re-composites the cursor.
         let x = self.mouse_pos_x as i16;
         let y = self.mouse_pos_y as i16;
-        // = a576 di=2886; call loc_0d6fe — rect-test the panel.
+        // = seg000:a576 di=2886; call loc_0d6fe — rect-test the panel.
         if !SETTINGS_RECT.contains_interior(x, y) {
-            // = a57e jmp menu_callback_choice_exit_menu — a miss closes the panel.
+            // = seg000:a57e jmp menu_callback_choice_exit_menu — a miss closes the panel.
             self.menu_callback_choice_exit_menu(0, 0);
             return;
         }
-        // = a581 fall into loc_0a581 — interact with the panel interior.
+        // = seg000:a581 fall into loc_0a581 — interact with the panel interior.
         self.mixer_panel_click_interior(x, y);
     }
 
@@ -386,21 +386,21 @@ impl GameState {
     // panel-local coords, then test the test-voice button (28bf), the button
     // grid (28c7), and finally the slider handles (loc_0a594).
     fn mixer_panel_click_interior(&mut self, x: i16, y: i16) {
-        // = a581 call settings_ui_sub_global_offset — panel-local coords.
+        // = seg000:a581 call settings_ui_sub_global_offset — panel-local coords.
         let (lx, ly) = local_xy(x, y);
-        // = a584 di=28bf; loc_0d6fe — the test-voice button.
+        // = seg000:a584 di=28bf; loc_0d6fe — the test-voice button.
         if SETTINGS_VOICE_RECT.contains_interior(lx, ly) {
-            // = a58a jb loc_0a553.
+            // = seg000:a58a jb loc_0a553.
             self.settings_ui_play_test_voice();
             return;
         }
-        // = a58c di=28c7; loc_0d6fe — the button grid.
+        // = seg000:a58c di=28c7; loc_0d6fe — the button grid.
         if SETTINGS_BUTTON_GRID_RECT.contains_interior(lx, ly) {
-            // = a592 jb loc_0a5b0.
+            // = seg000:a592 jb loc_0a5b0.
             self.mixer_panel_button_grid_click(ly);
             return;
         }
-        // = a594 fall into loc_0a594 — grab a slider handle.
+        // = seg000:a594 fall into loc_0a594 — grab a slider handle.
         self.mixer_panel_set_drag_target(lx, ly);
     }
 
@@ -419,23 +419,23 @@ impl GameState {
     // the pointer's offset into the matched handle's box, which the knob drag
     // (loc_0a5df) uses to pick the rotation direction.
     fn settings_ui_grab_handle(&mut self, lx: i16, ly: i16) -> (u8, usize, i16, i16) {
-        // = a594 loc_0a672 — the volume slider handles.
+        // = seg000:a594 loc_0a672 — the volume slider handles.
         for i in 0..3 {
             if let Some((rx, ry)) = self.settings_handle_hit(i, lx, ly, 22, 5) {
-                // = a599 data_028be = 1.
+                // = seg000:a599 data_028be = 1.
                 self.settings_drag_target = 1;
                 return (1, i, rx, ry);
             }
         }
-        // = a59f loc_0a69f — the balance knob handles.
+        // = seg000:a59f loc_0a69f — the balance knob handles.
         for i in 3..6 {
             if let Some((rx, ry)) = self.settings_handle_hit(i, lx, ly, 13, 11) {
-                // = a5a4 data_028be = 2.
+                // = seg000:a5a4 data_028be = 2.
                 self.settings_drag_target = 2;
                 return (2, i, rx, ry);
             }
         }
-        // = a5aa data_028be = 0 — no handle grabbed.
+        // = seg000:a5aa data_028be = 0 — no handle grabbed.
         self.settings_drag_target = 0;
         (0, 0, 0, 0)
     }
@@ -453,11 +453,11 @@ impl GameState {
         h: i16,
     ) -> Option<(i16, i16)> {
         let r = &self.settings_records[i];
-        // = a685 cmp byte[si+1],1 — require the record drawn.
+        // = seg000:a685 cmp byte[si+1],1 — require the record drawn.
         if r.drawn_flag != 1 {
             return None;
         }
-        // = a68c ax = lx - dx; a691 bp = ly - y; a696/a69b range checks
+        // = seg000:a68c ax = lx - dx; a691 bp = ly - y; a696/a69b range checks
         // (unsigned, so a pointer above/left of the box wraps high and misses).
 
         if !rect(r.x, r.y, r.x + w, r.y + h).in_rect(lx, ly) {
@@ -471,33 +471,33 @@ impl GameState {
     // selection (< 7), a no-op gap (== 7), or a voice_subtitle_mode (> 7), then
     // redraw the panel (settings_ui_draw).
     fn mixer_panel_button_grid_click(&mut self, ly: i16) {
-        // = a5b0 sub bx,[di+2]=grid.y0; a5b5 div 7 — the grid row.
+        // = seg000:a5b0 sub bx,[di+2]=grid.y0; a5b5 div 7 — the grid row.
         let row = (ly - SETTINGS_BUTTON_GRID_RECT.y0) / 7;
-        // = a5bc xlat through settings_button_grid_xlat.
+        // = seg000:a5bc xlat through settings_button_grid_xlat.
         let Some(&action) = SETTINGS_BUTTON_GRID_XLAT.get(row as usize) else {
             return;
         };
-        // = a5bd cmp al,7.
+        // = seg000:a5bd cmp al,7.
         if action > 7 {
-            // = a5c3 sub al,8; voice_subtitle_mode = al.
+            // = seg000:a5c3 sub al,8; voice_subtitle_mode = al.
             self.voice_subtitle_mode = action - 8;
-            // = a5c8 jmp loc_0a5db (settings_ui_draw).
+            // = seg000:a5c8 jmp loc_0a5db (settings_ui_draw).
             self.settings_ui_draw();
         } else if action == 7 {
-            // = a5c1 jz loc_0a5de — the no-op gap rows.
+            // = seg000:a5c1 jz loc_0a5de — the no-op gap rows.
         } else {
-            // = a5ca loc_0a5ca — a language selection.
-            // = a5ca cmp al,language_setting; jz ret — unchanged.
+            // = seg000:a5ca loc_0a5ca — a language selection.
+            // = seg000:a5ca cmp al,language_setting; jz ret — unchanged.
             if action == self.language_setting {
                 return;
             }
-            // = a5d0 and voice_subtitle_mode,0fdh — clear the subtitle bit.
+            // = seg000:a5d0 and voice_subtitle_mode,0fdh — clear the subtitle bit.
             self.voice_subtitle_mode &= 0xfd;
-            // = a5d5 language_setting = al.
+            // = seg000:a5d5 language_setting = al.
             self.language_setting = action;
-            // = a5d8 call settings_ui_reload_language — reload the language fonts/strings.
+            // = seg000:a5d8 call settings_ui_reload_language — reload the language fonts/strings.
             self.settings_ui_reload_language();
-            // = a5db jmp settings_ui_draw.
+            // = seg000:a5db jmp settings_ui_draw.
             self.settings_ui_draw();
         }
     }
@@ -507,53 +507,53 @@ impl GameState {
     // (dx, dy) motion delta. It re-grabs the handle at the *previous* frame's
     // position (current minus the delta) and nudges its value.
     pub(crate) fn mixer_panel_drag(&mut self, dx: i16, dy: i16) {
-        // = a5df settings_ui_sub_global_offset — current panel-local pointer.
+        // = seg000:a5df settings_ui_sub_global_offset — current panel-local pointer.
         let lx = self.mouse_pos_x as i16 - SETTINGS_RECT.x0;
         let ly = self.mouse_pos_y as i16 - SETTINGS_RECT.y0;
-        // = a5e2 sub bx,cx — re-base Y to the previous frame's position.
+        // = seg000:a5e2 sub bx,cx — re-base Y to the previous frame's position.
         let prev_ly = ly - dy;
-        // = a5e4 call loc_0a594 — re-grab the handle there.
+        // = seg000:a5e4 call loc_0a594 — re-grab the handle there.
         let (group, i, rx, bp_off) = self.settings_ui_grab_handle(lx, prev_ly);
         match group {
-            // = a5ec/a61a a volume slider: move the handle by the Y delta.
+            // = seg000:a5ec/a61a a volume slider: move the handle by the Y delta.
             1 => {
-                // = a61a jcxz loc_0a619 — no Y motion, no change.
+                // = seg000:a61a jcxz loc_0a619 — no Y motion, no change.
                 if dy == 0 {
                     return;
                 }
-                // = a61c ax = y + dy - 34; a624 cmp ax,40h; jnb ret.
+                // = seg000:a61c ax = y + dy - 34; a624 cmp ax,40h; jnb ret.
                 let raw = self.settings_records[i].y + dy - 34;
                 if !(0..64).contains(&raw) {
                     return;
                 }
-                // = a629 ax <<= 2; a62d not ax; a62f record.value = al.
+                // = seg000:a629 ax <<= 2; a62d not ax; a62f record.value = al.
                 self.settings_records[i].value = !((raw << 2) as u8);
-                // = a631 push [si+6]; a634 jmp settings_ui_draw_slider — redraw +
+                // = seg000:a631 push [si+6]; a634 jmp settings_ui_draw_slider — redraw +
                 // run the audio-apply hook (bracketed by the cursor lift).
                 self.settings_ui_commit_drag(i, false);
             }
-            // = a5ee a balance knob: turn it, nudging the value by +/-10 per
+            // = seg000:a5ee a balance knob: turn it, nudging the value by +/-10 per
             // the 2D (rotary) drag direction.
             2 => {
-                // = a5f5 if (lx - dx) < 6, negate the X delta's contribution (cx).
+                // = seg000:a5f5 if (lx - dx) < 6, negate the X delta's contribution (cx).
                 let cx = if rx < 6 { -dy } else { dy };
 
-                // = a5fc if (prev_ly - y) >= 5, negate di.
+                // = seg000:a5fc if (prev_ly - y) >= 5, negate di.
                 let di = if bp_off >= 5 { -dx } else { dx };
 
-                // = a603 step = +10 when (cx + di) >= 0, else -10.
+                // = seg000:a603 step = +10 when (cx + di) >= 0, else -10.
                 let step: i8 = if cx + di >= 0 { 10 } else { -10 };
-                // = a60b al = record.value + step; a60d cmp al,0f1h; jnb ret.
+                // = seg000:a60b al = record.value + step; a60d cmp al,0f1h; jnb ret.
                 let new_value = self.settings_records[i]
                     .value
                     .saturating_add_signed(step)
                     .min(240);
-                // = a611 record.value = al; a613 push [si+6]; a616 jmp
+                // = seg000:a611 record.value = al; a613 push [si+6]; a616 jmp
                 // settings_ui_draw_balance_knob.
                 self.settings_records[i].value = new_value;
                 self.settings_ui_commit_drag(i, true);
             }
-            // = a619 loc_0a619 — no handle grabbed, nothing to move.
+            // = seg000:a619 loc_0a619 — no handle grabbed, nothing to move.
             _ => {}
         }
     }
@@ -586,13 +586,13 @@ impl GameState {
     // element pops: commit the voice/subtitle mode as the new default, restore
     // the room mouse handlers, and repaint the area the panel covered.
     pub(crate) fn settings_ui_cleanup(&mut self) {
-        // = a541 voice_subtitle_mode_default = voice_subtitle_mode.
+        // = seg000:a541 voice_subtitle_mode_default = voice_subtitle_mode.
         self.voice_subtitle_mode_default = self.voice_subtitle_mode;
-        // = a547 call clear_mouse_nav_rect.
+        // = seg000:a547 call clear_mouse_nav_rect.
         self.clear_mouse_nav_rect();
-        // = a54a call select_room_ui_table — restore the room handlers.
+        // = seg000:a54a call select_room_ui_table — restore the room handlers.
         self.select_room_ui_table();
-        // = a54d si=2886; jmp present_screen_rect.
+        // = seg000:a54d si=2886; jmp present_screen_rect.
         self.settings_ui_repaint_panel_rect();
     }
 
@@ -721,11 +721,11 @@ impl GameState {
     // runs through pcm_player, so this slider governs every digital sound at
     // once — exactly as the original, where one PCM driver served both.
     fn settings_ui_apply_pcm(&mut self) {
-        // = a637 test settings_flags,4; when clear, force the value to 0xff.
+        // = seg000:a637 test settings_flags,4; when clear, force the value to 0xff.
         if self.settings_flags & 0x4 == 0 {
             self.settings_records[SETTINGS_RECORD_VOLUME_VOICES].value = 0xff;
         }
-        // = a644 al = record[0].value (level), ah = record[3].value (the voices
+        // = seg000:a644 al = record[0].value (level), ah = record[3].value (the voices
         // balance/pan byte); call [pcm_vtable_set_volume] (= pcm_player, the
         // dnsdb driver). DOS's dnsdb_set_volume is a retf no-op, but the port's
         // CPAL mixer honours both: the level via set_volume, the balance knob via
@@ -739,13 +739,13 @@ impl GameState {
 
     // = seg000:a650 loc_0a650 — apply the MIDI (music) volume.
     fn settings_ui_apply_midi(&mut self) {
-        // = a650 test settings_flags,400h; when clear, force music + voice
+        // = seg000:a650 test settings_flags,400h; when clear, force music + voice
         // values to 0xff.
         if self.settings_flags & 0x400 == 0 {
             self.settings_records[SETTINGS_RECORD_VOLUME_MUSIC].value = 0xff;
             self.settings_records[SETTINGS_RECORD_VOLUME_MUSIC_DURING_VOICES].value = 0xff;
         }
-        // = a660 al = record[1].value (music level); a667 clamp al >= 4; ah =
+        // = seg000:a660 al = record[1].value (music level); a667 clamp al >= 4; ah =
         // record[4].value (the music balance/pan byte); call [MIDI_SetVolume].
         // DOS's AdLib driver discarded the balance, but the port pans the OPL3
         // mix: the level via set_music_volume, the balance knob via set_balance.
@@ -761,11 +761,11 @@ impl GameState {
     // ducked, so the player can judge the voices-volume slider against a real
     // line. Plays VOC (ax=4, bx=5) on the dnsdb driver.
     fn settings_ui_play_test_voice(&mut self) {
-        // = a553 call check_pcm_enabled; jz ret.
+        // = seg000:a553 call check_pcm_enabled; jz ret.
         if !self.check_pcm_enabled() {
             return;
         }
-        // = a558 ax=4, bx=5; create_voc_file_name_from_bx (seg000:a8bc) — build
+        // = seg000:a558 ax=4, bx=5; create_voc_file_name_from_bx (seg000:a8bc) — build
         // the clip name "P<L>\P<L><idx><suffix>.VOC": the directory letter
         // L = 'A' + bx = 'F', idx = ax as three hex digits = "004", and the
         // suffix (= seg000:a8e1) is 'I' for the in-location desert scenes
@@ -776,7 +776,7 @@ impl GameState {
             && (self.location_and_room & 0xff) != 1;
         let suffix = if interior { 'I' } else { 'O' };
         let name = format!("PF\\PF004{suffix}.VOC");
-        // = a561 voc_get_lipsync_data — load the clip; bail if the resource is
+        // = seg000:a561 voc_get_lipsync_data — load the clip; bail if the resource is
         // absent (e.g. a DAT without narration), matching DOS's open failure.
         let Ok(data) = self.dat_file.read(&name) else {
             return;
@@ -784,15 +784,15 @@ impl GameState {
         if crate::voc::parse(&data).is_none() {
             return;
         }
-        // = a564 midi_duck_music_volume
+        // = seg000:a564 midi_duck_music_volume
         self.midi_duck_music_volume();
-        // = a567 is_voc_pcm_playing=1; a56c si=3811h; a56f
+        // = seg000:a567 is_voc_pcm_playing=1; a56c si=3811h; a56f
         // [pcm_vtable_start_playback] — voc_get_lipsync_data ran pcm_stop_voc
         // (a84a) and set up the stream, so the clip plays chunked like any
         // other voice.
         self.pcm_stop_voc();
         self.pcm_voice_stream_start(data);
-        // = a573 jmp wait_for_narration_voice_clip (seg000:aba9) — DOS blocks,
+        // = seg000:a573 jmp wait_for_narration_voice_clip (seg000:aba9) — DOS blocks,
         // pumping frame_task_callback_0ab92 until the clip drains and it
         // restores the music. The port's mixer
         // panel is event-driven, so install that monitor as a frame task
@@ -820,12 +820,12 @@ impl GameState {
     // it). cl is 0xff (no highlight) when music is disabled.
     //
     pub(crate) fn settings_ui_update_music_playlist_flags(&mut self) {
-        // = ac4b call loc_0ae28 — grey all three MUSIC entries (ac3d..ac45 set
+        // = seg000:ac4b call loc_0ae28 — grey all three MUSIC entries (ac3d..ac45 set
         //   the 0x40 bit) unless music is enabled, in which case ac50..ac58 clear
         //   it again.
         let music_enabled = self.settings_music_enabled();
         let disabled = !music_enabled;
-        // = ac3d..ac58 toggle the 0x40 grey bit on the three MUSIC entries of
+        // = seg000:ac3d..ac58 toggle the 0x40 grey bit on the three MUSIC entries of
         //   menu_mixer_panel in place (the static buffer, seg001:201a); the
         //   highlight bits are re-derived below, so rebuild from the template.
         let template = menu_defs::MENU_MIXER_PANEL.records;
@@ -837,20 +837,20 @@ impl GameState {
             template[4],
         ];
 
-        // = ac49 cl = 0xff (no pre-highlight); ac4e jz loc_0ac6d — when music is
+        // = seg000:ac49 cl = 0xff (no pre-highlight); ac4e jz loc_0ac6d — when music is
         //   disabled the entries stay greyed and none is highlighted.
         if music_enabled {
-            // = ac5c xor cx,cx; ac5e test cmd_args_memory,10h.
+            // = seg000:ac5c xor cx,cx; ac5e test cmd_args_memory,10h.
             let cl = if self.cmd_args_memory & 0x10 != 0 {
-                // = ac63 jnz loc_0ac6d with cl = 0 — music is off: highlight MUSIC
+                // = seg000:ac63 jnz loc_0ac6d with cl = 0 — music is off: highlight MUSIC
                 //   OFF (slot 0).
                 0
             } else {
-                // = ac65 cl = (music_playlist_flags & 1) + 1 — the active MUSIC ON
+                // = seg000:ac65 cl = (music_playlist_flags & 1) + 1 — the active MUSIC ON
                 //   variant: GAME RELATIVE (slot 1) or CD-STYLE (slot 2).
                 (self.music_playlist_flags & 1) as usize + 1
             };
-            // = loc_0d393 or byte ptr [bx+si+3], 80h — set the highlight bit on
+            // = seg000:d393 loc_0d393 or byte ptr [bx+si+3], 80h — set the highlight bit on
             //   entry `cl`'s text_id (cl is 0..2 here, always < 5).
             self.menu_mixer_panel.records[cl].text_id |= CMD_HIGHLIGHT;
         }
@@ -906,7 +906,7 @@ impl GameState {
         // applied (clearing any highlight a previous open left behind).
         let mut records = menu_defs::MENU_MUSIC.records.to_vec();
         let cl = ((self.music_playlist_flags & 2) >> 1) as usize;
-        // = loc_0d393 or [bx+si+3],80h — the pre-highlight bit on the record.
+        // = seg000:d393 loc_0d393 or [bx+si+3],80h — the pre-highlight bit on the record.
         records[cl].text_id |= CMD_HIGHLIGHT;
         self.menu_music.records = records;
         // = seg000:ac8d jmp loc_0d32f — request the panel transition, insert

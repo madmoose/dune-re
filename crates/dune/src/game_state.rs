@@ -30,14 +30,14 @@ use crate::{
 /// Identifies one of the engine's pixel buffers.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum FbId {
-    /// = `_word_2D088_screen_buffer_seg` — the visible VGA buffer (DNVGA: 0xA000).
+    /// = seg001:dbd8 `_word_2D088_screen_buffer_seg` — the visible VGA buffer (DNVGA: 0xA000).
     Screen,
-    /// = `_word_2D086_framebuffer_1_seg` — the primary offscreen compose buffer.
+    /// = seg001:dbd6 `_word_2D086_framebuffer_1_seg` — the primary offscreen compose buffer.
     Fb1,
-    /// = `_word_2D08E_framebuffer_saved_seg` (fb2) — a saved clean copy of the
+    /// = seg001:dbde `_word_2D08E_framebuffer_saved_seg` (fb2) — a saved clean copy of the
     /// scene, used to restore regions dirtied by sprites/cursor/the talking head.
     Saved,
-    /// = `_word_2D0E2_framebuffer_back` — the globe/map scratch buffer. During a
+    /// = seg001:dc32 `_word_2D0E2_framebuffer_back` — the globe/map scratch buffer. During a
     /// travel it holds the persistent flight minimap + trail, re-stamped over
     /// each decoded flight frame (hnm_present_flight_frame, seg000:4afd).
     Back,
@@ -45,7 +45,7 @@ pub enum FbId {
 
 const GAME_CLOCK_TICKS_PER_HOUR: i32 = 12000;
 
-/// = (loc_0e85c - travel_trail_ring) / 4 — the travel-trail ring capacity in
+/// (loc_0e85c - travel_trail_ring) / 4 — the travel-trail ring capacity in
 /// (longitude, latitude) pairs.
 pub(crate) const TRAVEL_TRAIL_LEN: usize = (0xe85c - 0xe40c) / 4;
 
@@ -154,7 +154,7 @@ impl Default for NearestLocation {
     }
 }
 
-/// = read_audio_file's chunk size (seg000:a950, `mov cx, 2000h`): a streamed
+/// = seg000:a93f read_audio_file's chunk size (seg000:a950, `mov cx, 2000h`): a streamed
 /// voice reaches the dnsdb driver 0x2000 file bytes at a time.
 pub(crate) const PCM_VOICE_CHUNK: usize = 0x2000;
 
@@ -167,7 +167,7 @@ pub(crate) const PCM_VOICE_CHUNK: usize = 0x2000;
 pub(crate) struct PcmVoiceStream {
     /// The .VOC file bytes DOS reads from the handle.
     data: Box<[u8]>,
-    /// = data_0dbc0 — file offset of the next unread byte.
+    /// = seg000:dbc0 data_0dbc0 — file offset of the next unread byte.
     offset: usize,
 }
 
@@ -238,12 +238,12 @@ pub struct GameState {
 
     pub framebuffer: FrameBuffer,
 
-    // = _word_2D08E_framebuffer_saved_seg (fb2): a clean backup of the composed
+    // = seg001:dbde _word_2D08E_framebuffer_saved_seg (fb2): a clean backup of the composed
     // scene; regions are restored from here under moving overlays. (The buffer
     // itself, not the seg001 selector word at seg001:dbde that points to it.)
     pub framebuffer_saved: FrameBuffer,
 
-    /// = `_word_2D0E2_framebuffer_back` (FbId::Back) — the globe/map scratch
+    /// = seg001:dc32 `_word_2D0E2_framebuffer_back` (FbId::Back) — the globe/map scratch
     /// buffer (the flight minimap + trail persist here during a travel).
     pub framebuffer_back: FrameBuffer,
 
@@ -260,7 +260,7 @@ pub struct GameState {
     pub font: Font,
     pub font_state: FontState,
 
-    // = _dword_23C5C_COMMANDx_BIN — the COMMAND1.BIN command-string table
+    // = seg001:47ac _dword_23C5C_COMMANDx_BIN — the COMMAND1.BIN command-string table
     // (seg000:d003 loads resource 0xc0 + language). A head table of word offsets
     // (count = word[0]/2) followed by 0xff-terminated strings; the verb panel
     // resolves verb text from it via get_phrase_or_command_string_si.
@@ -1275,7 +1275,7 @@ pub struct GameState {
     // (seg000:ba15).
     pub(crate) globe_tilt: i16,
 
-    // = _word_2D1BF_globe_decoration_offset — the FRESK side decorations'
+    // = seg001:dd0f _word_2D1BF_globe_decoration_offset — the FRESK side decorations'
     // slide position on the globe screen: 0 = framing the globe, negative =
     // slid apart for the SEE RESULTS reveal (seg000:b8f3).
     pub(crate) globe_decoration_offset: i16,
@@ -1752,7 +1752,7 @@ pub struct GameState {
     // the active Fremen-2 conversation (or room draw) refers to.
     pub(crate) selected_fremen2: u8,
 
-    // = seg001 vegetation_started_on_Dune — the ecology-victory flag the
+    // = seg001:00fa vegetation_started_on_Dune — the ecology-victory flag the
     // motivation modifier reads: troop_irrigated_this_period as the last
     // per-period troop walk left it.
     pub(crate) vegetation_started_on_dune: u8,
@@ -2077,7 +2077,7 @@ pub struct GameState {
     // starts (seg000:adba).
     pub(crate) music_song_end_tick_stamp: u16,
 
-    // = _unk_2CCD8_bios_timer_count_3 — rand_iterated's LCG seed, separate
+    // = seg001:d828 _unk_2CCD8_bios_timer_count_3 — rand_iterated's LCG seed, separate
     // from rand's (0d826) and rand_masked's (0d824). DOS seeds it from the
     // BIOS tick count during startup; the shuffle also perturbs it with the
     // live PIT counter between draws.
@@ -2158,7 +2158,7 @@ pub struct GameState {
     // fly-over cabin's transparent windshield shows plain desert.
     pub(crate) hnm_video_frame_ready: bool,
 
-    // = seg001 _byte_22C1A_audio_current_sfx_id / _dword_22CC1_pcm_voc_
+    // = seg001:376a _byte_22C1A_audio_current_sfx_id / seg001:3811 _dword_22CC1_pcm_voc_
     // resource_offset — which sound effect audio_start_voc (seg000:ab15) last
     // opened, and its loaded bytes. Re-requesting the same effect replays the
     // resident resource (seg000:ab23 cmp al,[audio_current_sfx_id]; jz
@@ -2979,7 +2979,7 @@ impl GameState {
     // `skip_intro` is a port-only convenience (no DOS equivalent): when set it
     // jumps straight to the in-game UI, skipping the intro/credits/intro2.
     pub fn start(&mut self, skip_intro: bool) {
-        // = initialize_system → initialize_resources, run before start in DOS
+        // = seg000:e594 initialize_system → initialize_resources, run before start in DOS
         // (the port front-loads the constructor's DNCHAR/COMMAND loads and defers
         // the rest; this brings in the resources interpreted at runtime).
         self.initialize_resources();
@@ -3750,7 +3750,7 @@ impl GameState {
     // CRT retrace) spins until `[bp] - bx >= 3`, i.e. 3 PIT ticks per step. The
     // PIT runs at the same ~200Hz the port models, so this is 3 game ticks.
     pub fn present_transition_frame(&mut self) {
-        // = loc_segvga_02572 `sub ax,bx; cmp ax,3; jb` — 3 ticks (~15ms).
+        // = segvga:2572 loc_segvga_02572 `sub ax,bx; cmp ax,3; jb` — 3 ticks (~15ms).
         self.present_transition_frame_ticks(3);
     }
 
@@ -3848,7 +3848,7 @@ impl GameState {
         self.pcm_player.set_volume(volume);
     }
 
-    // = open_pcm_voice_file (seg000:a90b) + voc_get_lipsync_data's stream
+    // = seg000:a90b open_pcm_voice_file + voc_get_lipsync_data's stream
     // setup — begin streaming a voice .VOC to the driver in PCM_VOICE_CHUNK
     // pieces. The first chunk is the file's own first 0x2000 bytes (the VOC
     // header and the type-5/type-1 blocks sit inside it; the block engine
@@ -3946,7 +3946,6 @@ impl GameState {
     // fixed 0x20 (= 0x1a + 6) bytes off the front (seg000:aa30); the sample
     // rate comes from the Type-1 header's time-constant byte.
     //
-
     // = seg000:aa48..aa64 — DOS builds a same-sized silent lead-in buffer (job
     // 0x3819) and starts it FIRST, then queues the real first chunk (job
     // 0x3811). The silent lead-in keeps the dnsdb driver fed while the game
@@ -4012,7 +4011,7 @@ impl GameState {
     }
 
     pub fn hnm_is_complete(&self) -> bool {
-        // = check_if_hnm_complete: finished once the clip has played its last
+        // = seg000:cc85 check_if_hnm_complete: finished once the clip has played its last
         // frame (hnm_finished) or been closed.
         self.hnm_finished || !self.hnm_is_open()
     }
@@ -4057,7 +4056,7 @@ impl GameState {
         // pipeline already decoded (hnm_present_flight_frame's loc_0caa0
         // prefetch) is consumed as-is; otherwise decode one now.
 
-        // = ca80..ca8c: decode the next frame (into framebuffer_active = active_fb)
+        // = seg000:ca80..ca8c: decode the next frame (into framebuffer_active = active_fb)
         // and advance. hnm_step_frame returns false if it stepped onto the
         // end-of-stream marker without decoding.
         if !std::mem::take(&mut self.hnm_video_frame_ready) && !self.hnm_step_frame() {
@@ -4078,31 +4077,31 @@ impl GameState {
     // playlist. Ends with the last frame snapshotted to fb2 and the clip
     // closed.
     pub(crate) fn play_hnm_to_completion(&mut self, video_id: u16, bp: fn(&mut GameState)) {
-        // = c8fb call set_fb1_as_active_framebuffer.
+        // = seg000:c8fb call set_fb1_as_active_framebuffer.
         self.set_fb1_as_active_framebuffer();
 
-        // = c8ff call hnm_load_first_frame — the in-game fb row offset is 0.
+        // = seg000:c8ff call hnm_load_first_frame — the in-game fb row offset is 0.
         self.hnm_load_first_frame_by_id(video_id, 0);
 
-        // = c902/c905 present the game area and flush the header palette.
+        // = seg000:c902/c905 present the game area and flush the header palette.
         self.present_game_area();
         self.update_screen_palette();
 
-        // = c909 call bp — the caller's first-frame reveal.
+        // = seg000:c909 call bp — the caller's first-frame reveal.
         bp(self);
 
-        // = c90b loc_0c90b — pump to completion. DOS spins on
+        // = seg000:c90b loc_0c90b — pump to completion. DOS spins on
         // hnm_do_frame_and_check_if_frame_advanced; the port paces on ticks.
         while !self.hnm_is_complete() {
             if self.hnm_do_frame() {
-                // = c910/c913 present the game area + the CD playlist service.
+                // = seg000:c910/c913 present the game area + the CD playlist service.
                 self.present_game_area();
                 self.music_cd_playlist_service();
             }
             self.tick_one_frame();
         }
 
-        // = c91b snapshot the last frame to fb2; c91e jmp hnm_close_resource.
+        // = seg000:c91b snapshot the last frame to fb2; c91e jmp hnm_close_resource.
         self.copy_active_framebuffer_to_framebuffer_2();
         self.hnm_close();
     }
@@ -4663,7 +4662,7 @@ impl GameState {
     // that makes the reveal perceptible without pegging a core).
     pub(crate) fn blit_fb1_to_screen_effect(&mut self, effect: u8, rect: Rect) {
         match effect {
-            // = blit_mode_dispatch_table[8] (segvga:31e6 → segvga:33ca)
+            // = segvga:33ca blit_mode_dispatch_table[8] (segvga:31e6)
             //   blit_scroll_rect_down: the open reveal. The source origin steps
             //   from y2-2 up to y1 (si -= 0x280 per pass), each pass redrawing a
             //   taller bottom-anchored window of fb1 at the rect top.
@@ -4702,7 +4701,7 @@ impl GameState {
                 self.send_frame_to_display();
             }
 
-            // = blit_mode_dispatch_table[9] (segvga:31e6 → segvga:3429)
+            // = segvga:3429 blit_mode_dispatch_table[9] (segvga:31e6)
             //   blit_scroll_rect_up: the close reveal. The block height bx steps
             //   down by six per pass (110, 104, …, 2, then a final 0 pass);
             //   blit_scroll_rect_up has no tail vga_copy_rect (its fill blocks
@@ -4735,7 +4734,7 @@ impl GameState {
                 }
             }
 
-            // = blit_mode_dispatch_table[0] (segvga:31e6 → segvga:3581)
+            // = segvga:3581 blit_mode_dispatch_table[0] (segvga:31e6)
             //   blit_zoom_shimmer: blit the rect's interior from the clean
             //   fb1 source (ds, per the c0d6/c0da buffer setup) into the
             //   screen (es) at 2x scale around the rect top-left, cycling
@@ -4788,7 +4787,7 @@ impl GameState {
                 }
             }
 
-            // = blit_mode_dispatch_table[5] (segvga:31e6 → segvga:3500)
+            // = segvga:3500 blit_mode_dispatch_table[5] (segvga:31e6)
             //   blit_water_ripple — one pass per call (the vision-dream
             //   shimmer task fires it every 6 ticks): the rect's rows copy
             //   from fb1 with a per-row horizontal shift from the wave table
@@ -4852,7 +4851,7 @@ impl GameState {
 
         // = seg000:c0c5 mov al,0ch; call blit_fb1_to_screen_effect → vga_effect_dispatch index 6
 
-        // = transition_tick. Draws this frame's ripple band into the screen
+        // = segvga:276c transition_tick. Draws this frame's ripple band into the screen
         // buffer and returns the engine's new wipe column.
         let cx = gfx::transition_tick(self);
         // DOS draws straight to VGA memory, so the ripple is visible as it is

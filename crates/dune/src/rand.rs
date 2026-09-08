@@ -31,11 +31,11 @@ impl GameState {
     // rand_masked's) until the masked draw lands within range. Drives the CD-
     // playlist shuffle (music_cd_playlist_shuffle) among others.
     pub(crate) fn rand_iterated(&mut self, max: u16) -> u16 {
-        // = e3e1..e3e5 max == 0 returns 0 immediately (ax is already 0).
+        // = seg000:e3e1..e3e5 max == 0 returns 0 immediately (ax is already 0).
         if max == 0 {
             return 0;
         }
-        // = e3e7..e3f0 the mask: 0xffff shifted left once per bit of max, inverted.
+        // = seg000:e3e7..e3f0 the mask: 0xffff shifted left once per bit of max, inverted.
         let mut mask = 0xffffu16;
         let mut ax = max;
         while ax != 0 {
@@ -43,7 +43,7 @@ impl GameState {
             ax >>= 1;
         }
         mask = !mask;
-        // = loc_0e3f2 the retry loop: redraw while the masked value exceeds max.
+        // = seg000:e3f2 loc_0e3f2 the retry loop: redraw while the masked value exceeds max.
         loop {
             let product = (self.rand_iterated_seed as u32).wrapping_mul(0xcbd1);
             let seed_new = ((product & 0xffff) as u16).wrapping_add(1);
@@ -51,7 +51,7 @@ impl GameState {
             let lo = seed_new >> 8;
             let hi = ((product >> 16) & 0xff) as u16;
             let val = ((hi << 8) | lo) & mask;
-            // = e404 cmp ax,bx; ja loc_0e3f2.
+            // = seg000:e404 cmp ax,bx; ja loc_0e3f2.
             if val <= max {
                 return val;
             }

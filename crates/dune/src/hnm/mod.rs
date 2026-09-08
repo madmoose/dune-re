@@ -118,10 +118,10 @@ impl GameState {
     // the single-buffer port reads the whole resource into hnm_bytes and parses
     // it in place.
     pub(crate) fn hnm_read_header(&mut self) {
-        // = c93c
+        // = seg000:c93c
         self.hnm_active_video_id = self.hnm_video_id;
 
-        // = c942 hnm_get_res_entry_by_index / c945: entry->unk0 is the resource
+        // = seg000:c942 hnm_get_res_entry_by_index / c945: entry->unk0 is the resource
         // flag word (current_hnm_resource_flag, seg001:dbfe). The HIGH byte is the
         // playback rate for clips without SD audio (see hnm_load_first_frame). The
         // LOW byte is a decode/streaming bitfield:
@@ -145,25 +145,25 @@ impl GameState {
         let res = &HNM_RESOURCES[self.hnm_video_id as usize];
         self.hnm_resource_data = res.data;
 
-        // = c94d open_res_or_file_or_die. Single-buffer port: read it all now.
+        // = seg000:c94d open_res_or_file_or_die. Single-buffer port: read it all now.
         let bytes = self
             .dat_file
             .read_raw(res.name)
             .unwrap_or_else(|e| panic!("Failed to open HNM resource {}: {e}", res.name));
 
-        // = c96b hnm_read_header_size: first word = total header size. The frame
+        // = seg000:c96b hnm_read_header_size: first word = total header size. The frame
         // offsets in the table are relative to the end of the header.
         let header_size = read_le_u16(&bytes, 0);
         self.hnm_header_size = header_size;
 
-        // = c9a9 apply_palette + c9ad: the palette follows the size word.
+        // = seg000:c9a9 apply_palette + c9ad: the palette follows the size word.
         // Palette::apply_palette_update applies the entries AND skips the trailing
         // 0xff padding, returning the bytes consumed, so the frame-offset table
         // begins right after.
         let pal_size = self.apply_palette_update(&bytes[2..]) as usize;
         let table = 2 + pal_size;
 
-        // = c9b4..c9bd: the first frame is table slot 0, or the slot 0x10 bytes
+        // = seg000:c9b4..c9bd: the first frame is table slot 0, or the slot 0x10 bytes
         // in (entry index 4) when resource flag bit 2 is set.
         let slot = if self.hnm_resource_data & 4 != 0 {
             0x10
@@ -171,10 +171,10 @@ impl GameState {
             0
         };
 
-        // = c9bf: rel = first-frame offset, relative to the header end.
+        // = seg000:c9bf: rel = first-frame offset, relative to the header end.
         let rel = read_le_u32(&bytes, table + slot) as usize;
 
-        // = c9c6: cache the absolute first-frame position for hnm_prefetch. DOS
+        // = seg000:c9c6: cache the absolute first-frame position for hnm_prefetch. DOS
         // adds the file offset (already advanced past the header by header_size);
         // the resource buffer starts at 0 here, so the body sits at
         // header_size + rel.
@@ -225,7 +225,7 @@ impl GameState {
     // ported reader.
     fn hnm_reset_frame_counters(&mut self) {
         self.hnm_frame_counter = 0;
-        // = ce07 hnm_counter_2 = 0; ce13 hnm_counter_4 = -1.
+        // = seg000:ce07 hnm_counter_2 = 0; ce13 hnm_counter_4 = -1.
         self.hnm_counter_2 = 0;
         self.hnm_counter_4 = 0xffff;
     }
@@ -246,15 +246,15 @@ impl GameState {
     // belongs to the streaming reader the single-buffer port omits. (Named to
     // avoid clashing with the existing HnmDecoder-based `hnm_load_first_frame`.)
     pub fn hnm_open_and_decode_first_frame(&mut self, id: u16) {
-        // = ca1b call hnm_open_and_load_palette — store id, reset state, read
+        // = seg000:ca1b call hnm_open_and_load_palette — store id, reset state, read
         // the header and apply the header palette.
         self.hnm_open(id);
-        // = ca20 call hnm_open_at_body_start — seat the cursor at the body.
+        // = seg000:ca20 call hnm_open_at_body_start — seat the cursor at the body.
         self.hnm_open_at_body_start();
-        // = ca2a..ca3a decode the first frame. (ca37 decode_sd_block — HNM audio
+        // = seg000:ca2a..ca3a decode the first frame. (ca37 decode_sd_block — HNM audio
         // is not ported yet.)
         let _ = self.hnm_decode_frame();
-        // = ca40 advance to the next frame. DOS calls hnm_reset_buffers here
+        // = seg000:ca40 advance to the next frame. DOS calls hnm_reset_buffers here
         // (ca3d) to clear the streaming scratch and bumps hnm_frame_counter; in
         // the single-buffer port the only state to carry forward is the body
         // cursor, which hnm_advance_to_next_frame steps past frame 0.
@@ -268,18 +268,18 @@ impl GameState {
     // the HnmDecoder path. (Named to avoid clashing with the existing
     // HnmDecoder-based `hnm_do_frame`.)
     pub fn hnm_step_frame(&mut self) -> bool {
-        // = ca60: nothing to do once the clip is closed/finished.
+        // = seg000:ca60: nothing to do once the clip is closed/finished.
         if self.hnm_bytes.is_none() {
             return false;
         }
 
-        // = loc_0cabf: later frames stage to framebuffer_1, or the back buffer
+        // = seg000:cabf loc_0cabf: later frames stage to framebuffer_1, or the back buffer
         // when resource flag bit 6 is set. The port has no back buffer, so it
         // records Fb1 either way (the composite still lands in framebuffer_active;
         // see hnm_decode_frame).
         self.hnm_framebuffer = crate::FbId::Fb1;
 
-        // = loc_0caa0/cab4: the body ends with an 'mm' (0x6d6d) record. Reaching
+        // = seg000:caa0/cab4 loc_0caa0: the body ends with an 'mm' (0x6d6d) record. Reaching
         // it on a looping clip (resource flag bit 0) rewinds to the body start;
         // a non-looping clip that somehow steps onto it is finished. Normal play
         // sets hnm_finished after the last real frame below, so this is a guard.
@@ -339,7 +339,7 @@ impl GameState {
                     self.hnm_lop_queue_bridge();
                 }
             } else {
-                // = loc_0cb4c: mark finished and release the resource.
+                // = seg000:cb4c loc_0cb4c: mark finished and release the resource.
                 self.hnm_finished = true;
                 self.hnm_close();
                 return false;
@@ -368,10 +368,10 @@ impl GameState {
             return true;
         }
 
-        // = ca80..ca89: apply any pending palette chunk and blit the frame (both
+        // = seg000:ca80..ca89: apply any pending palette chunk and blit the frame (both
         // folded into hnm_decode_frame).
         let _ = self.hnm_decode_frame();
-        // = ca8c loc_0cc4e: step the cursor to the next frame.
+        // = seg000:ca8c loc_0cc4e: step the cursor to the next frame.
         self.hnm_advance_to_next_frame();
 
         // If the next record is the end marker (or the buffer is exhausted) and
@@ -426,7 +426,7 @@ impl GameState {
         self.hnm_lop_remaining = 4;
     }
 
-    // = seg000:loc_0cc4e — step past the current frame. DOS advances its consume
+    // = seg000:cc4e loc_0cc4e — step past the current frame. DOS advances its consume
     // cursor by the frame's size word and decrements the buffered-byte count; the
     // single-buffer port only advances the body cursor and bumps the frame
     // counters.
@@ -496,7 +496,7 @@ impl GameState {
         // intro logos use 0, the game-area clips (CREDITS/MTG/PLANT/VER) use 24.
         let y_offset = self.hnm_y_offset;
 
-        // = ca2e es:lodsw — the frame opens with its total size word.
+        // = seg000:ca2e es:lodsw — the frame opens with its total size word.
         let frame_size = read_le_u16(bytes, frame_pos) as usize;
         let frame_end = frame_pos + frame_size;
         let mut r = Cursor::new(&bytes[frame_pos + 2..frame_end]);
@@ -508,7 +508,7 @@ impl GameState {
         loop {
             let block_type = r.read_be_u16()?;
             match block_type {
-                // = ccf4 loc_0cd0c 'sd': digital-audio chunk. Capture its payload
+                // = seg000:ccf4 loc_0cd0c 'sd': digital-audio chunk. Capture its payload
                 // (the size word counts the 4-byte block header) for the audio
                 // orchestration to wrap as a VOC; hnm_take_sd_block consumes it.
                 BLOCK_TYPE_SD => {
@@ -517,7 +517,7 @@ impl GameState {
                     std::io::Read::read_exact(&mut r, &mut sd)?;
                     self.hnm_sd_block = Some(sd);
                 }
-                // = ccf4 loc_0cd25 'pl': palette chunk. DOS records its offset and
+                // = seg000:ccf4 loc_0cd25 'pl': palette chunk. DOS records its offset and
                 // applies it from hnm_handle_pal_chunk (seg000:ce3b); applying it
                 // inline here is equivalent.
                 BLOCK_TYPE_PL => {
@@ -526,10 +526,10 @@ impl GameState {
                         .apply_palette_update(&r.get_ref()[r.position() as usize..])?;
                     r.seek_relative(block_size as i64 - 4)?;
                 }
-                // = ccf4 loc_0cd37 'mm': the streaming loop/redirect marker. The
+                // = seg000:ccf4 loc_0cd37 'mm': the streaming loop/redirect marker. The
                 // whole resource is resident here, so treat it as end-of-frame.
                 BLOCK_TYPE_MM => break,
-                // = ccf4 loc_0cd4e: the video chunk carrying the frame pixels.
+                // = seg000:ccf4 loc_0cd4e: the video chunk carrying the frame pixels.
                 _ => {
                     r.seek_relative(-2)?;
                     let frame_header = FrameHeader::new(&mut r)?;
@@ -539,7 +539,7 @@ impl GameState {
                     w = frame_header.width();
                     h = frame_header.height();
 
-                    // = cd6d..cd7c: a compressed chunk is HSQ-packed; unpack it
+                    // = seg000:cd6d..cd7c: a compressed chunk is HSQ-packed; unpack it
                     // into scratch before blitting.
                     if frame_header.is_compressed() {
                         r.seek_relative(6)?;

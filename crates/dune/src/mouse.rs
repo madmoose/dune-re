@@ -85,7 +85,7 @@ pub struct CursorShape {
     pub or_mask: [u16; 16],
 }
 
-// = seg001:cursor_image_ptr targets — the cursor shapes vga_draw_cursor renders.
+// = seg001:2582 cursor_image_ptr targets — the cursor shapes vga_draw_cursor renders.
 // get_mouse_cursor_image_addr (seg000:dc6a) picks between the arrow, the busy
 // hand (seg001:25c8) and the four map-edge travel arrows (up/right/down/left
 // at seg001:260c/2650/2694/26d8) by hover region against the mouse_nav_rect
@@ -100,7 +100,7 @@ pub enum CursorShapeId {
     Left,
 }
 
-// = seg001:cursor_shape_arrow — the default arrow, hotspot (0, 0).
+// = seg001:2584 cursor_shape_arrow — the default arrow, hotspot (0, 0).
 pub const CURSOR_ARROW: CursorShape = CursorShape {
     hotspot_x: 0,
     hotspot_y: 0,

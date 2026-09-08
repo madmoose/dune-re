@@ -103,7 +103,7 @@ impl GameState {
         }
         // = seg000:1811 mov _byte_2C316_ui_hud_head_animating_down,1.
         self.ui_hud_head_animating_down = true;
-        // = seg000:181e..1832 (inner ui_hud_head_animate_down loop) lower
+        // = seg000:181e..1832 ui_hud_head_animate_down_loop lower
         //   ui_hud_head_index toward 0, redrawing and waiting 8 ticks per step.
         while self.ui_hud_head_index != 0 {
             self.ui_hud_head_index -= 1;

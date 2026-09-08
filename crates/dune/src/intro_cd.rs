@@ -810,7 +810,7 @@ impl GameState {
                 }
             }
         }
-        // = loc_0391d / segvga:0ad7 vga_fade_step(al=countdown, bx=0x180, cx=0xf0):
+        // = seg000:391d loc_0391d / segvga:0ad7 vga_fade_step(al=countdown, bx=0x180, cx=0xf0):
         // advance each of palette[128..207] by
         //   (palette_to_transition_from[i] - palette[i]) / countdown
         // (signed integer division, truncates toward zero, matching idiv).
@@ -939,7 +939,7 @@ impl GameState {
             .read("BACK.HSQ")
             .expect("failed to read BACK.HSQ");
         let sprite_sheet = SpriteSheet::from_slice(&back).expect("failed to parse BACK.HSQ");
-        // = open_spritesheet -> apply_sprite_sheet_palette: BACK.HSQ
+        // = seg000:c1aa apply_sprite_sheet_palette after open_spritesheet: BACK.HSQ
         // carries the red-background palette.
         sprite_sheet
             .apply_palette_update(&mut self.palette)
@@ -1253,12 +1253,12 @@ impl GameState {
             // -64, -32, 0).
             let mut dx: i16 = -96;
             loop {
-                // = copy_game_area_to_screen_fb2_to_fb1: restore the clean Baron.
+                // = seg000:c43e copy_game_area_to_screen_fb2_to_fb1: restore the clean Baron.
                 s.framebuffer.copy_from(&s.framebuffer_saved);
-                // = draw_sprite_clipped(5/6, dx, 13): the guard pair at the
+                // = seg000:c305 draw_sprite_clipped(5/6, dx, 13): the guard pair at the
                 // current slide x, clipped to the game area.
                 s.draw_sprite_list_clipped_to_game_area(&[(5, dx, 13), (6, dx, 13)], sheet);
-                // = present_game_area: copy the game area fb1 -> screen and present.
+                // = seg000:c4dd present_game_area: copy the game area fb1 -> screen and present.
                 s.gfx_copy_whole_framebuf_to_screen();
                 s.present_transition_frame();
 
@@ -1555,7 +1555,7 @@ impl GameState {
     // = seg000:0661 play_CRYO_OR_CRYO2_HNM. Shared body for CRYO.HNM and
     // CRYO2.HNM: spin frames until completion, no per-frame work.
     fn play_cryo_or_cryo2_hnm(&mut self) {
-        // = set_fb1_as_active_framebuffer — decode into fb1, then copy to screen.
+        // = seg000:c07c set_fb1_as_active_framebuffer — decode into fb1, then copy to screen.
         self.set_fb1_as_active_framebuffer();
         loop {
             // = seg000:0664 any_key_pressed; 0667 jb -> ret with CF=1 — a keypress

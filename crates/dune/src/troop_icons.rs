@@ -228,7 +228,7 @@ impl GameState {
         })
     }
 
-    // = seg000:c58d troop_icon_remove — remove the troop icon at `index`:
+    // = seg000:c58a troop_icon_remove — remove the troop icon at `index`:
     // mark it hidden, repaint its rect, compact the list and fix up the
     // focused-icon slots.
     pub(crate) fn troop_icon_remove(&mut self, index: usize) {

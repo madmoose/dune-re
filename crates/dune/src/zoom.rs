@@ -66,12 +66,12 @@ const ZOOM_SEQ_FULL: [i8; 7] = [6, -1, 5, 4, 3, 2, 1]; // = seg001:2792
 const ZOOM_SEQ_RAND_A: [i8; 4] = [5, -1, 4, 3]; // = seg001:2789
 const ZOOM_SEQ_RAND_B: [i8; 3] = [4, -1, 3]; // = seg001:278e
 
-// = data_0dbe6 (set to 6 at seg000:0790): the minimum number of timer ticks
+// = seg000:dbe6 data_0dbe6 (set to 6 at seg000:0790): the minimum number of timer ticks
 // each zoom step is held (the loc_0c8ed frame-rate gate). game_ticks() is the
 // port's PIT counter equivalent.
 const ZOOM_STEP_TICKS: u64 = 6;
 
-// = wait_a_bit(0x12c) at seg000:c8aa — the pause held on a -1 sequence entry.
+// = seg000:e387 wait_a_bit(0x12c) at seg000:c8aa — the pause held on a -1 sequence entry.
 const ZOOM_PAUSE_TICKS: u64 = 300;
 
 // = the output rectangle every kernel produces: 320×152, written from
@@ -79,7 +79,7 @@ const ZOOM_PAUSE_TICKS: u64 = 300;
 const ZOOM_OUT_W: usize = 320;
 const ZOOM_OUT_H: usize = 152;
 
-// = (numerator, denominator) of the zoom factor for scale selectors 1..7. The
+// (numerator, denominator) of the zoom factor for scale selectors 1..7. The
 // source offset for output pixel d is `d * den / num`, i.e. nearest-neighbour
 // down-sampling of the dest coordinate — exactly what each unrolled kernel does
 // by pixel replication.
@@ -108,7 +108,7 @@ fn zoom_blit(src: &[u8], dst: &mut [u8], y_offset: usize, col: i16, row: i16, sc
     // = cs:[fb_base_ofs] — the game-area top, applied to both source and dest.
     let fb_base = y_offset * ZOOM_OUT_W;
 
-    // = calc_fb_offset: clamp the base row to 199, then index the source.
+    // = segvga:0c10 calc_fb_offset: clamp the base row to 199, then index the source.
     let row = row.clamp(0, 199) as usize;
     let col = col.max(0) as usize;
     let base_src = fb_base + row * ZOOM_OUT_W + col;
@@ -161,7 +161,7 @@ impl GameState {
         vga_zoom_screen(self, col, row, scale);
         self.send_frame_to_display();
 
-        // = loc_0c8ed: spin until at least data_0dbe6 (6) ticks have elapsed.
+        // = seg000:c8ed loc_0c8ed: spin until at least data_0dbe6 (6) ticks have elapsed.
         let start = self.game_ticks();
         self.sleep_ticks(start, ZOOM_STEP_TICKS);
     }
@@ -205,7 +205,7 @@ impl GameState {
             &ZOOM_SEQ_RAND_B
         };
 
-        // = loc_0c8a3: lodsb; or al,al; jz end; jns step; (negative) pause.
+        // = seg000:c8a3 loc_0c8a3: lodsb; or al,al; jz end; jns step; (negative) pause.
         for &step in seq {
             if step == 0 {
                 break;
@@ -219,7 +219,7 @@ impl GameState {
             }
         }
 
-        // = loc_0c8bd: call present_game_area — final 1:1 reveal of the whole scene.
+        // = seg000:c8bd loc_0c8bd: call present_game_area — final 1:1 reveal of the whole scene.
         self.gfx_copy_whole_framebuf_to_screen();
         self.send_frame_to_display();
     }

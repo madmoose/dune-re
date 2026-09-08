@@ -206,10 +206,10 @@ fn glyph_height(size: TextSize) -> u8 {
 /// below, which render through [`Font`].
 #[derive(Clone, Copy, Default)]
 pub struct FontState {
-    // = _word_2CCDC/_word_2CCDE — the current pen position.
+    // = seg001:d82c font_draw_position_x / seg001:d82e font_draw_position_y — the current pen position.
     pub x: u16,
     pub y: u16,
-    // = _word_2CCE0/_word_2CCE2 — the line-start position (restored on newline).
+    // = seg001:d830 draw_position_x_start / seg001:d832 font_draw_position_y_start — the line-start position (restored on newline).
     pub start_x: u16,
     pub start_y: u16,
     // = the font_draw_fg_color/font_draw_bg_color pair at seg001:dbe4 — the

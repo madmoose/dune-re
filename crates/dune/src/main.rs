@@ -1435,6 +1435,9 @@ struct Args {
     dat_file: PathBuf,
 }
 
+// = seg000:e4ad parse_command_line [not needed] — DOS parses the PSP command
+// tail into the cmd_args_* flag bytes (memory, audio driver, language). The
+// port's options come from clap's `Args` instead.
 fn main() {
     let args = Args::parse();
     let skip_intro = args.skip_intro;
@@ -1505,6 +1508,12 @@ fn main() {
         // it too (--pcm off / --music off are the equivalent of the original game
         // not detecting a PCM / MIDI card). These gate both the game logic and the
         // actual audio backends, which the intro drives directly.
+        //
+        // = seg000:e76a initialize_audio [not needed] — DOS picks the PCM driver
+        // (DNSDB.BIN and friends) from the command-line audio nibble, loads it,
+        // runs its init vtable entry and retries without PCM on failure. The
+        // port's PCM and OPL backends are built in; --pcm / --music stand in for
+        // the card detection.
         game.set_pcm_enabled(args.pcm.is_on());
         game.let_voices_finish = args.let_voices_finish.is_on();
         // --music: the card-presence half lands now, so the intro honours it;

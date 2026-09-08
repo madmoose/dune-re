@@ -26,7 +26,7 @@ const PALACE_PLAN_ICONS: [(u16, i16, i16); 4] = [
     (0x0005, 193, 65),
 ];
 
-// = data_0120d / data_0120f — the plan origin (x, y) the marker offsets below
+// = seg000:120d data_0120d / data_0120f — the plan origin (x, y) the marker offsets below
 // are measured from (also the first PALACE_PLAN_ICONS entry's position).
 const PLAN_X: i16 = 182;
 const PLAN_Y: i16 = 12;
@@ -48,7 +48,7 @@ const PALACE_PLAN_ROOM_OFFSETS: [(u8, u8); 11] = [
     (1, 65),
 ];
 
-// = data_0143c — the PALACE PLAN's right-side rect (x0, y0, x1, y1), the region
+// = seg000:143c data_0143c — the PALACE PLAN's right-side rect (x0, y0, x1, y1), the region
 // vga_fill_rect backs and blit_fb1_to_screen_effect reveals.
 const PALACE_PLAN_RECT: Rect = Rect {
     x0: 160,
@@ -245,13 +245,13 @@ impl GameState {
     // mouse_handlers_01aba record, seg001:1aba), a no-op.
     fn palace_plan_idle(&mut self) {}
 
-    // = [si+2] of mouse_handlers_01aba — the LMB press is menu_callback_choice_
+    // [si+2] of mouse_handlers_01aba — the LMB press is menu_callback_choice_
     // exit_menu (0xd2e2): a click anywhere over the plan closes it.
     fn palace_plan_lmb(&mut self) {
         self.menu_callback_choice_exit_menu(0, 0);
     }
 
-    // = [si+4]/[si+6]/[si+8]/[si+0ah]/[si+0ch] of mouse_handlers_01aba — the RMB,
+    // [si+4]/[si+6]/[si+8]/[si+0ah]/[si+0ch] of mouse_handlers_01aba — the RMB,
     // release and drag slots are all the no-op loc_00f66.
     fn palace_plan_rmb(&mut self) {}
     fn palace_plan_release(&mut self) {}

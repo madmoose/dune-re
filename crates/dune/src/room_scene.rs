@@ -328,7 +328,7 @@ impl GameState {
     // bite is during startup before location_and_room/location_appearance are
     // valid).
     pub(crate) fn current_scene_exits(&self) -> Option<[u8; 4]> {
-        // = loc_03efe: index SCENE_DISPATCH by dh then offset by (dl - 1).
+        // = seg000:3efe loc_03efe: index SCENE_DISPATCH by dh then offset by (dl - 1).
         let dh = (self.location_and_room >> 8) as usize;
         let dl = (self.location_and_room & 0xff) as usize;
         if dl == 0 || dh >= SCENE_DISPATCH.len() {
@@ -959,7 +959,7 @@ impl GameState {
         // current-location record from the 1-based location slot bh.
         self.current_location_index = bh as u16 - 1;
 
-        // = loc_008f0 / open_SAL_resource / calc_SAL_index: locations[bh-1]
+        // = seg000:08f0 loc_008f0 / open_SAL_resource / calc_SAL_index: locations[bh-1]
         //   .apparence picks the SAL. open_SAL_resource maps a calc result of
         //   4 back to 3, so SAL indices clamp to the four SAL files.
         let apparence = self.locations[bh - 1].appearance;
@@ -967,12 +967,12 @@ impl GameState {
         // SAL files (draw_outdoor_backdrop keeps the unclamped 0..4 index).
         let sal_name = SAL_NAMES[calc_sal_index(apparence).min(3)];
 
-        // = loc_03efe: pick scene record (dl-1) in the table starting at
+        // = seg000:3efe loc_03efe: pick scene record (dl-1) in the table starting at
         //   SCENE_DISPATCH[dh]. The record's `background` byte drives draw_SAL.
         let record = &self.scene_records[SCENE_DISPATCH[dh] as usize + (dl - 1)];
         let background = record.background;
 
-        // = draw_SAL (seg000:3b59): split the background byte into a SAL room
+        // = seg000:3b59 draw_SAL: split the background byte into a SAL room
         //   sub-chunk and a sprite-sheet resource.
         let room = ((background - 1) & 0x0f) as usize;
         let sheet_index = ((background - 1) >> 4) as usize;
@@ -1238,7 +1238,7 @@ impl GameState {
             .read(sprite_sheet_name)
             .expect("failed to read sprite sheet");
         let sprite_sheet = SpriteSheet::from_slice(&sheet_data).expect("failed to parse sheet");
-        // = apply_sprite_sheet_palette: the sprite sheet carries the room's
+        // = seg000:c1aa apply_sprite_sheet_palette: the sprite sheet carries the room's
         // palette; it overlays the previous stage's palette with exactly the
         // entries the room draws with. NOT for sheet index 0 (GENERIC.HSQ):
         // draw_SAL skips the open_resource_by_index for it entirely
@@ -1252,7 +1252,7 @@ impl GameState {
                 .expect("failed to apply palette");
         }
 
-        // = sal_read_position_markers (seg000:3d83): resolve which person, if
+        // = seg000:3d83 sal_read_position_markers: resolve which person, if
         // any, stands in each of the room's standing slots. While a scripted
         // scene is active and its last action-00 step recorded a cast
         // placement list (seg000:3d95..3dae, data_04774/data_04778), the
@@ -1276,7 +1276,7 @@ impl GameState {
             ),
         };
 
-        // = sal_draw_character (seg000:3d2f) opens PERS.HSQ (RES_PERS_HSQ) only
+        // = seg000:3d2f sal_draw_character opens PERS.HSQ (RES_PERS_HSQ) only
         // when a person is actually present. open_spritesheet applies the
         // sheet's palette update; DOS restores the previously active bank after
         // each character (seg000:3d7f/3d80 pop ax; jmp open_resource_by_index),
@@ -1312,7 +1312,7 @@ impl GameState {
         if let Some(character_sheet) = character_sheet {
             renderer.set_character_sheet(character_sheet);
         }
-        // = sal_draw_character_entry's `test room_render_flags, 81h` gate
+        // = seg000:3d12 sal_draw_character_entry's `test room_render_flags, 81h` gate
         // (seg000:3d12): bit 0 or 7 set suppresses the standing person sprites.
         // The dialogue-zoom re-render (zoom_room_to_dialogue_speaker) sets bit 7
         // so the close-up backdrop behind the talking head carries no tiny figure.
@@ -1325,7 +1325,7 @@ impl GameState {
             .draw(&options, &mut self.framebuffer)
             .expect("failed to draw room");
 
-        // = loc_03ae9 — clear character_x_table/character_y_table (seg001:47f8)
+        // = seg000:3ae9 loc_03ae9 — clear character_x_table/character_y_table (seg001:47f8)
         // to 0xffff (absent), then = sal_draw_character (seg000:3d2f) record each
         // drawn person's (x, y) anchor at [id*4], so person_hit_test_at_cursor can hit-test the
         // cursor against the on-screen people. Skipped along with the character
@@ -1455,7 +1455,7 @@ impl GameState {
         // = seg000:395f call loc_0395f — sub-palette id for al (same hour-of-day
         //   table as sky_palette_id_from_game_time).
         let sub = sky_palette_id_from_game_time(al);
-        // = open_sky_or_skydn_palette_al_sub_bl — resource + byte range from
+        // = seg000:3971 open_sky_or_skydn_palette_al_sub_bl — resource + byte range from
         //   sky_skydn_selector, shared with set_sky_palette.
         let (resource, dest_start, count) = if self.sky_skydn_selector != 0 {
             ("SKYDN.HSQ", 73, 151)
@@ -1646,7 +1646,7 @@ mod tests {
 
     #[test]
     fn throne_room_has_no_compass_exits() {
-        // = palace_rooms[9] at location_and_room=0x200a: every exit is a
+        // palace_rooms[9] at location_and_room=0x200a: every exit is a
         //   destination-room number (0x01..0x7F), so rebuild_and_draw_room_nav_panel
         //   hides every compass HUD arrow (the throne room reaches rooms 9, 5,
         //   and 4 to the N/E/S, but only via in-scene clicks, not the arrows).
@@ -1659,7 +1659,7 @@ mod tests {
 
     #[test]
     fn palace_room_1_has_down_compass_exit() {
-        // = palace_rooms[0] at location_and_room=0x2001: exits[2] = 0xfd is the
+        // palace_rooms[0] at location_and_room=0x2001: exits[2] = 0xfd is the
         //   only entry in the 0xfb..0xff compass-arrow range, so the DOWN arrow
         //   (exits[2]) is the only one the rebuild leaves visible.
         let dh = 0x2001usize >> 8;

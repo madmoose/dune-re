@@ -53,7 +53,7 @@ impl Tablat {
         2 * self.entry(y).len
     }
 
-    // = lng_units_per_cell_table (seg001:4880) — the longitude units spanned
+    // = seg001:4880 lng_units_per_cell_table — the longitude units spanned
     // by one map cell of the row: round(0x10000 / the row's byte length), ties
     // rounded down (DOS compares the division remainder against the row
     // half-length). DOS precomputes the 99-word table at startup, right after

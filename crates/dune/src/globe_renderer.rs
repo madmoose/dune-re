@@ -74,10 +74,10 @@ enum Half {
 pub struct GlobeRenderer {
     globdata: Vec<u8>,
     map: Vec<u8>,
-    // = RESOURCE_TABLAT (seg001:4948) with the fp fields recomputed per
+    // = seg001:4948 RESOURCE_TABLAT with the fp fields recomputed per
     // rotation (seg000:b9f6 recalculate_globe_rotation_table).
     rotation_lookup_table: [RotationEntry; MAX_TILT],
-    // = globe_tilt_window_table (seg001:8b77). DOS rebuilds a 196-word window
+    // = seg001:8b77 globe_tilt_window_table. DOS rebuilds a 196-word window
     // centred on the current tilt (seg000:ba2d build_globe_tilt_window_table);
     // the port precomputes the full section/latitude ramp once — south at the
     // low indices, north at the high — and indexes it with

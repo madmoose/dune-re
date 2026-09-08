@@ -274,29 +274,29 @@ pub(crate) const NAV_PANEL_BLANK: NavPanel = [
 /// `[si+6]`/`[si+0ah]` re-read the RMB `rmb`/`rmb_release`/`rmb_drag` slots at
 /// +4/+8/+0ch instead.
 pub(crate) struct MouseHandlers {
-    /// = `[si]` — the idle/hover handler, called when no button edge fired.
+    /// `[si]` — the idle/hover handler, called when no button edge fired.
     pub idle: fn(&mut GameState),
-    /// = `[si+2]` — the LMB press handler, called by the game loop
+    /// `[si+2]` — the LMB press handler, called by the game loop
     /// (game_loop_dispatch_lmb_press) ONLY when the shared ui_element hit-test
     /// finds no clickable element under the cursor. Room: fn_0d917_noop (no-op);
     /// mixer: mixer_panel_lmb (loc_0a576), which closes the panel on a click
     /// outside its rect. The hit-test + element dispatch itself is not in here.
     pub lmb: fn(&mut GameState),
-    /// = `[si+4]` — the RMB handler, called on a right-button press (`game_loop`
+    /// `[si+4]` — the RMB handler, called on a right-button press (`game_loop`
     /// selects this slot via the `rmb` flag in place of the `add si,2` bias).
     pub rmb: fn(&mut GameState),
-    /// = `[si+6]` — the LMB-release handler, called on the button-up edge
+    /// `[si+6]` — the LMB-release handler, called on the button-up edge
     /// (= seg000:d955). The mixer table's slot clears its drag target; the room
     /// table's is fn_0d917_noop (a no-op).
     pub release: fn(&mut GameState),
-    /// = `[si+8]` — the RMB-release handler, the right-button counterpart of
+    /// `[si+8]` — the RMB-release handler, the right-button counterpart of
     /// `release` (reached as `[si+6]` under the `add si,2` bias). Both tables wire
     /// it to a no-op (room fn_0d917_noop, mixer loc_00f66).
     pub rmb_release: fn(&mut GameState),
-    /// = `[si+0ah]` — the drag handler, called each pass the LMB is held
+    /// `[si+0ah]` — the drag handler, called each pass the LMB is held
     /// without an edge and the pointer moved, with the (dx, dy) motion delta.
     pub drag: fn(&mut GameState, i16, i16),
-    /// = `[si+0ch]` — the RMB-drag handler, the right-button counterpart of
+    /// `[si+0ch]` — the RMB-drag handler, the right-button counterpart of
     /// `drag` (reached as `[si+0ah]` under the `add si,2` bias). Both tables wire
     /// it to a no-op (room fn_0d917_noop, mixer loc_00f66).
     pub rmb_drag: fn(&mut GameState, i16, i16),
@@ -1123,7 +1123,7 @@ impl GameState {
         })
     }
 
-    // = seg000:x call word ptr bitfield_Paul_events[si] — invoke the matched
+    // = seg000:d93e call word ptr [di+0ch] — invoke the matched
     // ui_element's func_ptr handler. `button` mirrors DOS's al (the [data_0dc35]
     // click-button byte the handler reads).
     fn dispatch_ui_click(&mut self, i: usize) {

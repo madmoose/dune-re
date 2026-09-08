@@ -181,7 +181,7 @@ pub(crate) fn popup_anchor(index: usize) -> (i16, i16) {
         .unwrap_or(TALKING_HEAD_POPUP_ANCHOR[3])
 }
 
-// = lip_sync_frame_task (seg000:a7c2) advance cadence. The per-frame time is
+// = seg000:a7c2 lip_sync_frame_task advance cadence. The per-frame time is
 // `_word_21D32_audio_time_to_play_28224_samples` (the measured time to play the
 // 28224-sample FREQ.HSQ calibration clip) scaled by the fixed-point math
 // (×2048, then compared against the high word = ÷65536, i.e. ÷32 overall). The
@@ -201,21 +201,21 @@ pub struct TalkingHead {
     /// Parsed lip-sync data (last resource of `sheet`).
     pub lipsync: Lipsync,
 
-    /// = `_word_23C74_current_lip_sync_resource_id` ([47c4h]).
+    /// = seg001:47c4 `_word_23C74_current_lip_sync_resource_id` ([47c4h]).
     pub lip_sync_resource_id: u16,
-    /// = `_word_21756_talking_head_id` ([21756h]) — the PERS sprite-pair the
+    /// = seg001:22a6 `_word_21756_talking_head_id` ([21756h]) — the PERS sprite-pair the
     /// face maps to; used to build the `.voc` filename in Stage 3.
     pub talking_head_id: u16,
 
-    /// = `[1bf0h]` rect (x0, y0, x1, y1). Image-group coords are relative to
+    /// `[1bf0h]` rect (x0, y0, x1, y1). Image-group coords are relative to
     /// (x0, y0); loc_009c7 may shift x0/x1 right by `dx`.
     pub rect: (i16, i16, i16, i16),
 
-    /// = `data_047d0` current mouth value. 0 selects the random idle path
+    /// = seg000:47d0 `data_047d0` current mouth value. 0 selects the random idle path
     /// (`loc_0994f`); non-zero selects the speech animation (Stage 3).
     pub mouth: u8,
 
-    /// = `data_047d0` facing/expression index set by character_id_to_sprite.
+    /// = seg000:47d0 `data_047d0` facing/expression index set by character_id_to_sprite.
     /// 0 for the named-character heads (random idle); for the player (Paul) it
     /// is a game_time-derived index (`char_to_sprite_player`, loc_0917a) that pins BOTH the lively and
     /// the calm idle to animation `facing-1` (`loc_0994f` / `loc_09a7b`
@@ -228,7 +228,7 @@ pub struct TalkingHead {
     pub anim: usize,
     pub frame: usize,
 
-    /// = `data_047d1 & 0x10` — the idle has "settled". The lively idle
+    /// = seg000:47d1 `data_047d1 & 0x10` — the idle has "settled". The lively idle
     /// animations (0..3) move the mouth; once the [47ceh] idle countdown expires
     /// (`loc_09a3b`) the animator switches to the calm resting expression
     /// (`loc_09a7b` animation 4 = the last idle animation), which holds the mouth
@@ -236,7 +236,7 @@ pub struct TalkingHead {
     /// finishes so the mouth stops moving once the head goes quiet.
     pub settled: bool,
 
-    /// = `data_047ce` — the signed idle window budget, decremented each idle
+    /// = seg000:47ce `data_047ce` — the signed idle window budget, decremented each idle
     /// frame (`loc_099f6`). The lively phase starts it at `data_0478c * 4`
     /// (loc_09908): four frames per word of the last laid-out subtitle
     /// (`subtitle_word_count`). It is only tested at an animation end
@@ -547,11 +547,11 @@ impl GameState {
             Some(h) => (h.facing, h.lip_sync_resource_id, h.idle_anim_count()),
             None => return 0,
         };
-        // = 9a7b: al = data_047d0; 9a83 `jnz loc_09a9a` uses it as-is when set.
+        // = seg000:9a7b: al = data_047d0; 9a83 `jnz loc_09a9a` uses it as-is when set.
         let (al, mask): (u8, u16) = if facing != 0 {
             (facing, 0x0f18)
         } else {
-            // = 9a85 al = 5, bx = 0f38h; 9a8a..9a98 the Chani late-game bump.
+            // = seg000:9a85 al = 5, bx = 0f38h; 9a8a..9a98 the Chani late-game bump.
             let al = if lip_id == 7 && self.game_phase >= PHASE_C8_GAME_WON {
                 6
             } else {
@@ -559,7 +559,7 @@ impl GameState {
             };
             (al, 0x0f38)
         };
-        // = loc_09a9a `dec al` -> animation index (al-1).
+        // = seg000:9a9a loc_09a9a `dec al` -> animation index (al-1).
         let anim = (al.wrapping_sub(1) as usize).min(idle_count - 1);
         if let Some(head) = self.talking_head.as_mut() {
             head.anim = anim;
@@ -588,12 +588,12 @@ impl GameState {
     // calm resting idle right away. So by the time the line finishes the head is
     // already in the paused calm idle — no lively "talk" frames play afterward.
     fn idle_settle_for_voice(&mut self) {
-        // = 9f1c setup_lip_sync_data_from_current (the port composites on demand).
-        // = 9f1f or data_047d1, 10h.
+        // = seg000:9f1c setup_lip_sync_data_from_current (the port composites on demand).
+        // = seg000:9f1f or data_047d1, 10h.
         if let Some(head) = self.talking_head.as_mut() {
             head.settled = true;
         }
-        // = 9f24 call loc_09a7b; 9f27 xor ah,ah (force the no-pause path);
+        // = seg000:9f24 call loc_09a7b; 9f27 xor ah,ah (force the no-pause path);
         //   9f29 call loc_09a60; 9f2c [data_047c6] = si.
         let r = self.idle_select_calm_animation();
         self.idle_start_window(r);
@@ -611,7 +611,7 @@ impl GameState {
     //     facing derived from game_time.
     fn character_id_to_sprite(&self, id: u8) -> (usize, u8) {
         if id >= 0x11 {
-            // = char_to_sprite_player (loc_0917a): the player's idle expression
+            // = seg000:917a char_to_sprite_player (loc_0917a): the player's idle expression
             // (talking_head_idle_expr / data_047d0) tracks the in-game clock so
             // Paul visibly ages across the game. ah = min((game_time*4)>>8, 8) ==
             // min(game_time>>6, 8), doubled, + (desert_exhaustion_counter >= 16), + 1.
@@ -628,7 +628,7 @@ impl GameState {
             anim += 1;
             (HEAD_PAUL, anim)
         } else if id as usize == HEAD_SMUG {
-            // = char_to_sprite_smug (seg000:912f): the smuggler idle expression
+            // = seg000:912f char_to_sprite_smug: the smuggler idle expression
             // follows the current location: ah = [current_location_ptr][0] =
             // Location.first_name (the COMMAND name id 1..12); data_047d0 =
             // (first_name >> 1) + 1 — a different idle face per smuggler den.
@@ -640,7 +640,7 @@ impl GameState {
             };
             (HEAD_SMUG, facing)
         } else if id >= 0x0e {
-            // = char_to_sprite_walk_facing (seg000:913b): id 0x0e..0x10 (the
+            // = seg000:913b char_to_sprite_walk_facing: id 0x0e..0x10 (the
             // FRM1..FRM3 generic Fremen heads). The sprite index and facing
             // derive from the classified troop's id — fremen1_troop_ptr for
             // person 0x0e, fremen2_troop_ptrs[selected_fremen2_index]
@@ -683,7 +683,7 @@ impl GameState {
         if !self.open_talking_head_resource(lip_sync_resource_id, dx) {
             return;
         }
-        // = copy_active_framebuffer_to_framebuffer_2: save the freshly-drawn
+        // = seg000:c412 copy_active_framebuffer_to_framebuffer_2: save the freshly-drawn
         // room (active = fb1 during init) into fb2, the clean backdrop the head
         // is composited over and restored from each frame. DOS does this in the
         // room render around the setup, not inside seg000:91a0 — which is why
@@ -692,7 +692,7 @@ impl GameState {
         // the clean map snapshot the troop icons repaint from.
         self.copy_active_framebuffer_to_framebuffer_2();
 
-        // = loc_0978e first render: pick a random idle animation and draw its
+        // = seg000:978e loc_0978e first render: pick a random idle animation and draw its
         // first frame onto the backdrop. This composites into the offscreen
         // framebuffer ONLY — like every other intro init, the screen is left
         // untouched so play_intro's stage transition reveals the room+head at
@@ -711,7 +711,7 @@ impl GameState {
         }
         self.composite_head_frame(anim, frame);
 
-        // = copy_non_pcm_lip_sync_data_and_draw_talking_head's [460a]->[4540]
+        // = seg000:9d16 copy_non_pcm_lip_sync_data_and_draw_talking_head's [460a]->[4540]
         // copy (seg000:9d18): record this first pose as the previous frame so
         // every later tick diffs against it and redraws incrementally
         // (redraw_head_frame_incremental) rather than wiping the whole head
@@ -764,7 +764,7 @@ impl GameState {
     /// troop-contact popup calls it directly and draws its own frame into the
     /// popup's head box (draw_talking_head_in_box).
     pub(crate) fn open_talking_head_resource(&mut self, lip_sync_resource_id: u8, dx: i16) -> bool {
-        // = character_id_to_sprite (seg000:9123) + open_talking_head_resource.
+        // = seg000:9123 character_id_to_sprite + open_talking_head_resource.
         let (head, facing) = self.character_id_to_sprite(lip_sync_resource_id);
         // = seg000:91bb cmp ax,[talking_head_id]; jz open_talking_head_resource
         // — the same head stays up untouched: DOS's per-line setup only
@@ -808,7 +808,7 @@ impl GameState {
             .unwrap_or_else(|_| panic!("failed to read {file}"));
         let sheet =
             SpriteSheet::from_slice(&data).unwrap_or_else(|_| panic!("failed to parse {file}"));
-        // = open_spritesheet -> apply_sprite_sheet_palette.
+        // = seg000:c1aa apply_sprite_sheet_palette after open_spritesheet.
         sheet
             .apply_palette_update(&mut self.palette)
             .expect("failed to apply portrait palette");
@@ -819,7 +819,7 @@ impl GameState {
             .expect("portrait sheet has no lip-sync resource");
         let lipsync = Lipsync::from_bytes(lipsync_data);
 
-        // = loc_009c7: shift the rect right by `dx`, clamping x1 ≤ 320.
+        // = seg000:09c7 loc_009c7: shift the rect right by `dx`, clamping x1 ≤ 320.
         let (mut x0, y0, mut x1, y1) = lipsync.rect;
         if x0 < dx {
             x0 += dx;
@@ -830,7 +830,7 @@ impl GameState {
             sheet,
             lipsync,
             lip_sync_resource_id: lip_sync_resource_id as u16,
-            // = character_id_to_sprite(al) = the returned head/sprite-pair index
+            // = seg000:9123 character_id_to_sprite(al) = the returned head/sprite-pair index
             // (id itself for ids < 0x0d, HEAD_PAUL for the player).
             talking_head_id: head as u16,
             rect: (x0, y0, x1, y1),
@@ -839,7 +839,7 @@ impl GameState {
             anim: 0,
             frame: 0,
             settled: false,
-            // = loc_09908 (seg000:9918..9921): data_047ce = data_0478c * 4 —
+            // = seg000:9908 loc_09908 (seg000:9918..9921): data_047ce = data_0478c * 4 —
             //   four lively frames per word of the last laid-out subtitle.
             idle_countdown: self.subtitle_word_count as i32 * 4,
             voc_lipsync: Vec::new(),
@@ -899,7 +899,7 @@ impl GameState {
             (head.settled, calm_len)
         };
 
-        // = loc_09a40 — the settled (calm) idle.
+        // = seg000:9a40 loc_09a40 — the settled (calm) idle.
         if settled {
             if self.talking_head.as_ref().unwrap().idle_countdown <= 0 {
                 // = seg000:9a4f call loc_09ab4; jb loc_099f6 — a line that
@@ -907,17 +907,17 @@ impl GameState {
                 // and the advance below plays that animation instead of a calm
                 // window.
                 if !self.head_sign_tick() {
-                    // = loc_09a48 budget spent -> loc_09a7b. `or ah,ah; jnz loc_09a1c`
+                    // = seg000:9a48 loc_09a48 budget spent -> loc_09a7b. `or ah,ah; jnz loc_09a1c`
                     // holds the current frame (a pause) while the high byte is set.
                     let r = self.idle_select_calm_animation();
                     if (r >> 8) != 0 {
                         return;
                     }
-                    // = loc_09a60 + loc_09a74: start a window at a random frame offset.
+                    // = seg000:9a60 loc_09a60 + loc_09a74: start a window at a random frame offset.
                     self.idle_start_window(r);
                 }
             } else {
-                // = loc_09a4d `jg loc_099f6`: still inside the window — advance.
+                // = seg000:9a4d loc_09a4d `jg loc_099f6`: still inside the window — advance.
                 let head = self.talking_head.as_mut().unwrap();
                 head.frame = (head.frame + 1) % calm_len;
             }
@@ -932,7 +932,7 @@ impl GameState {
             return;
         }
 
-        // = loc_0994f path — the lively idle.
+        // = seg000:994f loc_0994f path — the lively idle.
         let advance = {
             let head = self.talking_head.as_mut().unwrap();
             head.idle_countdown -= 1; // = loc_099f6 `dec data_047ce`
@@ -943,7 +943,7 @@ impl GameState {
                 .map(|a| a.frames.len())
                 .unwrap_or(0);
             let advance = head.frame + 1 >= animation_len;
-            // = loc_09a1d `cmp data_047ce,0; js loc_09a3b` — settle at the boundary
+            // = seg000:9a1d loc_09a1d `cmp data_047ce,0; js loc_09a3b` — settle at the boundary
             // once the budget is spent; the settled branch takes over next tick.
             if advance && head.idle_countdown < 0 {
                 head.settled = true;
@@ -1018,7 +1018,7 @@ impl GameState {
         let letter = b'A' + dir_id;
         self.voc_filename[1] = letter;
         self.voc_filename[4] = letter;
-        // = loc_0a8b1 — one uppercase hex digit from the low nibble.
+        // = seg000:a8b1 loc_0a8b1 — one uppercase hex digit from the low nibble.
         let hex_digit = |v: u16| b"0123456789ABCDEF"[(v & 0xf) as usize];
         // = seg000:a8cb..a8e0 — bits 8..11, 4..7, 0..3 of the voc index.
         self.voc_filename[5] = hex_digit(voc_index >> 8);
@@ -1061,17 +1061,17 @@ impl GameState {
         let Some(head) = self.talking_head.as_ref() else {
             return;
         };
-        // = load_voc_and_lipsync_data (seg000:a6e6): the voc directory id is the
+        // = seg000:a6cc load_voc_and_lipsync_data (seg000:a6e6): the voc directory id is the
         // lip-sync id clamped to 0x0e (`cmp bl,0eh; jb +; mov bl,0eh`). The
         // player (0x2d) maps to 'A'+0x0e = 'O' → the "PO" dir; named heads pass
         // through unchanged (Leto id 0 → 'A' → the "PA" dir).
         let dir_id = head.lip_sync_resource_id.min(0x0e) as u8;
 
-        // = loc_0a727 call create_voc_file_name_from_bx — build the name into
+        // = seg000:a727 loc_0a727 call create_voc_file_name_from_bx — build the name into
         // voc_filename.
         self.create_voc_file_name(voc_index, dir_id);
 
-        // = load_voc_and_lipsync_data -> voc_get_lipsync_data: read the .voc,
+        // = seg000:a6cc load_voc_and_lipsync_data -> voc_get_lipsync_data: read the .voc,
         // pull the type-5 comment-block mouth stream and the type-1 PCM block.
         let data = match self.dat_file.read(&self.voc_filename_str()) {
             Ok(data) => data,
@@ -1086,12 +1086,12 @@ impl GameState {
                 data
             }
         };
-        // = voc_get_lipsync_data seg000:a85a
+        // = seg000:a83f voc_get_lipsync_data seg000:a85a
         let Some(voc) = crate::voc::parse(&data) else {
             return;
         };
 
-        // = loc_09efd 9f0f: cmp current_lip_sync_resource_id, 10h; jnb loc_09f19;
+        // = seg000:9efd loc_09efd 9f0f: cmp current_lip_sync_resource_id, 10h; jnb loc_09f19;
         //   call loc_09f1c — for an in-range head, settle into the calm idle as
         //   the line starts so it is already in the paused calm idle when the line
         //   ends (no lively "talk" frames afterward).
@@ -1106,7 +1106,7 @@ impl GameState {
         // (mark_talk_to_me_verb_talking, 0x90 '>>>> TALK TO ME <<<<').
         self.set_talk_to_me_verb_text(0x90);
 
-        // = loc_0a75c: start the Sound Blaster voice and seed the lip-sync
+        // = seg000:a75c loc_0a75c: start the Sound Blaster voice and seed the lip-sync
         // timing. pcm_stop_voc first (= seg000:a84a, inside
         // voc_get_lipsync_data), then stream this clip to the dnsdb driver in
         // PCM_VOICE_CHUNK pieces: the first chunk starts now, the second is
@@ -1135,7 +1135,7 @@ impl GameState {
             head.speaking = true;
         }
 
-        // = loc_0a75c add_frame_task(bp=0, lip_sync_frame_task). Polls the PCM
+        // = seg000:a75c loc_0a75c add_frame_task(bp=0, lip_sync_frame_task). Polls the PCM
         // sample clock every tick and advances the mouth.
         self.add_frame_task(0, crate::TaskId::TalkingHeadVoc);
     }
@@ -1228,7 +1228,7 @@ impl GameState {
                 return;
             };
             let played = played.saturating_sub(head.voc_baseline);
-            // = is_voc_pcm_playing / pcm_test_audio_done: no audio, or the
+            // = seg000:abcc is_voc_pcm_playing / pcm_test_audio_done: no audio, or the
             // clip has drained → over.
             if head.voc_total_samples == 0 || played >= head.voc_total_samples {
                 (0usize, 0usize, 0u8, true)
@@ -1238,7 +1238,7 @@ impl GameState {
                 // stepping and only pumps the stream until the audio drains.
                 (0usize, 0usize, 0u8, false)
             } else {
-                // = lip_sync_frame_task timing: the mouth advances one stream
+                // = seg000:a7c2 lip_sync_frame_task timing: the mouth advances one stream
                 // value per fixed SAMPLES_PER_LIP_FRAME of audio, slaved to the
                 // SB sample clock. NOT spread over the whole clip — when the
                 // stream ends the last value holds while any trailing silence
@@ -1295,7 +1295,7 @@ impl GameState {
             return;
         }
 
-        // = set_lipsync_data_to_al `cmp al,[_byte_2D0DA_last_lipsync_data]; jz`
+        // = seg000:a82e set_lipsync_data_to_al `cmp al,[_byte_2D0DA_last_lipsync_data]; jz`
         // — only redraw when the mouth value changes.
         let changed = {
             let head = self.talking_head.as_mut().unwrap();
@@ -1545,10 +1545,11 @@ impl GameState {
         clip
     }
 
-    // = seg000:7ac1..7b09 (the tail of map_draw_troop_contact_popup) driving
-    // draw_talking_head_in_box -> draw_head_image_group_in_box — draw one
-    // (anim, frame) of the live head into the troop-contact popup's head box
-    // instead of at the head's own rect.
+    // = seg000:9d6a draw_talking_head_in_box — draw one (anim, frame) of the
+    // live head into the troop-contact popup's head box instead of at the
+    // head's own rect, one image group at a time through
+    // draw_head_image_group_in_box. Driven by seg000:7ac1..7b09, the tail of
+    // map_draw_troop_contact_popup.
     //
     // Every image lands at `image.xy + head.rect.origin - anchor + box.origin`
     // (draw_head_image_group_in_box's `add [1bf0]; sub [46d2]; add [47d4]`), i.e. the head is
@@ -1571,7 +1572,7 @@ impl GameState {
             x1: boxr.x1,
             y1: boxr.y1 + yoff,
         };
-        // = draw_head_image_group_in_box: image.xy + [1bf0] (the head rect
+        // = seg000:9d94 draw_head_image_group_in_box: image.xy + [1bf0] (the head rect
         //   origin) - [46d2] (the anchor) + [47d4] (the box origin).
         let (dx, dy) = (
             head.rect.0 - ax + boxr.x0,
@@ -1641,7 +1642,7 @@ impl GameState {
         let (rx0, ry0, _, _) = head.rect;
         let cur = flatten_frame(&head.lipsync, anim, frame_idx);
 
-        // = loc_09c2d: union the bounding boxes of the images in the symmetric
+        // = seg000:9c2d loc_09c2d: union the bounding boxes of the images in the symmetric
         // difference of the two frames (loc_09c54 walks each list looking for an
         // exact id+x+y match in the other; an unmatched image is "changed" and
         // expands the box via loc_09cc6). Seeded inverted — x0,y0 at the max
@@ -1655,7 +1656,7 @@ impl GameState {
             .filter(|i| !head.prev_images.contains(i))
             .chain(head.prev_images.iter().filter(|i| !cur.contains(i)))
         {
-            // = loc_09cc6: the image spans [left, left+w) × [top, top+h), with
+            // = seg000:9cc6 loc_09cc6: the image spans [left, left+w) × [top, top+h), with
             // the sprite header's width (&1ffh) and height (low byte).
             let Some(sprite) = head.sheet.get_sprite(id as u16 - 1) else {
                 continue;
@@ -1750,7 +1751,7 @@ impl GameState {
     }
 }
 
-// = setup_non_lip_sync_data_structure (seg000:9bee): flatten one (anim, frame)
+// = seg000:9bee setup_non_lip_sync_data_structure: flatten one (anim, frame)
 // pose into the [460ah] image list the incremental redraw diffs — every image
 // of every image group the frame references, as (sprite id, x, y).
 fn flatten_frame(lipsync: &Lipsync, anim: usize, frame_idx: usize) -> Vec<(u8, u8, u8)> {

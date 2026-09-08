@@ -783,7 +783,7 @@ impl GameState {
         presented
     }
 
-    // = loc_0a0c9 -> loc_09efd — load and play the current subtitle line's voice
+    // = seg000:a0c9 loc_0a0c9 -> loc_09efd — load and play the current subtitle line's voice
     // `.voc` over the lip-sync engine. Reads current_subtitle_id, which
     // show_voice_subtitle set. DOS runs this AFTER the spoken-line event fires.
     pub(crate) fn play_dialogue_voc(&mut self) {
@@ -834,7 +834,7 @@ impl GameState {
         // = seg000:a710..a726 — the dir_id == 0x0e troop special (voc index
         //   0x2c/0x2d retargets the lip-sync id to 0x0c) is not modelled.
 
-        // = loc_0a0c9 -> loc_09efd: load and play the voice .voc + lip-sync.
+        // = seg000:a0c9 loc_0a0c9 -> loc_09efd: load and play the voice .voc + lip-sync.
         self.play_talking_head_voc(voc_index);
     }
 
@@ -1184,7 +1184,7 @@ impl GameState {
                 //   present below would flash the balloon over the head.
                 self.recomposite_head_over_backdrop();
             }
-            // = 97c8 call update_screen_palette, 97cb jmp present_game_area.
+            // = seg000:97c8 call update_screen_palette, 97cb jmp present_game_area.
             self.update_screen_palette();
             self.present_game_area();
             // = seg000:a0bd cmp data_04774,0; jnz -> a0c5 call loc_02ebf — a
@@ -1297,7 +1297,7 @@ impl GameState {
             // = seg000:a157 callback_event_dialogue_line_09_speaker_
             //   dependent_effect_2.
             0x09 => self.dialogue_event_09_speaker_dependent(),
-            // = a1ed (0x0e) increase_final_attack_stage, a28e (0x0d) the
+            // = seg000:a1ed (0x0e) increase_final_attack_stage, a28e (0x0d) the
             //   command-menu/PALPLAN redraw — unported.
             _ => println!("dispatch_dialogue_line_event: unported event 0x{event:02x}"),
         }
@@ -1644,8 +1644,8 @@ impl GameState {
         if self.talking_head.is_none() {
             return;
         }
-        // = seg000:98cb..98d3 si = 1bf0h; [si+8] = 0; ui_hud_elements[20].flags
-        //   = 0 — retire the overlay's menu-stack entries.
+        // = seg000:98cb..98d3 si = 1bf0h; [si+8] = 0;
+        //   ui_hud_elements[20].flags = 0 — retire the overlay's menu-stack entries.
         self.ui_elements[19].flags = 0;
         self.ui_elements[20].flags = 0;
         // = seg000:98d9 call copy_rect_fb2_to_fb1 — restore the game area under
@@ -2043,7 +2043,7 @@ mod tests {
         assert_ne!(ofs, 0xffff, "fly-over block present");
         let word1 = u16::from_le_bytes([game.dialogue[ofs + 2], game.dialogue[ofs + 3]]);
         let phrase = (word1.swap_bytes() & 0x3ff) | 0x800;
-        // = play_dialogue_voc: ax = current_subtitle_id & 0xf3ff (the ah &= 0xf3
+        // = seg000:a6ee load_voc_and_lipsync_data: ax = current_subtitle_id & 0xf3ff (the ah &= 0xf3
         //   phrase-marker strip).
         let voc_index_pre = phrase & 0xf3ff;
         assert_ne!(game.voc_bases[0x10], 0, "fly-over bank base is built");

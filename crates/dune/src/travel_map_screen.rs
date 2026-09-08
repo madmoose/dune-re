@@ -719,7 +719,7 @@ impl GameState {
     pub(crate) fn map_position_to_screen(&self, x: u16, lat: i16) -> (i16, i16) {
         // = seg000:b649 cl = 2 on the full globe, else 0.
         let shift = if self.data_046eb & 0x80 != 0 { 2 } else { 0 };
-        // = data_0dcf6 / data_0dcf8 — the window centre, as map_draw_zoomed_
+        // = seg000:dcf6 data_0dcf6 / data_0dcf8 — the window centre, as map_draw_zoomed_
         // globe stores it: the fixed (0xa0, 0x4c) in full-map mode
         // (seg000:b6cc/b6d2), else derived from data_046e3_rect.
         let r = self.map_view_rect;
@@ -2908,13 +2908,13 @@ impl GameState {
         self.update_screen_palette();
     }
 
-    // = [si+4]/[si+6]/[si+8] of mouse_handlers_01ac8 — the RMB and both
+    // [si+4]/[si+6]/[si+8] of mouse_handlers_01ac8 — the RMB and both
     // release slots are the no-op loc_00f66.
     fn map_mouse_rmb(&mut self) {}
     fn map_mouse_release(&mut self) {}
     fn map_mouse_rmb_release(&mut self) {}
 
-    // = [si+0ah]/[si+0ch] of mouse_handlers_01ac8 — both drag slots re-run the
+    // [si+0ah]/[si+0ch] of mouse_handlers_01ac8 — both drag slots re-run the
     // hover tracker (map_mouse_hover_tracker).
     fn map_mouse_drag(&mut self, _dx: i16, _dy: i16) {
         self.map_mouse_hover_tracker();

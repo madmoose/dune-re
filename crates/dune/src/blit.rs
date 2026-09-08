@@ -1,3 +1,10 @@
+//! = segvga:0f5b vga_blit / segvga:1452 vga_blit_clipped — the VGA sprite
+//! blitter behind gfx_vtable_vga_blit and gfx_vtable_vga_blit_clipped (reached
+//! through the j_vga_blit / j_vga_blit_clipped stubs at segvga:010f / 0112).
+//! `Blitter` covers both: 4bpp and 8bpp sources, RLE rows, x/y flips, the
+//! scale selector, the palette offset and the optional clip rect. sprite.rs
+//! parses the sprite header words and sprite_blitter.rs drives this from a
+//! `Sprite`.
 #![allow(clippy::too_many_arguments)]
 
 use std::io::Cursor;

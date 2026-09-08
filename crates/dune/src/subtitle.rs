@@ -791,7 +791,7 @@ impl GameState {
                 y1: 0x47,
             };
             let lines = self.layout_lines(text, rect)?;
-            // = loc_09025 bx = 0x92 - subtitle_pen_y — the strip sits
+            // = seg000:9025 loc_09025 bx = 0x92 - subtitle_pen_y — the strip sits
             //   directly above the command panel.
             let h = (lines.len() as u16 * 10 + self.subtitle_pad_top) as i16;
             let rect = Rect {

@@ -1,3 +1,15 @@
+//! DUNE.DAT container reader. Every resource the port opens is read whole
+//! into a `Vec<u8>` from here, so DOS's fixed resource cache and its paging
+//! allocator have no counterpart.
+//!
+//! = seg000:eab7 memory_func_qq [not needed] — claim a page slot in the
+//! resource cache for a freshly loaded resource (stamps the page table at
+//! es:[si+172h] and bumps the XMS/EMS page limit).
+//!
+//! = seg000:f13f allocator_attempt_to_free_space [not needed] — pick the
+//! least-recently-used open resource (largest game_time delta in
+//! _word_2CF3C_open_res_info) and evict it to make room.
+
 use std::{
     fs::File,
     io::{BufReader, Cursor, ErrorKind, Read, Seek},
@@ -23,6 +35,10 @@ pub struct DatEntry {
 type Error = std::io::Error;
 
 impl DatFile {
+    // = seg000:e675 open_dune_dat — open DUNE.DAT and read its table of
+    // contents (read_dune_dat_toc): entry count, then per entry a 16-byte name,
+    // u32 size, u32 offset and a flag byte. DOS also folds the entries into
+    // its fixed resource index table; the port resolves entries by name.
     pub fn open<P: AsRef<Path>>(path: P) -> Result<DatFile, Error> {
         let file = File::open(path)?;
         let mut reader = BufReader::new(file);

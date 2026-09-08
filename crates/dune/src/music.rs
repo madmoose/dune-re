@@ -52,7 +52,7 @@ impl GameState {
     // checks win: special states and UI modes select fixed indices; otherwise
     // the index is derived from the location/room and the palace screen mode.
     fn music_situation_index(&self) -> u8 {
-        // = aa98 cmp [data_04774],0; jnz — a special state overrides everything,
+        // = seg000:aa98 cmp [data_04774],0; jnz — a special state overrides everything,
         // yielding index 0x0a only during game_phase 0x48.
         if self.is_dialogue_active {
             return if self.game_phase == PHASE_48_CHANI_MET {
@@ -61,7 +61,7 @@ impl GameState {
                 0
             };
         }
-        // = loc_0aaa7 — the normal cascade; each test that fires returns its index.
+        // = seg000:aaa7 loc_0aaa7 — the normal cascade; each test that fires returns its index.
         if self.pending_room_screen_request != 0 {
             return 0x0d; // = aaa7
         }
@@ -77,18 +77,18 @@ impl GameState {
         if self.data_000ea > 0 {
             return 4; // = aac6 (signed compare)
         }
-        // = aacd — index 5 base, refined by the scene below.
+        // = seg000:aacd — index 5 base, refined by the scene below.
         let location_and_room = self.location_and_room;
         let room = (location_and_room & 0xff) as u8; // dl
         let location = (location_and_room >> 8) as u8; // dh
         let appearance = (self.location_appearance & 0xff) as u8; // bl
 
-        // = aad5: appearance.lo == 0x80 && room != 1 takes the location-based
+        // = seg000:aad5: appearance.lo == 0x80 && room != 1 takes the location-based
         // branch (loc_0aaef); everything else takes the palace/room branch.
         if appearance == 0x80 && room != 1 {
-            // = loc_0aaef — desert/location music keyed on the location byte.
+            // = seg000:aaef loc_0aaef — desert/location music keyed on the location byte.
             if location >= 0x20 {
-                // = loc_0ab08.
+                // = seg000:ab08 loc_0ab08.
                 if location != 0x20 {
                     return 0x0c;
                 }
@@ -98,9 +98,9 @@ impl GameState {
                 }
                 0x0a // = loc_0ab12
             } else {
-                // = aaf4: 8 when location < 7, else 9.
+                // = seg000:aaf4: 8 when location < 7, else 9.
                 let al = if location >= 7 { 9 } else { 8 };
-                // = aafb: after game_phase 0x48 the late-game theme (0x0a) takes
+                // = seg000:aafb: after game_phase 0x48 the late-game theme (0x0a) takes
                 // over (appearance.lo 0x80 has bit 0 clear, so the shr path falls
                 // through to loc_0ab12).
                 if self.game_phase < PHASE_48_CHANI_MET {
@@ -110,7 +110,7 @@ impl GameState {
                 }
             }
         } else {
-            // = loc_0aadf — palace/interior: pick by the active screen mode.
+            // = seg000:aadf loc_0aadf — palace/interior: pick by the active screen mode.
             match self.game_screen_mode_flags & 3 {
                 0 => 5,
                 1 => 6,
@@ -125,14 +125,14 @@ impl GameState {
     // the table's 0x80 bit switch immediately when the situation's song differs
     // from the one playing; the rest just queue for when the current song ends.
     pub(crate) fn update_room_music(&mut self) {
-        // = ad5e call loc_0aec6 — bail if music is disabled.
+        // = seg000:ad5e call loc_0aec6 — bail if music is disabled.
         if !self.music_service_enabled() {
             return;
         }
-        // = ad63 call loc_0aa96.
+        // = seg000:ad63 call loc_0aa96.
         let index = self.music_situation_index();
-        // = ad66 cmp music_playlist_flags,0; jz loc_0ad75 — game-relative mode.
-        // = ad6d..ad72 CD-style mode: when the driver is idle, advance the
+        // = seg000:ad66 cmp music_playlist_flags,0; jz loc_0ad75 — game-relative mode.
+        // = seg000:ad6d..ad72 CD-style mode: when the driver is idle, advance the
         //   playlist right away (no end-of-song debounce on this path).
         if self.music_playlist_flags != 0 {
             if !self.midi.is_playing() {
@@ -140,25 +140,25 @@ impl GameState {
             }
             return;
         }
-        // = loc_0ad75: bx = 375ch; xlat — the song for this situation.
+        // = seg000:ad75 loc_0ad75: bx = 375ch; xlat — the song for this situation.
         let entry = SITUATION_SONG_TABLE[index as usize];
-        // = ad79 or al,al; jz — no music for this situation.
+        // = seg000:ad79 or al,al; jz — no music for this situation.
         if entry == 0 {
             return;
         }
         if entry & 0x80 == 0 {
-            // = ad81: queue the song; service_midi_music starts it when the
+            // = seg000:ad81: queue the song; service_midi_music starts it when the
             // driver next goes idle. (= ad84 MIDI_SetTickEnabled is implicit in
             // the port: the audio thread ticks whenever a song is playing.)
             self.music_desired_song = entry;
         } else {
-            // = loc_0ad89: the situation forces a specific song.
+            // = seg000:ad89 loc_0ad89: the situation forces a specific song.
             let song = entry & 0x3f;
             self.music_desired_song = song;
-            // = ad8e cmp al,current_song_index; jnz loc_0adbe — a song other
+            // = seg000:ad8e cmp al,current_song_index; jnz loc_0adbe — a song other
             // than the one playing begins the switch.
             if Some(song) != self.midi.current_song() {
-                // = loc_0adbe — fade the current song out rather than cutting
+                // = seg000:adbe loc_0adbe — fade the current song out rather than cutting
                 // over: music-enabled and playlist-off are already established
                 // on this path (= adbe/adc3); a ramp already in progress is
                 // left running (= adca test midi_status,40h; jnz ret); else
@@ -180,18 +180,18 @@ impl GameState {
     // a forced switch is pending), so music begins at game start and loops as
     // the song ends. Called from ui_present_room_screen and the game loop.
     pub(crate) fn service_midi_music(&mut self) {
-        // = ae04 call loc_0aec6 — bail if music is disabled / busy.
+        // = seg000:ae04 call loc_0aec6 — bail if music is disabled / busy.
         if !self.music_service_enabled() {
             return;
         }
-        // = ae09 test music_playlist_flags,1; jnz ret — CD-style mode services
+        // = seg000:ae09 test music_playlist_flags,1; jnz ret — CD-style mode services
         // its own playlist (loc_0ace6), so the game-relative path stands down.
         if self.music_playlist_flags & 1 != 0 {
             return;
         }
-        // = ae10 cmp midi_status,0; jns loc_0ae1e — the driver is idle (the
+        // = seg000:ae10 cmp midi_status,0; jns loc_0ae1e — the driver is idle (the
         // song ended, or a forced-switch fade-out completed and silenced it);
-        // = ae17 test midi_status,40h; jz ret — or a dynamics ramp is still
+        // = seg000:ae17 test midi_status,40h; jz ret — or a dynamics ramp is still
         // running, which DOS also takes as the go-ahead to switch. Every
         // dynamics ramp raises 0x40 (ADLSetDynamicsCurve, dnadl seg001:035e)
         // — narration ducks and their end-of-line restores included — which
@@ -222,13 +222,13 @@ impl GameState {
     // loop (seg000:c913): the CD-playlist streamer, or in game-relative mode
     // the idle-only desired-song start (loc_0ad37).
     pub(crate) fn music_cd_playlist_service(&mut self) {
-        // = ace6 call is_voc_pcm_playing; jnz ret — stand down under a voice.
+        // = seg000:ace6 call is_voc_pcm_playing; jnz ret — stand down under a voice.
         if self.pcm_player.is_playing() {
             return;
         }
-        // = aceb test music_playlist_flags,1; jz loc_0ad37 — with the CD mode
+        // = seg000:aceb test music_playlist_flags,1; jz loc_0ad37 — with the CD mode
         //   off this is the game-relative pump: = ad37 check_music_enabled;
-        //   = ad3c cmp midi_status,0; js ret — advance into the desired song
+        //   = seg000:ad3c cmp midi_status,0; js ret — advance into the desired song
         //   only when the driver is FULLY idle. Deliberately no 0x40 test
         //   here: a dynamics ramp (a narration duck or its end-of-line
         //   restore) must not restart the playing song from this per-frame
@@ -239,24 +239,24 @@ impl GameState {
             }
             return;
         }
-        // = acf2 cmp [suppress_sky_240_255],0; jnz ret.
+        // = seg000:acf2 cmp [suppress_sky_240_255],0; jnz ret.
         if self.data_0227d != 0 {
             return;
         }
-        // = acf9 cmp midi_status,0; js ret — a song is still playing.
+        // = seg000:acf9 cmp midi_status,0; js ret — a song is still playing.
         if self.midi.is_playing() {
             return;
         }
-        // = ad00..ad0a stamp the first idle sighting (0 = unset).
+        // = seg000:ad00..ad0a stamp the first idle sighting (0 = unset).
         let now = self.game_ticks() as u16;
         if self.music_song_end_tick_stamp == 0 {
             self.music_song_end_tick_stamp = now;
         }
-        // = ad0d..ad16 advance only 0xc8 ticks after the song ended.
+        // = seg000:ad0d..ad16 advance only 0xc8 ticks after the song ended.
         if now.wrapping_sub(self.music_song_end_tick_stamp) < 0xc8 {
             return;
         }
-        // = ad18 falls into music_cd_playlist_advance.
+        // = seg000:ad18 falls into music_cd_playlist_advance.
         self.music_cd_playlist_advance();
     }
 
@@ -264,14 +264,14 @@ impl GameState {
     // entry: a high-bit terminator restarts the playlist, otherwise bump the
     // cursor and play the song.
     fn music_cd_playlist_advance(&mut self) {
-        // = ad18 si = [music_cd_playlist_cursor]; lodsb; or al,al; js — the
+        // = seg000:ad18 si = [music_cd_playlist_cursor]; lodsb; or al,al; js — the
         //   0xff terminator wraps to the top.
         let entry = self.music_cd_playlist[self.music_cd_playlist_cursor];
         if entry & 0x80 != 0 {
             self.music_cd_playlist_restart();
             return;
         }
-        // = loc_0ad30 store the advanced cursor; jmp midi_play_song.
+        // = seg000:ad30 loc_0ad30 store the advanced cursor; jmp midi_play_song.
         self.music_cd_playlist_cursor += 1;
         self.midi_play_song_gated(entry);
     }
@@ -279,14 +279,14 @@ impl GameState {
     // = seg000:ad21 music_cd_playlist_restart — restart the CD playlist from
     // the top: in shuffle mode first permute the entries, then play the first.
     pub(crate) fn music_cd_playlist_restart(&mut self) {
-        // = ad21 si = music_cd_playlist; lodsb.
-        // = ad25 test music_playlist_flags,2; jz loc_0ad30 — shuffle mode
+        // = seg000:ad21 si = music_cd_playlist; lodsb.
+        // = seg000:ad25 test music_playlist_flags,2; jz loc_0ad30 — shuffle mode
         //   permutes in place and re-reads the first entry.
         if self.music_playlist_flags & 2 != 0 {
             self.music_cd_playlist_shuffle();
         }
         let entry = self.music_cd_playlist[0];
-        // = loc_0ad30 store the cursor past entry 0; jmp midi_play_song.
+        // = seg000:ad30 loc_0ad30 store the cursor past entry 0; jmp midi_play_song.
         self.music_cd_playlist_cursor = 1;
         self.midi_play_song_gated(entry);
     }
@@ -296,17 +296,17 @@ impl GameState {
     // rand seed with the PIT counter xor the loop counter between the draws.
     // The terminator at index 9 is out of rand_iterated(8)'s range.
     fn music_cd_playlist_shuffle(&mut self) {
-        // = acc2 cx = 12h (DOS counts 0x12 down to 1).
+        // = seg000:acc2 cx = 12h (DOS counts 0x12 down to 1).
         for cx in (1..=0x12u16).rev() {
-            // = acc8 call rand_iterated (bx = 8); si = the first slot.
+            // = seg000:acc8 call rand_iterated (bx = 8); si = the first slot.
             let si = self.rand_iterated(8) as usize;
-            // = accd..acd2 seed += pit_counter ^ cx — timer entropy between
+            // = seg000:accd..acd2 seed += pit_counter ^ cx — timer entropy between
             //   the two draws.
             let perturb = (self.game_ticks() as u16) ^ cx;
             self.rand_iterated_seed = self.rand_iterated_seed.wrapping_add(perturb);
-            // = acd6 call rand_iterated; di = the second slot.
+            // = seg000:acd6 call rand_iterated; di = the second slot.
             let di = self.rand_iterated(8) as usize;
-            // = acdb..acdf swap playlist[si], playlist[di].
+            // = seg000:acdb..acdf swap playlist[si], playlist[di].
             self.music_cd_playlist.swap(si, di);
         }
     }

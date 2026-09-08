@@ -21,7 +21,7 @@ pub struct RoomRenderer {
     sprite_sheet: Option<SpriteSheet>,
     character_sheet: Option<SpriteSheet>,
     position_markers: Vec<i8>,
-    // = character_id_to_sprite (seg000:9123) plus the sal_draw_character
+    // = seg000:9123 character_id_to_sprite plus the sal_draw_character
     // folds (seg000:3d5b..3d70), resolved per person id by the caller
     // (GameState::character_sprite_map): the PERS.HSQ sprite-pair index and
     // the y shift for each drawable id. Empty = identity (ids 0..0xd map to
@@ -79,14 +79,14 @@ impl RoomRenderer {
         self.character_sheet = Some(character_sheet);
     }
 
-    /// = sal_read_position_markers output: one entry per standing position in
+    /// = seg000:3d83 sal_read_position_markers output: one entry per standing position in
     /// the room (0xff = empty). `Part::Character` entries consume these
     /// back-to-front as the room is drawn.
     pub fn set_position_markers(&mut self, markers: Vec<i8>) {
         self.position_markers = markers;
     }
 
-    /// = character_id_to_sprite (seg000:9123) — the per-id PERS sprite-pair
+    /// = seg000:9123 character_id_to_sprite — the per-id PERS sprite-pair
     /// map (see the field note).
     pub fn set_character_sprite_map(&mut self, map: Vec<(u16, i16)>) {
         self.character_sprite_map = map;
@@ -169,13 +169,13 @@ impl RoomRenderer {
             return Ok(());
         };
 
-        // = draw_SAL (seg000:3b59): each `Part::Character` entry pops the next
+        // = seg000:3b59 draw_SAL: each `Part::Character` entry pops the next
         // position marker. DOS reads them back-to-front — sal_marker_sp points
         // at the last slot and is decremented per character entry.
         let mut marker_idx = self.position_markers.len() as isize - 1;
         for part in room.parts() {
             if let Part::Character(character) = part {
-                // = sal_draw_character_entry (loc_03d12): `test room_render_flags,
+                // = seg000:3d12 sal_draw_character_entry (loc_03d12): `test room_render_flags,
                 // 81h; jnz` — when bit 0 or 7 is set the whole entry is skipped,
                 // not even consuming a position marker (the dialogue-zoom
                 // re-render sets bit 7 so no standing person is drawn).
@@ -335,6 +335,9 @@ impl RoomRenderer {
         });
     }
 
+    // = seg000:3be9 SAL_polygon — scan-fill one SAL polygon part: walk the
+    // right and left vertex chains into per-row edge tables, then fill each
+    // row between the two edges with the part's colour and dither.
     fn draw_polygon(&self, polygon: &Polygon, frame: &mut FrameBuffer) {
         let mut right_side = [0i16; 200];
         let mut left_side = [0i16; 200];
@@ -480,6 +483,11 @@ fn assign_position_marker(markers: &mut [i8], id: i8, base: usize) {
     }
 }
 
+// = seg000:3e13 draw_gradient_section / seg000:3e80 draw_gradient_section_2 —
+// walk one polygon edge from p0 to p1 and append one x per row to the edge
+// table (DOS's gradient_line_buf). draw_gradient_section only computes dx/dy
+// and calls draw_gradient_section_2, the Bresenham walker; the bp_* locals
+// below mirror its stack slots.
 fn draw_edge(p0: Point, p1: Point, xs: &mut [i16; 200], xi: &mut usize) {
     let x0 = p0.x;
     let y0 = p0.y;

@@ -516,8 +516,8 @@ impl GameState {
         });
 
         // = seg000:0aca jmp present_game_area — restore the cursor and push
-        // the game-area rect fb1 -> screen. Inside a transition (front buffer
-        // = fb1: the intro scenes, the shipment scene's zoom-in entry) the
+        // the game-area rect fb1 -> screen. Inside a transition (front buffer =
+        // fb1: the intro scenes, the shipment scene's zoom-in entry) the
         // push is a no-op and the transition reveals the frame; the shipment
         // scene's zoom frames (seg000:260b/2666) run outside one and show
         // through this present.
@@ -569,14 +569,14 @@ impl GameState {
     // remove this task. The blocking wait_for_narration_voice_clip loop
     // (seg000:aba9) runs the same body inline.
     pub(crate) fn tick_pcm_voice_music_restore(&mut self) {
-        // = ab92 call pcm_voice_stream_refill — feed the driver the next
+        // = seg000:ab92 call pcm_voice_stream_refill — feed the driver the next
         // chunk while the clip streams.
         self.pcm_voice_stream_refill();
-        // = ab95 check_pcm_voice_file_open; jnz loc_0ab44 — still playing, wait.
+        // = seg000:ab95 check_pcm_voice_file_open; jnz loc_0ab44 — still playing, wait.
         if self.pcm_player.is_playing() {
             return;
         }
-        // = ab9a midi_restore_music_volume; ab9d remove_frame_task.
+        // = seg000:ab9a midi_restore_music_volume; ab9d remove_frame_task.
         self.midi_restore_music_volume();
         self.remove_frame_task(crate::TaskId::PcmVoiceMusicRestore);
     }

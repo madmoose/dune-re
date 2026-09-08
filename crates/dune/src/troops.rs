@@ -4284,7 +4284,7 @@ mod tests {
         game.locations[li].spice_density = 0x80;
         game.locations[li].spice_amount = 4;
         game.locations[li].field_13 = 0;
-        // = troop_location_test_spice_mining_viable: prospected (status bit 6
+        // = seg000:6b96 troop_location_test_spice_mining_viable: prospected (status bit 6
         //   set) and not exhausted (bit 0 clear).
         game.locations[li].status = (game.locations[li].status | 0x40) & !1;
         game.spice_in_stock = 0;

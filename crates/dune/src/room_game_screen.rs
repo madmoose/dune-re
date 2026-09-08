@@ -48,7 +48,7 @@ const GAME_OVER_FACE_PERSON: [i8; 8] = [-0x0e, -1, 0x0c, 0x05, 0x0a, -1, 0x09, 0
 // text_id resolves to (= the get_phrase_or_command_string_si path: value-1
 // indexes the offset table; COMMAND1.TXT lines are 1-indexed by text_id).
 
-// = 21dc: "TAKE AN ORNITHOPTER" — appended on the special-room dl==1 path
+// = seg001:21dc "TAKE AN ORNITHOPTER" — appended on the special-room dl==1 path
 // (the location's entry room) when the night-attack stage is not active.
 // Greyed until orni_count >= 1.
 const CMD_TAKE_ORNITHOPTER: MenuItem = item(
@@ -56,21 +56,21 @@ const CMD_TAKE_ORNITHOPTER: MenuItem = item(
     0x42e9,
     GameState::menu_callback_choice_map_main_take_an_ornithopter_notransition,
 );
-// = 21e0: "WAIT FOR EVENING" — plain-room time-skip verb when the in-game
+// = seg001:21e0 "WAIT FOR EVENING" — plain-room time-skip verb when the in-game
 // time-of-day phase is < 0x0b (i.e. before evening).
 const CMD_WAIT_FOR_EVENING: MenuItem = item(
     cmd::WAIT_FOR_EVENING,
     0x0f48,
     GameState::menu_callback_choice_wait_for_evening,
 );
-// = 21e4: "WAIT FOR MORNING" — plain-room time-skip verb when the in-game
+// = seg001:21e4 "WAIT FOR MORNING" — plain-room time-skip verb when the in-game
 // time-of-day phase is >= 0x0b (i.e. evening/night).
 const CMD_WAIT_FOR_MORNING: MenuItem = item(
     cmd::WAIT_FOR_MORNING,
     0x0f67,
     GameState::menu_callback_choice_wait_for_morning,
 );
-// = 21e8: "VIEW NEW MESSAGES" — the palace communications-room verb
+// = seg001:21e8 "VIEW NEW MESSAGES" — the palace communications-room verb
 // (bh==1, dl==8) for reading newly-received transmissions; greyed while the
 // unread badge (ds:c9) is 0.
 const CMD_VIEW_NEW_MESSAGES: MenuItem = item(
@@ -78,64 +78,64 @@ const CMD_VIEW_NEW_MESSAGES: MenuItem = item(
     0x283a,
     GameState::menu_callback_choice_comms_room_view_new_messages,
 );
-// = 21ec: "Messages already seen" — the communications-room companion
+// = seg001:21ec "Messages already seen" — the communications-room companion
 // verb to CMD_VIEW_NEW_MESSAGES (replay previously-viewed messages).
 const CMD_MESSAGES_ALREADY_SEEN: MenuItem = item(
     cmd::MESSAGES_ALREADY_SEEN,
     0x283e,
     GameState::menu_callback_choice_comms_room_messages_already_seen,
 );
-// = 21f0: "LOOK AT MIRROR" — the palace bedroom verb (bh==1, dl==9; Paul's
+// = seg001:21f0 "LOOK AT MIRROR" — the palace bedroom verb (bh==1, dl==9; Paul's
 // room with the mirror).
 const CMD_LOOK_AT_MIRROR: MenuItem =
     item(cmd::LOOK_AT_MIRROR, 0x0ea6, |s, _, _| s.look_at_mirror());
-// = 21f4: "Mixer Panel" — the always-available audio mixer-panel verb,
+// = seg001:21f4 "Mixer Panel" — the always-available audio mixer-panel verb,
 // appended at the tail of the special-room and plain-room verb lists. The
 // CD release of Dune exposes its in-game music/voice mixer here.
 const CMD_MIXER_PANEL: MenuItem = item(cmd::MIXER_PANEL, 0xa3f0, |s, _, _| s.open_mixer_panel());
-// = 21f8: "CHANGE DESTINATION" — the map/book-mode travel verb (the third
+// = seg001:21f8 "CHANGE DESTINATION" — the map/book-mode travel verb (the third
 // slot in both map sub-modes).
 const CMD_CHANGE_DESTINATION: MenuItem = item(
     cmd::CHANGE_DESTINATION,
     0x497a,
     GameState::menu_callback_choice_change_destination,
 );
-// = 21fc: "SKIP TO DESTINATION" — the default map-mode verb for a flight
+// = seg001:21fc "SKIP TO DESTINATION" — the default map-mode verb for a flight
 // homing on a real location (travel_no_location_dest == 0).
 const CMD_SKIP_TO_DESTINATION: MenuItem = item(
     cmd::SKIP_TO_DESTINATION,
     0x4ffb,
     GameState::menu_callback_choice_skip_to_destination,
 );
-// = 2200: "BACK TO STARTING POINT" — replaces SKIP TO DESTINATION for a
+// = seg001:2200 "BACK TO STARTING POINT" — replaces SKIP TO DESTINATION for a
 // fixed-heading (directional) flight with no location target (travel_no_location_dest != 0).
 const CMD_BACK_TO_STARTING_POINT: MenuItem = item(
     cmd::BACK_TO_STARTING_POINT,
     0x50a5,
     GameState::menu_callback_choice_back_to_starting_point,
 );
-// = 2204: "TOWARDS NEAREST PLACE" — appended after BACK TO STARTING POINT once
+// = seg001:2204 "TOWARDS NEAREST PLACE" — appended after BACK TO STARTING POINT once
 // game_phase >= 0x32 (travel_no_location_dest != 0 && game_phase >= 0x32).
 const CMD_TOWARDS_NEAREST_PLACE: MenuItem = item(
     cmd::TOWARDS_NEAREST_PLACE,
     0x50c4,
     GameState::menu_callback_choice_towards_nearest_place,
 );
-// = 220c: "SEE DUNE MAP" — the leading verb on every special-room and
+// = seg001:220c "SEE DUNE MAP" — the leading verb on every special-room and
 // plain-room verb list (opens the planet-map view).
 const CMD_SEE_DUNE_MAP: MenuItem =
     item(cmd::SEE_DUNE_MAP, 0x186b, |s, _, _| s.ui_toggle_room_view());
-// = 2214: "CALL A WORM" — the worm-summon verb. Greyed until game_phase
+// = seg001:2214 "CALL A WORM" — the worm-summon verb. Greyed until game_phase
 // >= 0x4f. Appears on plain rooms and on the night-attack sietch (dl==1).
 const CMD_CALL_A_WORM: MenuItem = item(cmd::CALL_A_WORM, 0x42d1, |_, _, _| {
     println!("menu: CALL A WORM (seg000:42d1) not ported")
 });
-// = 2218: "MASSIVE ATTACK" — the first night-attack stage verb (special
+// = seg001:2218 "MASSIVE ATTACK" — the first night-attack stage verb (special
 // room dl==1 with night_attack_stage != 0).
 const CMD_MASSIVE_ATTACK: MenuItem = item(cmd::MASSIVE_ATTACK, 0x7317, |_, _, _| {
     println!("menu: MASSIVE ATTACK (seg000:7317) not ported")
 });
-// = 221c: "FIGHT FOR A WHOLE DAY" — the second night-attack stage verb,
+// = seg001:221c "FIGHT FOR A WHOLE DAY" — the second night-attack stage verb,
 // adjacent to CMD_MASSIVE_ATTACK.
 const CMD_FIGHT_FOR_A_WHOLE_DAY: MenuItem = item(cmd::FIGHT_FOR_A_WHOLE_DAY, 0x0fc5, |_, _, _| {
     println!("menu: FIGHT FOR A WHOLE DAY (seg000:0fc5) not ported")
@@ -1502,7 +1502,7 @@ impl GameState {
         self.game_suspend_count = self.game_suspend_count.saturating_add(1);
     }
 
-    // = seg000:b2be resume_game_clock — release one suspension level.
+    // = seg000:b2b3 resume_game_clock — release one suspension level.
     pub(crate) fn resume_game_clock(&mut self) {
         self.game_suspend_count = self.game_suspend_count.saturating_sub(1);
     }
@@ -2011,7 +2011,7 @@ impl GameState {
     // (data_04774) early return are not modelled.
     // Returns true when a slot was repainted so game_loop can re-present.
     pub(crate) fn highlight_hovered_text_action_item(&mut self) -> bool {
-        // = data_0dce8 — the slot count painted by the preceding redraw (the
+        // = seg000:dce8 data_0dce8 — the slot count painted by the preceding redraw (the
         // visible records plus the " Others..." row, at most five).
         let slot_count = self.command_menu_slot_count;
         if slot_count == 0 {
@@ -2312,8 +2312,8 @@ impl GameState {
         let x = 0x5du16;
         self.font_set_draw_position(x, y);
 
-        // = seg000:d4b4 font_draw_bg_color (= the font colour word's bg/high byte)
-        // = 0xf3, the row background colour. The text bg matches the row fill below,
+        // = seg000:d4b4 font_draw_bg_color (the font colour word's bg/high byte)
+        //   is set to 0xf3, the row background colour. The text bg matches the row fill below,
         // so the whole row reads as a uniform 0xf3 band.
         let mut bg = 0xf3u8;
         // = seg000:d4b9 and ui_elements[7+slot].flags low byte, 0x7f — clear the
@@ -2885,7 +2885,7 @@ impl GameState {
             .as_ref()
             .unwrap()
             .draw(&mut self.framebuffer, &mut self.palette);
-        // = add_frame_task(loc_00b45, bp=3): one particle tick every 3 ticks.
+        // = seg000:da25 add_frame_task(loc_00b45, bp=3): one particle tick every 3 ticks.
         // play_intro's wait_for_pcm_voice_interruptable(2000) drives it.
         self.add_frame_task(3, crate::TaskId::IntroNightAttack);
         // = seg000:0b1e mov al,3; jmp audio_start_voc — the night-attack sound.
@@ -3719,7 +3719,7 @@ mod tests {
         );
         assert_eq!(game.persons_met & 1, 0, "Leto must not be met at the start");
 
-        // = ui_click_room_down (seg000:3f1f) — the throne room's DOWN exit is room 4.
+        // = seg000:3f1f ui_click_room_down — the throne room's DOWN exit is room 4.
         game.ui_click_move_down();
 
         // The move was interrupted: the gate was cleared, the room is unchanged, and
@@ -4077,7 +4077,7 @@ mod tests {
             head.speaking && !head.voc_lipsync.is_empty(),
             "Leto's voice .voc (phrase {phrase:#x}) did not start playing"
         );
-        // = loc_09f1c: starting the voice settles the head (id 0 < 0x10) into the
+        // = seg000:9f1c loc_09f1c: starting the voice settles the head (id 0 < 0x10) into the
         // calm idle, so when the line ends no lively "talk" frames play.
         assert!(
             head.settled,

@@ -31,7 +31,7 @@ use crate::{
     draw_sprite_from_sheet, sprite_blitter,
 };
 
-// segvga:0b0c
+// = segvga:0b0c palette_flush
 pub fn palette_flush(state: &mut GameState) {
     state.screen_pal = state.palette.clone();
 }
@@ -137,9 +137,9 @@ pub fn transition_tick(state: &mut GameState) -> u16 {
 // 0x2887 = erase) before calling transition_kernel.
 #[derive(Copy, Clone, PartialEq, Eq)]
 enum RippleOp {
-    // = loc_segvga_02823: smear the clean (fb1) water pixel into a 4x4 block.
+    // = segvga:2823 loc_segvga_02823: smear the clean (fb1) water pixel into a 4x4 block.
     Draw,
-    // = loc_segvga_02887: restore the band's water pixels from the clean buffer.
+    // = segvga:2887 loc_segvga_02887: restore the band's water pixels from the clean buffer.
     Erase,
 }
 
@@ -421,7 +421,7 @@ pub fn vga_set_fb_row(state: &mut GameState, row: u16) {
     state.y_offset = row;
 }
 
-// = fade_palette_to_black (segvga:26e3) inner step. Subtracts `step_size` from every component
+// = segvga:26e3 fade_palette_to_black inner step. Subtracts `step_size` from every component
 // of every palette entry in `chunk_start..chunk_start+chunk_size`,
 // saturating at 0. Called `cycles` times per outer loop.
 fn fade_palette_to_black_step(
@@ -443,7 +443,7 @@ fn fade_palette_to_black_step(
     }
 }
 
-// = loc_segvga_0264d inner step. Steps every component of every palette
+// = segvga:264d loc_segvga_0264d inner step. Steps every component of every palette
 // entry in `chunk_start..chunk_start+chunk_size` toward
 // `palette_to_transition_from`, gated by `dl` (the outer-loop counter
 // that counts DOWN from `cycles` to 1). The DOS kernel does
@@ -540,7 +540,7 @@ fn run_fade_to_palette(
     }
 }
 
-// = loc_segvga_02757 (transition_dispatch_table entry 24) — code 0x30:
+// = segvga:2757 loc_segvga_02757 (transition_dispatch_table entry 24) — code 0x30:
 // palette flush + copy framebuffer to screen. No fade — an immediate cut.
 // One frame-task tick is enough to let the driver emit the new screen.
 fn transition_instant_swap(state: &mut GameState, midpoint: TransitionMidpoint) {
@@ -600,7 +600,7 @@ fn transition_vertical_curtain(state: &mut GameState, dl: u8) {
             }
         }
     } else {
-        // = loc_segvga_02596 — snapshot the visible screen into fb2.
+        // = segvga:2596 loc_segvga_02596 — snapshot the visible screen into fb2.
         transition_snapshot_screen_to_fb2(state);
         // = segvga:2d08 si = 0xa00, stepping up to the full byte count.
         let mut si = BAND;
@@ -657,7 +657,7 @@ fn transition_expanding_box(state: &mut GameState) {
     let w = state.screen.w() as isize;
     let mut di = (0x4a + state.y_offset as isize) * w + 0x9c;
 
-    // = loc_segvga_02ab0 — one run: `count` blocks in one direction, each an
+    // = segvga:2ab0 loc_segvga_02ab0 — one run: `count` blocks in one direction, each an
     // 8-byte × 4-row fb1→screen copy (di += BLOCK_ADVANCE) followed by the
     // ax adjust, then one presented PIT-tick wait.
     fn run(state: &mut GameState, di: &mut isize, count: usize, adj: isize) {
@@ -704,7 +704,7 @@ fn transition_expanding_box(state: &mut GameState) {
     }
 }
 
-// = loc_segvga_02628 (transition_dispatch_table entry 27) — code 0x36:
+// = segvga:2628 loc_segvga_02628 (transition_dispatch_table entry 27) — code 0x36:
 // fade in from black. Saves the new palette as the fade target, blacks
 // out the live palette, flips the offscreen framebuffer onto the screen
 // (safe while the palette is all-zero — nothing is visible), then steps
@@ -787,7 +787,7 @@ fn transition_fade_out_to_black(state: &mut GameState, midpoint: TransitionMidpo
     palette_flush(state);
 }
 
-// = loc_segvga_0272e (transition_dispatch_table entry 29) — code 0x3a:
+// = segvga:272e loc_segvga_0272e (transition_dispatch_table entry 29) — code 0x3a:
 // fade the current palette out to black, swap the framebuffer onto the
 // screen while it's invisible, then fade up to the new palette.
 //
@@ -1121,7 +1121,7 @@ fn dissolve_lfsr_body(state: &mut GameState, batch: u16) {
             state.present_transition_frame_ticks(1);
         }
     }
-    // = dissolve_lfsr_tail (segvga:2a61) `xor si,si; mov di,si; movsb` — the
+    // = segvga:2a61 dissolve_lfsr_tail `xor si,si; mov di,si; movsb` — the
     //   byte the walk never reaches. DOS zeroes si/di WITHOUT fb_base_ofs, so
     //   at a nonzero fb_base_ofs it copies byte 0 of the buffer and the first
     //   visible pixel keeps its old value; mirrored here.
@@ -1239,7 +1239,7 @@ fn run_spiral_pass(state: &mut GameState, fb_base: usize, reveal: bool) {
 // displayed `screen_pal` and palette_flush uploads the new one at the all-black
 // midpoint before pass 2.
 fn transition_spiral(state: &mut GameState) {
-    // = fb_base_ofs — the game-area blit offset. The room game screen composes
+    // = segvga:01a3 fb_base_ofs — the game-area blit offset. The room game screen composes
     // from row 0 (y_offset = 0, as transition_dotted_columns_tall also assumes),
     // so the 152-row lattice (+ the offsets' 8-row reach) stays inside the 200-row
     // screen buffer.
@@ -1826,7 +1826,7 @@ fn panel_fold_squish(dst: &mut FrameBuffer, src: &FrameBuffer, al: u16, ah: u16)
     }
 }
 
-// = blit_fb1_to_screen_effect(al=0x18) -> panel_anim_play_step: render ONE
+// = segvga:3382 panel_anim_play_step (blit_fb1_to_screen_effect al=0x18): render ONE
 // command-panel fold frame (`frame` = the DOS cl, 0x11..1) straight to the visible
 // screen. play_pending_panel_fold drives this once per loop pass. The verb panel was
 // staged into fb1 (in_transition routed draw_command_menu_item there); the closing
@@ -1850,7 +1850,7 @@ pub fn panel_anim_play_step(state: &mut GameState, frame: u16) {
         panel_copy_rect(&mut state.screen, &state.framebuffer);
     } else {
         let (al, ah) = PANEL_FOLD[frame as usize];
-        // = play_step `cmp cl,9; jb`: the closing half (frame > 9) squishes the
+        // = segvga:3382 panel_anim_play_step `cmp cl,9; jb`: the closing half (frame > 9) squishes the
         //   old panel snapshot (fb2); the opening half reads fb1.
         if frame > 9 {
             panel_fold_squish(&mut state.screen, &state.framebuffer_saved, al, ah);
@@ -2166,7 +2166,7 @@ pub fn vga_clear_rect(state: &mut GameState, dest: FbId, x0: u16, y0: u16, x1: u
     vga_fill_rect(state, dest, x0, y0, x1, y1, 0);
 }
 
-// = segvga vga_copy_rect_ds (gfx_vtable_vga_copy_rect_ds; the inner blit
+// = segvga:1b8c vga_copy_rect_ds / segvga:1b8e vga_copy_rect (gfx_vtable_vga_copy_rect_ds; the inner blit
 // behind seg000:c446 copy_rect_fb2_to_fb1). Copy the half-open rect
 // `[x0,x1) × [y0,y1)` from `src` to `dst` pixel-for-pixel. The rect is
 // clamped to each buffer's bounds; partial overlap is honoured (rows past
@@ -2287,7 +2287,7 @@ pub fn scroll_rect_up_pass(
     let yoff = y_offset as usize;
     let y0 = yoff + rect.y0 as usize;
     let bx = bx as usize;
-    // = loc_03452: scroll the top `bx` rows up by six (row j <- row j+6). Top-
+    // = seg000:3452 loc_03452: scroll the top `bx` rows up by six (row j <- row j+6). Top-
     //   to-bottom is safe — each source row j+6 is read before it is later
     //   overwritten at step j+6.
     {
@@ -2298,7 +2298,7 @@ pub fn scroll_rect_up_pass(
             dpix.copy_within(s + x0..s + x1, d + x0);
         }
     }
-    // = loc_03467: fill the six rows below the scrolled region from `src` at
+    // = seg000:3467 loc_03467: fill the six rows below the scrolled region from `src` at
     //   the same offset (ds = fb1, si = di).
     let dpix = dst.pixels_mut();
     let spix = src.pixels();
