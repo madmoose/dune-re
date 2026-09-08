@@ -293,7 +293,7 @@ const BANK_NAMES: &[&str] = &[
     "VG10.HSQ",     // 0x91
 ];
 
-// = seg000:f0b9 open_spritesheet_si_into_esdi — bank index -> filename.
+// = seg000:f0b9 open_resource_by_index_si_into_esdi — bank index -> filename.
 fn bank_filename(index: u16) -> Option<&'static str> {
     BANK_NAMES.get(index as usize).copied()
 }

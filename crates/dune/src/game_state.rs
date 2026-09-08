@@ -66,7 +66,7 @@ pub(crate) enum TaskId {
     // = seg000:0070c hnm frame player (intro_play_hnm_with_frame_task).
     HnmDoFrame,
 
-    // = seg000:00b45 loc_00b45 — intro_28 night-attack particle tick.
+    // = seg000:0b45 night_attack_frame_task — intro_28 night-attack particle tick.
     IntroNightAttack,
 
     // = seg000:099be loc_099be — talking-head idle animator.

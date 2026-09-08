@@ -54,6 +54,15 @@ impl DatFile {
         Ok(DatFile { reader, entries })
     }
 
+    // = seg000:f244 read_resource_to_esdi / seg000:f229 open_res_or_file_or_die / seg000:f1fb open_res_or_file_with_name_in_dx_size_ax
+    // — read one entry of DUNE.DAT whole. A name missing from the DAT falls
+    // back to a loose file on disk there, and is an error here. The steps DOS
+    // splits out:
+    // = seg000:f314 get_res_index_in_ax_by_name_dssi / seg000:f3a7 res_locate_in_lookup_table
+    //   — the name match and the DAT index lookup (`entries.iter().find`).
+    // = seg000:f2a7 seek_dune_dat_to_res_dsdx / seg000:f2d6 seek_dune_dat_offset_dxax
+    //   — the seek to the entry's offset.
+    // = seg000:f2ea read_dune_dat_cx_to_esdi — the read of `size` bytes.
     pub fn read_raw(&mut self, name: &str) -> Result<Box<[u8]>, Error> {
         let entry = self
             .entries
@@ -70,6 +79,11 @@ impl DatFile {
         Ok(data.into())
     }
 
+    // = seg000:f0d6 read_and_maybe_hsq / seg000:f0b9 open_resource_by_index_si_into_esdi
+    // — read an entry and unpack it when its six-byte header says HSQ. DOS
+    // reserves the bump heap around the read (alloc_check_cx_pages_available,
+    // bump_allocate_bump_cx_bytes) and takes the name from the resource table
+    // by index; the port's callers pass the name.
     pub fn read(&mut self, name: &str) -> Result<Box<[u8]>, Error> {
         let data = self.read_raw(name)?;
 

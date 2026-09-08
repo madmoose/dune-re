@@ -1,8 +1,7 @@
 //! The night-attack scene. Its bombs/debris "particles" run on the DOS troop
-//! icon renderer (troop_icon_spawn seg000:c60b, troop_icon_remove c58d,
-//! troop_icons_update_dirty_rect c6ad — the sub_1cXXXX linear addresses
-//! below), whose main job is the layered troop icons on the full map view;
-//! this scene abuses it as a particle system. The port keeps the two uses as
+//! icon renderer (troop_icon_spawn seg000:c60b, troop_icon_remove c58a,
+//! troop_icons_update_dirty_rect c6ad), whose main job is the layered troop
+//! icons on the full map view; this scene abuses it as a particle system. The port keeps the two uses as
 //! separate systems: this module owns its private particle pool, and the
 //! troop-icon side lives with the map view (troop_map_screen.rs).
 
@@ -16,7 +15,9 @@ use crate::{
 };
 
 const MAX_PARTICLES: usize = 64;
+// = seg001:1592 night_attack_spawn_origins.
 const INITIAL_POSITIONS: [(i16, i16); 4] = [(125, 101), (100, 101), (239, 122), (271, 125)];
+// = seg001:15a2 night_attack_debris_velocities.
 const INITIAL_VELOCITIES: [(i8, i8); 4] = [(-6, 4), (-4, 6), (-4, -6), (-6, -4)];
 
 pub struct Screen {
@@ -209,14 +210,14 @@ impl AttackState {
     }
 
     pub fn step_frame(&mut self) {
-        self.sub_10b45();
+        self.night_attack_frame_task();
     }
 
     fn particle(&mut self, index: u16) -> &mut Particle {
         &mut self.particles[index as usize]
     }
 
-    // sub_1e3b7
+    // = seg000:e3b7 rand_masked — the LCG behind rand_masked, on the scene's own seed.
     fn rand_masked(&mut self, mask: u16) -> u16 {
         const LCG_PRIME: u32 = 0x0e56d;
 
@@ -227,7 +228,7 @@ impl AttackState {
         (product >> 8) as u16 & mask
     }
 
-    // sub_1e3cc
+    // = seg000:e3cc rand — the LCG behind rand, on the scene's own seed.
     fn rand(&mut self) -> u16 {
         const LCG_PRIME: u32 = 0xcbd1;
 
@@ -238,11 +239,14 @@ impl AttackState {
         (product >> 8) as u16
     }
 
-    fn sub_10b45(&mut self) {
+    // = seg000:0b45 night_attack_frame_task — the night-attack particle
+    // tick: the sky flash, the random spawn cadence and one motion step per
+    // live particle.
+    fn night_attack_frame_task(&mut self) {
         self.timers.timer7.tick();
 
         if self.byte_1f59a <= 0 && self.timers.timer7.triggered() {
-            self.sub_10d0d_trigger_sky_palette_flash(self.timers.timer7.get() == 16);
+            self.night_attack_sky_flash_step(self.timers.timer7.get() == 16);
         }
 
         if self.word_23c4e != 0 || self.byte_23b9b != 0 {
@@ -267,13 +271,13 @@ impl AttackState {
 
                     let sprite_id = FIRST_AIR_BOMB_SPRITE_ID + ((y as u16) % 8);
 
-                    self.sub_1c60b_troop_icon_spawn(sprite_id, x, y, (0, 0));
+                    self.troop_icon_spawn(sprite_id, x, y, (0, 0));
                 }
             }
         }
 
         if self.timers.timer0.tick() {
-            self.sub_10c3b();
+            self.night_attack_spawn_particle();
         }
 
         let particle_count = self.particle_count;
@@ -312,10 +316,10 @@ impl AttackState {
                     // );
 
                     // println!("L:");
-                    (bl, v1) = self.sub_10cea(bl, v1);
+                    (bl, v1) = self.night_attack_step_axis(bl, v1);
 
                     // println!("H:");
-                    (bh, v0) = self.sub_10cea(bh, v0);
+                    (bh, v0) = self.night_attack_step_axis(bh, v0);
 
                     // println!(
                     //     "After:  bl = {:3}, dl = {:3}, bh = {:3}, dh = {:3}\n",
@@ -336,7 +340,7 @@ impl AttackState {
             } else {
                 ax = ax.wrapping_add(1);
                 if (ax & 0xFF) > 0x2D {
-                    self.sub_1c58a_troop_icon_remove(i);
+                    self.troop_icon_remove(i);
 
                     i += 1;
 
@@ -351,7 +355,7 @@ impl AttackState {
             let bx_extended = bl as i16;
             let dx_extended = velocity.1 as i16;
 
-            self.sub_1c661(dx_extended, bx_extended, i);
+            self.troop_icon_move_and_redraw(dx_extended, bx_extended, i);
 
             let mut should_remove = (self.particle(i).rect.x0 as u16) >= 320;
             if !should_remove {
@@ -363,14 +367,18 @@ impl AttackState {
             }
 
             if should_remove {
-                self.sub_1c58a_troop_icon_remove(i);
+                self.troop_icon_remove(i);
             }
 
             i += 1;
         }
     }
 
-    fn sub_10c3b(&mut self) {
+    // = seg000:0c3b night_attack_spawn_particle — roll a new burst when the
+    // burst counter runs out, then spawn one debris chunk (pattern bit 4 clear)
+    // or one wandering bomb (bit 4 set). The 0cd6..0ce9 tail is
+    // spawn_particle_final below.
+    fn night_attack_spawn_particle(&mut self) {
         let mut ax;
         if self.timers.timer1.tick() {
             if (self.word_1f4b0_rand_bits & 3) == 0 {
@@ -449,7 +457,7 @@ impl AttackState {
 
             al = al.wrapping_add(0xE0);
 
-            let (bx, dx) = self.sub_15198(al);
+            let (bx, dx) = self.travel_heading_deltas(al);
 
             let dl = (dx as u16) & 0x00ff;
             let bl = bx & 0x00ff;
@@ -461,7 +469,9 @@ impl AttackState {
         }
     }
 
-    fn sub_15198(&mut self, value: u8) -> (u16, i16) {
+    // = seg000:5198 travel_heading_deltas — split a heading into per-step
+    // (dlng, dlat) deltas; the attack reuses it for the bombs' motion.
+    fn travel_heading_deltas(&mut self, value: u8) -> (u16, i16) {
         let mut bx = value as u16;
 
         let bl = (bx as u8).wrapping_add(0x20);
@@ -508,22 +518,25 @@ impl AttackState {
         (bx, dx)
     }
 
+    // = seg000:0cd6..0ce9 the tail of night_attack_spawn_particle: origin from
+    // night_attack_spawn_origins (seg001:1592), troop_icon_spawn, and the new
+    // record's anim word [di+0dh] = 0.
     fn spawn_particle_final(&mut self, sprite_id: u16, origin: u16, velocity: (i8, i8)) {
         let origin = (origin & 0x0c) >> 2;
         let x = INITIAL_POSITIONS[origin as usize].0;
         let y = INITIAL_POSITIONS[origin as usize].1;
 
-        if self
-            .sub_1c60b_troop_icon_spawn(sprite_id, x, y, velocity)
-            .is_some()
-        {
+        if self.troop_icon_spawn(sprite_id, x, y, velocity).is_some() {
             let last_particle_idx = (self.particle_count - 1) as usize;
             self.particles[last_particle_idx].data0 = 0;
             self.particles[last_particle_idx].data1 = 0;
         }
     }
 
-    fn sub_10cea(&self, bl: i8, v: i8) -> (i8, i8) {
+    // = seg000:0cea night_attack_step_axis — fixed-point motion step for one
+    // axis: the carry out of (accumulator + |v|) rotated right by 5 is the
+    // pixel step, with v's sign restored.
+    fn night_attack_step_axis(&self, bl: i8, v: i8) -> (i8, i8) {
         let al = v.abs();
         let sum: u16 = (al + bl) as u8 as u16;
         let rotated1 = sum.rotate_right(5);
@@ -539,7 +552,10 @@ impl AttackState {
         (iter1_bl, iter1_dl)
     }
 
-    fn sub_10d0d_trigger_sky_palette_flash(&mut self, flag: bool) {
+    // = seg000:0d0d night_attack_sky_flash_step — start the sky flash (ONMAP
+    // subresource 0x37 as the palette, 0x35 as the fade target), switch to
+    // 0x36 at count 10, otherwise step the fade.
+    fn night_attack_sky_flash_step(&mut self, flag: bool) {
         let mut palette_idx = 55u8;
 
         if !flag {
@@ -564,7 +580,7 @@ impl AttackState {
             }
         }
 
-        self.sub_1c13b_open_onmap_spritesheet();
+        self.open_onmap_resource();
         // let ax = dl as u16;
 
         fn apply_palette(palette: &mut Palette, data: &[u8]) {
@@ -620,7 +636,9 @@ impl AttackState {
         }
     }
 
-    fn sub_1c202(&self, sprite_id: u16, center_x: &mut i16, center_y: &mut i16) {
+    // = seg000:c202 center_sprite_coordinates — move (x, y) to the sprite's
+    // top-left so it is centred there.
+    fn center_sprite_coordinates(&self, sprite_id: u16, center_x: &mut i16, center_y: &mut i16) {
         let Some(sprite) = self.sprite_sheet.get_sprite(sprite_id) else {
             return;
         };
@@ -632,19 +650,21 @@ impl AttackState {
         *center_y = center_y.saturating_sub_unsigned(height / 2);
     }
 
-    fn sub_1c60b_troop_icon_spawn(
+    // = seg000:c60b troop_icon_spawn — append a particle record, centred on
+    // (x, y), on the module's private pool instead of the troop icon list.
+    fn troop_icon_spawn(
         &mut self,
         sprite_id: u16,
         center_x: i16,
         center_y: i16,
         velocity: (i8, i8),
     ) -> Option<&mut Particle> {
-        self.sub_1c13b_open_onmap_spritesheet();
+        self.open_onmap_resource();
 
         let mut x0 = center_x;
         let mut y0 = center_y;
 
-        self.sub_1c202(sprite_id, &mut x0, &mut y0);
+        self.center_sprite_coordinates(sprite_id, &mut x0, &mut y0);
 
         self.particles[self.particle_count as usize].rect.x0 = x0;
 
@@ -669,10 +689,12 @@ impl AttackState {
         Some(&mut self.particles[self.particle_count as usize])
     }
 
-    fn sub_1c661(&mut self, dx: i16, bx: i16, particle_index: u16) {
+    // = seg000:c661 troop_icon_move_and_redraw — move a particle by (dx, bx)
+    // and repaint the old and new rects.
+    fn troop_icon_move_and_redraw(&mut self, dx: i16, bx: i16, particle_index: u16) {
         let particle_index = particle_index as usize;
 
-        self.sub_1c13b_open_onmap_spritesheet();
+        self.open_onmap_resource();
 
         let mut temp_rect = self.particles[particle_index].rect;
 
@@ -700,18 +722,21 @@ impl AttackState {
             temp_rect.y0 = self.particles[particle_index].rect.y0;
         }
 
-        self.sub_1c6ad_troop_icons_update_dirty_rect(&temp_rect);
+        self.troop_icons_update_dirty_rect(&temp_rect);
     }
 
-    fn sub_1c13b_open_onmap_spritesheet(&self) {}
+    // = seg000:c13b open_onmap_resource — ONMAP.HSQ is loaded once with the
+    // scene, so the per-call open is a no-op here.
+    fn open_onmap_resource(&self) {}
 
-    fn sub_1c58a_troop_icon_remove(&mut self, index: u16) {
-        self.sub_1c13b_open_onmap_spritesheet();
+    // = seg000:c58a troop_icon_remove — drop a particle and compact the pool.
+    fn troop_icon_remove(&mut self, index: u16) {
+        self.open_onmap_resource();
 
         if self.particle_count != 0 && index < self.particle_count {
             self.particles[index as usize].flags |= 0x80;
             let rect = self.particles[index as usize].rect;
-            self.sub_1c6ad_troop_icons_update_dirty_rect(&rect);
+            self.troop_icons_update_dirty_rect(&rect);
 
             if index < self.particle_count - 1 {
                 for i in index..self.particle_count - 1 {
@@ -734,8 +759,10 @@ impl AttackState {
     //     }
     // }
 
-    fn sub_1c6ad_troop_icons_update_dirty_rect(&mut self, dirty_rect: &Rect) {
-        self.sub_1c13b_open_onmap_spritesheet();
+    // = seg000:c6ad troop_icons_update_dirty_rect — repaint every particle
+    // that touches the dirty rect over the background.
+    fn troop_icons_update_dirty_rect(&mut self, dirty_rect: &Rect) {
+        self.open_onmap_resource();
 
         let screen_bounds = Rect {
             x0: 0,

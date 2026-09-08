@@ -2858,11 +2858,11 @@ impl GameState {
     // flashes). The whole algorithm is ported in dune::attack::AttackState —
     // AttackState::new() loads ATTACK.HSQ and draws the tiled background
     // (= the blit_repeated_x / draw_icons_list_at_si setup), step_frame() is the
-    // loc_00b45 particle tick, and draw() blits the result + palette out.
+    // night_attack_frame_task particle tick, and draw() blits the result + palette out.
     //
     //   seg000:0ad9 open_onmap_spritesheet (ATTACK.HSQ)        ; AttackState::new
     //   seg000:0ae2..0af8 blit the tiled background + icons ; AttackState::new
-    //   seg000:0b10 add_frame_task(loc_00b45, bp=3)         ; the task below
+    //   seg000:0b10 add_frame_task(night_attack_frame_task, bp=3) ; the task below
     //   seg000:0b19 copy_active_framebuffer_to_framebuffer_2 ; AttackState bg
     //   seg000:0b1e al=3; audio_start_voc (SN3.VOC)         ; the attack sound
     //
@@ -2885,7 +2885,7 @@ impl GameState {
             .as_ref()
             .unwrap()
             .draw(&mut self.framebuffer, &mut self.palette);
-        // = seg000:da25 add_frame_task(loc_00b45, bp=3): one particle tick every 3 ticks.
+        // = seg000:da25 add_frame_task(night_attack_frame_task, bp=3): one particle tick every 3 ticks.
         // play_intro's wait_for_pcm_voice_interruptable(2000) drives it.
         self.add_frame_task(3, crate::TaskId::IntroNightAttack);
         // = seg000:0b1e mov al,3; jmp audio_start_voc — the night-attack sound.

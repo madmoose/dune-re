@@ -32,6 +32,17 @@ timer path have no counterpart.
 - `seg000:ce6c hnm_initialize_memory_handler` — startup: strip the streaming and preload flags on low-memory configurations, then preload clips 2..8.
 - `seg000:ceb0 hnm_preload_clip` — open one clip at startup and keep its first-frame rect in the resource entry.
 
+## DOS file system
+
+The port reads resources from DUNE.DAT by name and save games through
+`std::fs`; the DOS-side filename buffer, drive selection and heap staging have
+no counterpart.
+
+- `seg000:f0a0 open_resource_force_hsq` — load DIALOGUE with unpacking disabled into the GLOBDATA scratch area, then unpack from there into the real buffer (a heap-layout trick; the port unpacks straight into a Vec).
+- `seg000:f2fc strcpy_to_filename_buf` — copy a name into the DOS filename buffer before int 21h.
+- `seg000:f29b set_default_drive` — int 21h/0e; no callers.
+- `seg000:f2e7 seek_and_read_dune_dat` — seek-then-read entry; no callers.
+
 ## Memory management
 
 Every resource the port opens is read whole into a `Vec<u8>` from DUNE.DAT

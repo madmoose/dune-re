@@ -892,6 +892,8 @@ impl GameState {
         self.save_game_to(Path::new(&save_game_filename(slot)))
     }
 
+    // = seg000:f27c write_file_from_esdi — the create + write + close that
+    // create_save_cl jumps into (seg000:b3ad).
     pub(crate) fn save_game_to(&self, path: &Path) -> io::Result<()> {
         let image = self.create_save_in_memory();
         let mut data = Vec::with_capacity(2 + image.len());
@@ -908,6 +910,8 @@ impl GameState {
         self.load_game_from(Path::new(&save_game_filename(slot)))
     }
 
+    // = seg000:f255 open_nonres_file / seg000:f204 open_file_and_get_size / seg000:f260 read_ffff_to_esdi_and_close
+    // — open the loose save file, read it whole and close it.
     pub(crate) fn load_game_from(&mut self, path: &Path) -> io::Result<()> {
         let data = std::fs::read(path)?;
         if data.len() < 6 {

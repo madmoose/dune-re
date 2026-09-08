@@ -22,6 +22,8 @@ impl Header {
         sum
     }
 
+    // = seg000:f3d3 check_hsq_checksum — the header's six bytes sum to 0xab
+    // when the resource is HSQ-packed.
     pub fn is_compressed(&self) -> bool {
         self.checksum() == 0xAB
     }
@@ -63,6 +65,10 @@ impl<R: Read> Reader<R> {
     }
 }
 
+// = seg000:f403 hsq_decomp_skip_header_dssi_to_esdi / seg000:f40d hsq_decomp_no_header
+// — the LZ decoder behind every packed resource. The no-header entry first
+// moves the packed bytes to the end of the buffer so it can unpack in place;
+// the port unpacks into a fresh buffer, so one decoder serves both.
 pub fn unhsq<R: Read, W: Read + Write + Seek>(r: R, w: &mut W) -> std::io::Result<()> {
     let mut r = Reader { queue: 0, r };
     let mut w_ofs: u16 = 0;
