@@ -22,6 +22,8 @@ use crate::{
 };
 
 const QUEUE_MAX: usize = 8192;
+// Length of one OPL synthesis slice between HERAD ticks, in microseconds.
+const SYNTH_SLICE_USEC: f64 = 5000.0;
 
 pub struct Midi {
     cmd_tx: mpsc::Sender<MidiCommand>,
@@ -295,7 +297,7 @@ fn audio_thread_main(
     // Nuked-OPL3 synthesizes at the chip-native 49716 Hz and resamples to the
     // rate it is created with, so the stream's actual device rate keeps the
     // pitch correct even when 49716 Hz itself is unsupported.
-    let opl3 = Rc::new(RefCell::new(opl3_rs::Opl3Device::new(sample_rate)));
+    let opl3 = Rc::new(RefCell::new(nuked_opl3::Opl3Chip::new(sample_rate)));
     let device = Opl3DeviceWrapper {
         inner: Rc::clone(&opl3),
     };
@@ -308,6 +310,9 @@ fn audio_thread_main(
     let mut balance: u8 = 120;
     let mut sample_buf: Vec<i16> = vec![0; 32768];
     let mut out_buf: Vec<f32> = vec![0.0; 32768];
+    // Fractional sample carry for the fixed 5 ms synthesis slice below, so
+    // the slice count stays exact at rates that don't divide evenly by 200.
+    let mut samples_fpart: f64 = 0.0;
 
     loop {
         loop {
@@ -362,11 +367,13 @@ fn audio_thread_main(
             continue;
         }
 
-        let n_samples = opl3.borrow_mut().run(5000.0);
+        // Synthesize the next 5 ms slice (the HERAD tick period).
+        let samples_f = SYNTH_SLICE_USEC / 1_000_000.0 * sample_rate as f64 + samples_fpart;
+        let n_samples = samples_f as usize;
+        samples_fpart = samples_f - samples_f.floor();
         let n_total_samples = 2 * n_samples;
         opl3.borrow_mut()
-            .generate_samples(&mut sample_buf[0..n_total_samples])
-            .unwrap();
+            .generate_stream(&mut sample_buf[0..n_total_samples]);
 
         // OPL3 emits interleaved stereo (even = left, odd = right); scale each
         // channel by the balance gain as it is converted to f32. When the MIDI
@@ -398,22 +405,15 @@ fn audio_thread_main(
 }
 
 struct Opl3DeviceWrapper {
-    inner: Rc<RefCell<opl3_rs::Opl3Device>>,
+    inner: Rc<RefCell<nuked_opl3::Opl3Chip>>,
 }
 
 impl crate::herad::dnadl::Device for Opl3DeviceWrapper {
     fn write_opl(&mut self, reg: u16, val: u8) {
-        let bank = || {
-            if reg >= 0x100 {
-                opl3_rs::OplRegisterFile::Secondary
-            } else {
-                opl3_rs::OplRegisterFile::Primary
-            }
-        };
-        let reg_byte = (reg & 0xff) as u8;
-        let mut inner = self.inner.borrow_mut();
-        inner.write_address(reg_byte, bank()).unwrap();
-        inner.write_data(val, bank(), true).unwrap();
+        // Buffered: Nuked-OPL3 spaces queued writes at least two chip samples
+        // apart, standing in for the port-write timing of the real card.
+        // Bit 8 of `reg` selects the second OPL3 register bank.
+        self.inner.borrow_mut().write_reg_buffered(reg, val);
     }
 }
 

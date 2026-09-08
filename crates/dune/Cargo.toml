@@ -8,7 +8,7 @@ bytes_ext = { workspace = true }
 clap = { workspace = true, features = ["derive"] }
 cpal = { workspace = true }
 num = { workspace = true }
-opl3-rs = { workspace = true }
+nuked_opl3 = { workspace = true }
 png = { workspace = true }
 winit = { version = "0.30.12", features = ["rwh_06"] }
 wgpu = "30"
