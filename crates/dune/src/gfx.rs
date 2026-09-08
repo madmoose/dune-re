@@ -1724,7 +1724,7 @@ const PANEL_UP: u16 = 178;
 const PANEL_DN: u16 = 179;
 const PANEL_HALF: u16 = 20;
 
-// = segvga:30f2 panel-fold parameter table (al = rows copied, ah = rows skipped),
+// = segvga:30f2 panel_fold_table (al = rows copied, ah = rows skipped),
 // indexed by frame 1..0x11; symmetric around frame 9 (fully collapsed). Same
 // values as transition_vertical_fold's FOLD_LINES. play_pending_panel_fold plays frames
 // 0x11..1: the closing half (> 9) squishes the old panel, frame 9 is the

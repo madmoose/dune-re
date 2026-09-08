@@ -197,7 +197,8 @@ impl MapRenderer {
         }
     }
 
-    // = segvga:2123 (northern hemisphere) / segvga:2153 (southern) — spread
+    // = segvga:2123 map_band_interpolate_north / segvga:2153 map_band_interpolate_south
+    // (both fall into the shared body, segvga:2183 map_band_interpolate) — spread
     // the interpolated top/bottom rows over the band's four 400-byte lines
     // (segvga:213d the 0x190 line stride, segvga:2164 the 0xb0 = 176-column
     // loop), duplicating columns with the 8-bit error accumulators seeded

@@ -602,6 +602,14 @@ impl GameState {
         self.intro_play_hnm_skippable();
     }
 
+    // = seg000:0687 dead_draw_libre_icons [not needed] — a leftover intro stage
+    //   from an earlier build: clear the framebuffer, open resource 0x1c
+    //   (LIBRE.HSQ, absent from the CD's DUNE.DAT) and draw an icon list whose
+    //   pointer now lands inside callback_action_in_continue_sequence_0a.
+    //   Nothing references it.
+    // = seg000:068f dead_draw_libre_icons_2 [not needed] — its sibling with the
+    //   second stale icon-list pointer; both share the tail at seg000:0695.
+
     // = seg000:cefc load_IRULn_HSQ. open_spritesheet(0x69 +
     // language_setting) for the subtitle bank, reset the subtitle pointer,
     // vga_set_fb_row(0) + gfx_clear_active_framebuffer + open IRULAN.HNM
@@ -649,20 +657,10 @@ impl GameState {
                 break;
             }
 
-            // Draw the subtitle.
+            // = seg000:cf2d call IRULx_draw_or_clear_subtitle for the entry the
+            // cursor just passed.
             if idx > 0 {
-                let last = idx - 1;
-                if last % 2 == 0 {
-                    // = seg000:cf53
-                    self.draw_active_bank_sprite((last / 2) as u16, 0, 190);
-                } else {
-                    // = seg000:cf61 clear the subtitle.
-                    for y in 190..200 {
-                        for x in 0..320 {
-                            self.screen.set(x, y, 0);
-                        }
-                    }
-                }
+                self.stage_06_draw_or_clear_subtitle(idx - 1);
             }
             self.send_frame_to_display();
             self.global_frame_count += 1;
@@ -687,7 +685,23 @@ impl GameState {
         self.active_fb = saved;
     }
 
-    fn stage_06_draw_or_clear_subtitle(&mut self) {}
+    // = seg000:cf4b IRULx_draw_or_clear_subtitle — the subtitle step for the
+    // entry at `last` (DOS receives si just past it and tests the cursor's
+    // parity, so DOS's odd cursor is the port's even entry): an even entry draws
+    // subtitle sprite `last / 2` at row 190 (seg000:cf53 draw_sprite_clobbering_bx_dx
+    // with bx = 0xbe, dx = 0); an odd one clears the subtitle band (seg000:cf61
+    // rep stosw from screen offset 0xed80 = row 190).
+    fn stage_06_draw_or_clear_subtitle(&mut self, last: usize) {
+        if last.is_multiple_of(2) {
+            self.draw_active_bank_sprite((last / 2) as u16, 0, 190);
+        } else {
+            for y in 190..200 {
+                for x in 0..320 {
+                    self.screen.set(x, y, 0);
+                }
+            }
+        }
+    }
 
     fn stage_07_init(&mut self) {
         self.gfx_clear_active_framebuffer();
@@ -825,11 +839,10 @@ impl GameState {
         self.send_frame_to_display();
     }
 
-    // = seg000:06ce intro_load_desert_flyover_video. loc_006f3:
-    // add 0x1e0 to active framebuffer segment (shifts write target 24
-    // rows; play_intro already set that offset via vga_set_fb_row(24))
-    // then open PLANT.HNM (resource 0x10; ticks_per_frame = high byte
-    // of RES_PLANT_HNM.unk0 = 0x19 = 25).
+    // = seg000:06ce intro_load_desert_flyover_video. Through the shared tail
+    // seg000:06f3 load_game_area_hnm: add 0x1e0 to the active framebuffer
+    // segment (the write target moves down 24 rows; play_intro already set
+    // that offset via vga_set_fb_row(24)), then open HNM 0x10 = MTG1.HNM.
     fn stage_12_init(&mut self) {
         self.hnm_load_first_frame("MTG1.HNM", 24);
     }
@@ -984,6 +997,9 @@ impl GameState {
 
     fn stage_18_play(&mut self) {}
 
+    // = seg000:06d3 intro_desert_flight_to_sietch — HNM 0x11 = MTG2.HNM, the
+    // middle leg of the desert flight, into the game area through the shared
+    // tail seg000:06f3 load_game_area_hnm.
     fn stage_19_init(&mut self) {
         self.hnm_load_first_frame("MTG2.HNM", 24);
     }
@@ -1315,8 +1331,8 @@ impl GameState {
         if self.data_0227d == 0 {
             self.load_sky_palette_to_fade_target(resource, 0x12, count, 16, 240);
         }
-        // = seg000:06f3 add [0dbdah],1e0h (fb base += 24 rows = the game area) +
-        // hnm_load_first_frame(HNM 0x12 = MTG3.HNM). The first frame sets the live
+        // = seg000:06f3 load_game_area_hnm: add [0dbdah],1e0h (fb base += 24
+        // rows = the game area) + hnm_load_first_frame(HNM 0x12 = MTG3.HNM). The first frame sets the live
         // palette; the fade then steps its sky range toward the SKY target.
         self.hnm_load_first_frame("MTG3.HNM", 24);
     }
@@ -1342,48 +1358,67 @@ impl GameState {
     }
 
     // Story-still stages — each opens its INTxx.HSQ and draws sprite 0.
+
+    // = seg000:0740 intro_30_init — gfx_clear_active_framebuffer, then
+    // open_resource_and_draw_sprite0 (INT05.HSQ) through the shared jmp at
+    // seg000:0739.
     fn stage_30_init(&mut self) {
+        self.gfx_clear_active_framebuffer();
         self.open_resource_and_draw_sprite0(INT05);
     }
 
     fn stage_30_play(&mut self) {}
 
+    // = seg000:075a intro_31_init — open_resource_and_draw_sprite0
+    // (INT10.HSQ) through the shared jmp at seg000:0739.
     fn stage_31_init(&mut self) {
         self.open_resource_and_draw_sprite0(INT10);
     }
 
     fn stage_31_play(&mut self) {}
 
+    // = seg000:0752 intro_32_init — open_resource_and_draw_sprite0
+    // (INT08.HSQ) through the shared jmp at seg000:0739.
     fn stage_32_init(&mut self) {
         self.open_resource_and_draw_sprite0(INT08);
     }
 
     fn stage_32_play(&mut self) {}
 
+    // = seg000:073c intro_33_init — open_resource_and_draw_sprite0
+    // (INT04.HSQ) through the shared jmp at seg000:0739.
     fn stage_33_init(&mut self) {
         self.open_resource_and_draw_sprite0(INT04);
     }
 
     fn stage_33_play(&mut self) {}
 
+    // = seg000:0756 intro_34_init — open_resource_and_draw_sprite0
+    // (INT09.HSQ) through the shared jmp at seg000:0739.
     fn stage_34_init(&mut self) {
         self.open_resource_and_draw_sprite0(INT09);
     }
 
     fn stage_34_play(&mut self) {}
 
+    // = seg000:075e intro_35_init — open_resource_and_draw_sprite0
+    // (INT11.HSQ) through the shared jmp at seg000:0739.
     fn stage_35_init(&mut self) {
         self.open_resource_and_draw_sprite0(INT11);
     }
 
     fn stage_35_play(&mut self) {}
 
+    // = seg000:0737 intro_36_init — open_resource_and_draw_sprite0
+    // (INT02.HSQ) through the shared jmp at seg000:0739.
     fn stage_36_init(&mut self) {
         self.open_resource_and_draw_sprite0(INT02);
     }
 
     fn stage_36_play(&mut self) {}
 
+    // = seg000:0747 intro_37_init — open_resource_and_draw_sprite0
+    // (INT06.HSQ) through the shared jmp at seg000:0739.
     fn stage_37_init(&mut self) {
         self.open_resource_and_draw_sprite0(INT06);
     }
@@ -1405,10 +1440,11 @@ impl GameState {
 
     fn stage_38_play(&mut self) {}
 
-    // = seg000:050d loc_006ea -> set location_and_room=2, hnm_load_first_frame
-    // (HNM 0x13 = PLANT.HNM, into the game area).
+    // = seg000:06ea intro_39_init — location_and_room = 2, then HNM 0x13 =
+    // PLANT.HNM into the game area through seg000:06f3 load_game_area_hnm
+    // (intro_script entry 39, seg000:050d).
     fn stage_39_init(&mut self) {
-        // Change location away from to stop drip sound
+        // Move the location away from the sietch so its drip sound stops.
         self.location_and_room = 0x0002;
         self.hnm_load_first_frame("PLANT.HNM", 24);
     }
@@ -1417,7 +1453,11 @@ impl GameState {
         self.intro_play_hnm_with_frame_task();
     }
 
+    // = seg000:074b intro_40_init — gfx_clear_active_framebuffer, then
+    // open_resource_and_draw_sprite0 (INT07.HSQ) through the shared jmp at
+    // seg000:0739.
     fn stage_40_init(&mut self) {
+        self.gfx_clear_active_framebuffer();
         self.open_resource_and_draw_sprite0(INT07);
     }
 
@@ -1514,18 +1554,26 @@ impl GameState {
         self.hnm_is_complete()
     }
 
+    // = seg000:076a intro_scene_back — gfx_clear_active_framebuffer, then
+    // open_resource_and_draw_sprite0 (INT15.HSQ) through the shared jmp at
+    // seg000:0739. The CD script uses it for entries 42 and 46.
     fn stage_42_init(&mut self) {
+        self.gfx_clear_active_framebuffer();
         self.open_resource_and_draw_sprite0(INT15);
     }
 
     fn stage_42_play(&mut self) {}
 
+    // = seg000:0762 intro_43_init — open_resource_and_draw_sprite0
+    // (INT13.HSQ) through the shared jmp at seg000:0739.
     fn stage_43_init(&mut self) {
         self.open_resource_and_draw_sprite0(INT13);
     }
 
     fn stage_43_play(&mut self) {}
 
+    // = seg000:0766 intro_44_init — open_resource_and_draw_sprite0
+    // (INT14.HSQ) through the shared jmp at seg000:0739.
     fn stage_44_init(&mut self) {
         self.open_resource_and_draw_sprite0(INT14);
     }

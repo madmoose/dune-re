@@ -2710,9 +2710,9 @@ impl GameState {
             self.play_worm_departure_transition();
             return;
         }
-        // = seg000:47ce call prefetch_travel_hnm_resources (seg000:ce53) — a
-        //   CD-era prefetch of the flight HNMs (resources 0x63..0x68); the
-        //   port reads the DAT on demand.
+        // = seg000:ce53 prefetch_travel_hnm_resources [not needed] — called here
+        //   (seg000:47ce), a CD-era prefetch of the flight HNMs (resources
+        //   0x63..0x68); the port reads the DAT on demand.
         // = seg000:47d1..47d9 xchg al,[data_04732]; shl al,1; jnb ret — the
         //   destination click armed bit 7; consume it either way.
         let armed = std::mem::take(&mut self.data_04732);

@@ -112,7 +112,8 @@ impl GameState {
         self.hnm_read_header();
     }
 
-    // = seg000:c93c hnm_read_header — open the resource for the active video id
+    // = seg000:c93c hnm_read_header / seg000:c921 hnm_get_res_entry_by_index —
+    // open the resource for the active video id
     // and parse its header. The header is laid out as {size:u16, palette, 0xff
     // padding, frame-offset table}. DOS streams it through the scratch buffer;
     // the single-buffer port reads the whole resource into hnm_bytes and parses
@@ -219,8 +220,8 @@ impl GameState {
         self.hnm_finished
     }
 
-    // = seg000:ce01 hnm_reset_frame_counter (falls through into ce07
-    // hnm_reset_counters). Zeroes the frame counters and disarms the loop-point
+    // = seg000:ce01 hnm_reset_frame_counter / seg000:ce07 hnm_reset_counters (the
+    // fall-through tail). Zeroes the frame counters and disarms the loop-point
     // frame count; hnm_counter_3 (the saved loop length, seg000:cb76) has no
     // ported reader.
     fn hnm_reset_frame_counters(&mut self) {
@@ -261,8 +262,9 @@ impl GameState {
         self.hnm_advance_to_next_frame();
     }
 
-    // = seg000:ca60 hnm_do_frame — display the current frame and step to the
-    // next one. The DOS prefetch/buffering (ca71 loc_0caa0, ca76 hnm_prefetch)
+    // = seg000:ca60 hnm_do_frame / seg000:caa0 hnm_decode_buffered_frame / seg000:cb1a hnm_prefetch
+    // (its loop-point half, cb00..cc04) — display the current frame and step to
+    // the next one. The DOS streaming half of hnm_prefetch and hnm_decode_buffered_frame
     // and PIT/PCM pacing (ca7b hnm_wait_for_frame) belong to the streaming reader
     // the single-buffer port omits; pacing is the caller's frame-task job, as in
     // the HnmDecoder path. (Named to avoid clashing with the existing
@@ -451,8 +453,9 @@ impl GameState {
         }
     }
 
-    // = seg000:ccf4 hnm_decode_typed_chunk_video_to_bp — the deferred two-stage
-    // DOS decode collapsed into one pass:
+    // = seg000:ccf4 hnm_decode_typed_chunk_video_to_bp / seg000:cc96 hnm_decode_video_frame / seg000:ce3b hnm_handle_pal_chunk
+    // — the deferred two-stage DOS decode, the frame blit and the palette
+    // chunk apply collapsed into one pass:
     // hnm_decode_typed_chunk_video_to_bp (seg000:ccf4) scans the frame's blocks
     // and decompresses the video chunk into the staging buffer `bp`, then
     // hnm_decode_video_frame (seg000:cc96) blits that chunk onto framebuffer_active.

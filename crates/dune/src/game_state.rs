@@ -2354,7 +2354,7 @@ pub struct GameState {
     // (travel_reset_trail). travel_trail_append writes at the cursor.
     pub(crate) travel_trail_ring: [(u16, u16); TRAVEL_TRAIL_LEN],
 
-    // = seg000:23c25 the blink toggle frame_task_callback_blink flips while
+    // = seg001:4775 _byte_23C25_blink — the toggle frame_task_callback_blink flips while
     // a scripted scene runs.
     pub(crate) sequence_blink: bool,
 
@@ -4010,14 +4010,14 @@ impl GameState {
         }
     }
 
+    // = seg000:cc85 check_if_hnm_complete — finished once the clip has played
+    // its last frame (hnm_finished) or been closed.
     pub fn hnm_is_complete(&self) -> bool {
-        // = seg000:cc85 check_if_hnm_complete: finished once the clip has played its last
-        // frame (hnm_finished) or been closed.
         self.hnm_finished || !self.hnm_is_open()
     }
 
-    // = seg000:c9f4 hnm_do_frame_and_check_if_frame_advanced — decode the next HNM
-    // frame into the framebuffer iff the per-clip tick interval has
+    // = seg000:c9f4 hnm_do_frame_and_check_if_frame_advanced / seg000:cad4 hnm_wait_for_frame / seg000:ca59 hnm_stamp_frame_tick
+    // — decode the next HNM frame into the framebuffer iff the per-clip tick interval has
     // elapsed. Returns true when a frame was actually decoded. The screen
     // is NOT updated here; the foreground play loop calls
     // `gfx_copy_whole_framebuf_to_screen` after a successful advance

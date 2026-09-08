@@ -1102,6 +1102,10 @@ impl ApplicationHandler for App {
         // The game renders its own mouse cursor sprite, so hide the host one.
         window.set_cursor_visible(false);
 
+        // = seg000:e97a initialize_mouse [not needed] — DOS checks the INT 33h
+        // vector, resets the mouse driver and seeds its position and range.
+        // The port takes pointer events from the window instead.
+
         // = seg000:e65c..e662 initialize_system warps the pointer to its
         // startup position (237, 171) via warp_mouse_cursor -> set_mouse_pos
         // (INT 33,4). The port's equivalent of the driver warp is moving the
