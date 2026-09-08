@@ -1,0 +1,13 @@
+[package]
+name = "nuked_opl3"
+version = "0.0.0"
+edition.workspace = true
+# A line-for-line Rust port of Nuked-OPL3 1.8 by Nuke.YKT
+# (https://github.com/nukeykt/Nuked-OPL3), which is licensed under the GNU
+# LGPL 2.1 or later. The port keeps the original license.
+description = "Pure-Rust port of Nuke.YKT's Nuked-OPL3 Yamaha YMF262 (OPL3) emulator"
+license = "LGPL-2.1-or-later"
+authors = ["Nuke.YKT (original C implementation)"]
+
+[lints]
+workspace = true
