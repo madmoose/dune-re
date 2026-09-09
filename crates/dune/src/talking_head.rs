@@ -1206,7 +1206,7 @@ impl GameState {
             .start_playback(&self.audio_current_sfx_data, 0);
     }
 
-    // = seg000:a7c2 lip_sync_frame_task (+ advance_lipsync / set_lipsync_data_to_al).
+    // = seg000:a7c2 lip_sync_frame_task (+ advance_lipsync).
     // Step the mouth value from the .voc stream in lock-step with PCM playback:
     // mouth index = samples_played / SAMPLES_PER_LIP_FRAME (a fixed cadence),
     // holding the last value once the stream ends. When a new value arrives it
@@ -1241,7 +1241,7 @@ impl GameState {
             baseline + elapsed / TICKS_PER_LIP_FRAME * SAMPLES_PER_LIP_FRAME
         };
 
-        let (lip_anim, frame, mouth, done) = {
+        let (mouth, done) = {
             let Some(head) = self.talking_head.as_ref() else {
                 self.remove_frame_task(crate::TaskId::TalkingHeadVoc);
                 return;
@@ -1250,12 +1250,12 @@ impl GameState {
             // = seg000:abcc is_voc_pcm_playing / pcm_test_audio_done: no audio, or the
             // clip has drained → over.
             if head.voc_total_samples == 0 || played >= head.voc_total_samples {
-                (0usize, 0usize, 0u8, true)
+                (0u8, true)
             } else if head.voc_lipsync.is_empty() {
                 // = seg000:a7c7 cmp pcm_voc_lipsync_data,0 — a voice without
                 // a mouth stream keeps playing: the task skips the mouth
                 // stepping and only pumps the stream until the audio drains.
-                (0usize, 0usize, 0u8, false)
+                (0u8, false)
             } else {
                 // = seg000:a7c2 lip_sync_frame_task timing: the mouth advances one stream
                 // value per fixed SAMPLES_PER_LIP_FRAME of audio, slaved to the
@@ -1264,32 +1264,7 @@ impl GameState {
                 // plays out (the stage waits on the audio, not the stream).
                 let len = head.voc_lipsync.len() as u64;
                 let idx = (played / SAMPLES_PER_LIP_FRAME).min(len - 1) as usize;
-                let mouth = head.voc_lipsync[idx];
-                // = seg000:9e12..9e31 the lip-frame select: si = lip_ids +
-                // frame*2. The last animation is the lip-id table; with
-                // facing 0 (the 9e1c `js`) frame = the mouth value. A
-                // non-zero facing banks the table per styling variant —
-                // frame = mouth + (facing-1)*4 (9e27..9e2b), four mouth
-                // frames per variant each drawn with that variant's
-                // hair/eyebrows/beard (FRM1..FRM3 chiefs, Paul's age
-                // variants). The SMUG head (talking_head_id 0dh,
-                // 9e1e..9e25) adds one more per variant — a stride of 5.
-                let mut frame = mouth as usize;
-                if head.facing != 0 {
-                    let variant = (head.facing - 1) as usize;
-                    if head.talking_head_id == 0x0d {
-                        frame += variant;
-                    }
-                    frame += variant * 4;
-                }
-                let lip_anim = head.lipsync.animations.len().saturating_sub(1);
-                let last_frame = head
-                    .lipsync
-                    .animations
-                    .get(lip_anim)
-                    .map(|a| a.frames.len().saturating_sub(1))
-                    .unwrap_or(0);
-                (lip_anim, frame.min(last_frame), mouth, false)
+                (head.voc_lipsync[idx], false)
             }
         };
 
@@ -1314,78 +1289,129 @@ impl GameState {
             return;
         }
 
-        // = seg000:a82e set_lipsync_data_to_al `cmp al,[_byte_2D0DA_last_lipsync_data]; jz`
-        // — only redraw when the mouth value changes.
-        let changed = {
-            let head = self.talking_head.as_mut().unwrap();
-            let c = head.mouth != mouth;
-            head.mouth = mouth;
-            c
-        };
-
-        if changed {
-            // = seg000:9df1 cmp data_046eb,0; js lip_sync_stamp_troop_popup —
-            // while the full-map view owns the screen the head lives in the popup's
-            // box, so the stamp goes there instead: the same lip frame
-            // (9e79..9e8a banks it by idle expression exactly like the room
-            // path, minus the SMUG stride), re-anchored into the box and
-            // clipped to it.
-            //
-            // Deviation: DOS splits on the lip group's second entry
-            // (seg000:9eb1) and sends multi-image groups to fb1 with an
-            // fb1->screen present of the box, single-image ones straight to
-            // the screen buffer. On the map view fb1 holds the plain map — the
-            // popup is only ever painted into the screen buffer — so the fb1
-            // variant would publish map pixels over the head. The port draws
-            // both into the screen buffer and publishes.
-            if self.data_046eb & 0x80 != 0 {
-                self.draw_talking_head_in_box(lip_anim, frame);
-                // = seg000:9e92..9e96 restore_mouse_if_rect_intersects
-                //   (data_047d4), 9ec3 present, 9ec6 draw_mouse_cursor_if_needed.
-                let yoff = self.y_offset as i16;
-                let boxr = self.head_popup_box;
-                let published = Rect {
-                    y0: boxr.y0 + yoff,
-                    y1: boxr.y1 + yoff,
-                    ..boxr
-                };
-                self.restore_mouse_if_rect_intersects(published);
-                self.send_frame_to_display();
-                self.draw_mouse_cursor_if_needed_then_present();
-                // = seg000:a811 jmp pcm_voice_stream_refill — the task tail
-                // pumps the stream on every exit of the live-voice path.
-                self.pcm_voice_stream_refill();
-                return;
-            }
-            // = seg000:9e39 cmp [vision_message_type_ds_ea],0; jg loc_09e74 —
-            // while a vision message presents the mouth is never drawn (the
-            // lip bookkeeping above still ran, = 9e33). The full-screen dream
-            // keeps ds:ea = its message type until seg000:2c7a, so its head
-            // speaks with a still mouth; the in-room delivery reset ds:ea to
-            // 0xff before its voice started (seg000:2b1a), so there the mouth
-            // moves.
-            if self.data_000ea <= 0 {
-                // = seg000:9e40..9e45 — stamp the lip-id frame's sprite list
-                // over the live fb1 (draw_talking_head_at_si), clipped to the
-                // head's MOUTH BOX (9df8..9e0f) — no backdrop restore. Each lip
-                // group bundles the torso/collar sprite under the mouth
-                // sprite; the clip confines that collar redraw to the mouth
-                // box, where it erases the previous stamp's beard overhang
-                // without ever repainting the wings over the ears. The rest
-                // of the face stays owned by the still-running idle task.
-                let clip = self.mouth_clip_rect();
-                let rect = self.draw_talking_head_frame(lip_anim, frame, clip);
-                // = the seg000:9e48..9e54 draw tail (loc_0908c -> restore_mouse_
-                // if_rect_intersects -> present_screen_rect (c4f0) ->
-                // draw_mouse_cursor_if_needed) — the same shared present chain
-                // as the idle animator's.
-                self.present_head_dirty_rect(rect);
-            }
-        }
+        // = seg000:a80e call set_lipsync_data_to_al — the new mouth value.
+        self.set_lipsync_data_to_al(mouth);
         // = seg000:a811 jmp pcm_voice_stream_refill — every pass of the task
         // that leaves the voice live feeds the driver the next chunk; only
         // the drained path above (lip_sync_stop) skips the pump.
         self.pcm_voice_stream_refill();
+    }
+
+    // = seg000:a82e set_lipsync_data_to_al — stamp the mouth for a new lip
+    // value: only when it differs from the last one (_byte_2D0DA_last_lipsync_data),
+    // then jump into lip_sync_stamp_mouth with the head's mouth box.
+    fn set_lipsync_data_to_al(&mut self, mouth: u8) {
+        // = seg000:a82e cmp al,[_byte_2D0DA_last_lipsync_data]; jz ret; store.
+        let changed = {
+            let Some(head) = self.talking_head.as_mut() else {
+                return;
+            };
+            let c = head.mouth != mouth;
+            head.mouth = mouth;
+            c
+        };
+        if changed {
+            // = seg000:a837 si = [current_head_mouth_box]; jmp lip_sync_stamp_mouth.
+            self.lip_sync_stamp_mouth(mouth);
+        }
+    }
+
+    // = seg000:9de3 lip_sync_stamp_mouth — the speech mouth draw: select the
+    // lip-id frame for `mouth` and stamp it over the live fb1, clipped to the
+    // head's mouth box (no backdrop restore; the idle task keeps owning the
+    // rest of the face). While the full-map view owns the screen the stamp
+    // goes to the popup head box instead (lip_sync_stamp_troop_popup).
+    fn lip_sync_stamp_mouth(&mut self, mouth: u8) {
+        let Some(head) = self.talking_head.as_ref() else {
+            return;
+        };
+        // = seg000:9e12..9e31 the lip-frame select: si = lip_ids +
+        // frame*2. The last animation is the lip-id table; with
+        // facing 0 (the 9e1c `js`) frame = the mouth value. A
+        // non-zero facing banks the table per styling variant —
+        // frame = mouth + (facing-1)*4 (9e27..9e2b), four mouth
+        // frames per variant each drawn with that variant's
+        // hair/eyebrows/beard (FRM1..FRM3 chiefs, Paul's age
+        // variants). The SMUG head (talking_head_id 0dh,
+        // 9e1e..9e25) adds one more per variant — a stride of 5.
+        let mut frame = mouth as usize;
+        if head.facing != 0 {
+            let variant = (head.facing - 1) as usize;
+            if head.talking_head_id == 0x0d {
+                frame += variant;
+            }
+            frame += variant * 4;
+        }
+        let lip_anim = head.lipsync.animations.len().saturating_sub(1);
+        let last_frame = head
+            .lipsync
+            .animations
+            .get(lip_anim)
+            .map(|a| a.frames.len().saturating_sub(1))
+            .unwrap_or(0);
+        let frame = frame.min(last_frame);
+
+        // = seg000:9df1 cmp data_046eb,0; js lip_sync_stamp_troop_popup —
+        // while the full-map view owns the screen the head lives in the popup's
+        // box, so the stamp goes there instead: the same lip frame
+        // (9e79..9e8a banks it by idle expression exactly like the room
+        // path, minus the SMUG stride), re-anchored into the box and
+        // clipped to it.
+        if self.data_046eb & 0x80 != 0 {
+            self.lip_sync_stamp_troop_popup(lip_anim, frame);
+            return;
+        }
+        // = seg000:9e39 cmp [vision_message_type_ds_ea],0; jg loc_09e74 —
+        // while a vision message presents the mouth is never drawn (the
+        // lip bookkeeping above still ran, = 9e33). The full-screen dream
+        // keeps ds:ea = its message type until seg000:2c7a, so its head
+        // speaks with a still mouth; the in-room delivery reset ds:ea to
+        // 0xff before its voice started (seg000:2b1a), so there the mouth
+        // moves.
+        if self.data_000ea <= 0 {
+            // = seg000:9e40..9e45 — stamp the lip-id frame's sprite list
+            // over the live fb1 (draw_talking_head_at_si), clipped to the
+            // head's MOUTH BOX (9df8..9e0f) — no backdrop restore. Each lip
+            // group bundles the torso/collar sprite under the mouth
+            // sprite; the clip confines that collar redraw to the mouth
+            // box, where it erases the previous stamp's beard overhang
+            // without ever repainting the wings over the ears. The rest
+            // of the face stays owned by the still-running idle task.
+            let clip = self.mouth_clip_rect();
+            let rect = self.draw_talking_head_frame(lip_anim, frame, clip);
+            // = the seg000:9e48..9e54 draw tail (loc_0908c -> restore_mouse_
+            // if_rect_intersects -> present_screen_rect (c4f0) ->
+            // draw_mouse_cursor_if_needed) — the same shared present chain
+            // as the idle animator's.
+            self.present_head_dirty_rect(rect);
+        }
+    }
+
+    // = seg000:9e75 lip_sync_stamp_troop_popup — the speech mouth stamp while
+    // the full-map view owns the screen: the lip frame re-anchored into the
+    // troop popup's head box.
+    //
+    // Deviation: DOS splits on the lip group's second entry
+    // (seg000:9eb1) and sends multi-image groups to fb1 with an
+    // fb1->screen present of the box, single-image ones straight to
+    // the screen buffer. On the map view fb1 holds the plain map — the
+    // popup is only ever painted into the screen buffer — so the fb1
+    // variant would publish map pixels over the head. The port draws
+    // both into the screen buffer and publishes.
+    fn lip_sync_stamp_troop_popup(&mut self, lip_anim: usize, frame: usize) {
+        self.draw_talking_head_in_box(lip_anim, frame);
+        // = seg000:9e92..9e96 restore_mouse_if_rect_intersects
+        //   (data_047d4), 9ec3 present, 9ec6 draw_mouse_cursor_if_needed.
+        let yoff = self.y_offset as i16;
+        let boxr = self.head_popup_box;
+        let published = Rect {
+            y0: boxr.y0 + yoff,
+            y1: boxr.y1 + yoff,
+            ..boxr
+        };
+        self.restore_mouse_if_rect_intersects(published);
+        self.send_frame_to_display();
+        self.draw_mouse_cursor_if_needed_then_present();
     }
 
     // = seg000:a7a5 lip_sync_stop — stop any active voice LIP-SYNC and starve
