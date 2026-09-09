@@ -610,9 +610,11 @@ impl GameState {
         // image-list count word — the port's talking-head teardown
         // (reset_scene_lip_sync_state) covers both.
         // = seg000:2c7a..2c8a ds:ea back to idle, the HUD head fully raised,
-        // the chained-voc word cleared (data_0dc30, unmodelled).
+        // the chained narration clip cleared.
         self.data_000ea = -1;
         self.ui_hud_head_index = 0x0a;
+        // = seg000:2c84 mov [chained_narration_clip], 0.
+        self.chained_narration_clip = 0;
         // = seg000:2c8c al = 6; call ui_present_room_screen; 2c8f jmp
         // copy_active_framebuffer_to_framebuffer_2.
         self.ui_present_room_screen(6);

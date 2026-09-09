@@ -436,7 +436,7 @@ impl GameState {
     // through set it: hidden).
     pub(crate) fn draw_room_game_screen_scene_reload(&mut self) {
         // = seg000:2dbf call open_SAL_resource — open the room's scene resource.
-        self.sal_open_resource();
+        self.open_sal_resource();
         // = seg000:2dc4 clear the in-transition / render / lip-sync-index state.
         self.in_transition = 0;
         self.room_render_flags = 0;
@@ -453,7 +453,7 @@ impl GameState {
         if self.night_attack_stage != 0 {
             // = seg000:2dda the scripted night-attack scene branch.
             self.data_04732 = 0;
-            self.sal_open_resource();
+            self.open_sal_resource();
             self.data_011bc |= 1;
             self.sky_fade_active = false;
             self.night_attack_start();
@@ -1526,13 +1526,6 @@ impl GameState {
         self.set_active_mouse_handlers(&crate::game_ui::ROOM_MOUSE_HANDLERS);
     }
 
-    // = seg000:08f0 loc_008f0 / seg000:2d74 open_SAL_resource — open the current location/room's scene
-    // (.SAL) resource. The port currently opens + renders together inside
-    // draw_location_room (room_scene.rs).
-    // TODO: port the standalone open; no-op stub.
-    #[allow(non_snake_case)]
-    fn sal_open_resource(&mut self) {}
-
     // = seg000:2eb2 ui_draw_room_command_panel — draw the bottom command /
     // dialogue panel. With a dialogue active (data_04774 != 0) it blanks the
     // nav panel (loc_0301a) and pushes the scene's panel; otherwise it builds
@@ -1596,11 +1589,11 @@ impl GameState {
     // display name into the substitution table: subst[1] = first_name (COMMAND
     // 1..12 "Arrakeen".."Celimyn"), subst[2] = last_name + 0xc (COMMAND 0x0d
     // "(Atreides)" .. 0x17 "Pyort") — the 0x81/0x82 placeholders in dialogue
-    // text. Every DOS call site passes a Location record in di. The DOS
-    // identity store (staged_name_location_ptr = di, read by the
-    // dialogue-line-0x0d globe-zoom callback at seg000:a28e) is not modelled —
-    // that callback is not ported.
+    // text. Every DOS call site passes a Location record in di.
     pub(crate) fn stage_location_name_placeholders(&mut self, loc_index: usize) {
+        // = seg000:2e98 mov [staged_name_location_ptr], di — remembered for
+        //   the dialogue-line-0x0d map inset.
+        self.staged_name_location = loc_index;
         let loc = &self.locations[loc_index];
         // = seg000:2e9e/2ea3 subst_id_01 = [di] = first_name.
         self.string_subst_id_table[1] = loc.first_name as u16;
@@ -3012,7 +3005,7 @@ impl GameState {
         // = seg000:48d5 loc_048d5 — clear the arrival flags and reopen the
         // room's SAL resource (jmp open_SAL_resource).
         self.data_04732 = 0;
-        self.sal_open_resource();
+        self.open_sal_resource();
     }
 
     // = seg000:5ba0 copy_game_area_rect_to_unknown_rect — copy the game-area rect

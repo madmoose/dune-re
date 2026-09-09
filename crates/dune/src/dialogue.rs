@@ -36,9 +36,23 @@ use crate::{
     game_phase::{PHASE_01_DUNCAN_AVAILABLE, PHASE_10_TUONO_HARG_FOUND, PHASE_64_ENDGAME},
     gfx,
     menu_defs::MenuRef,
+    rect::rect,
     room_game_screen::{NPC_COMPANION, NPC_STORY_BIT},
     smugglers::smuggler_index_from_ptr,
+    sprite_bank,
 };
+
+// = seg001:22e4 icon_list_dialogue_map_inset — PALPLAN.HSQ sprite 7, the map
+// inset frame, at (168, 23).
+const DIALOGUE_MAP_INSET_ICONS: [(u16, i16, i16); 1] = [(7, 0xa8, 0x17)];
+
+// = seg001:22ec dialogue_map_inset_frame_rect — the inset frame, copied
+// fb1 -> fb2 once the inset is drawn.
+const DIALOGUE_MAP_INSET_FRAME_RECT: Rect = rect(0xa8, 0x17, 0x12a, 0x61);
+
+// = seg001:22f4 dialogue_map_inset_view_rect — the globe window inside the
+// frame, installed as the map view rect while the inset draws.
+const DIALOGUE_MAP_INSET_VIEW_RECT: Rect = rect(0xb0, 0x20, 0x120, 0x58);
 
 impl GameState {
     // = seg000:a1c4 arm_dialogue_interrupt_gate — dialogue_interrupt_gate =
@@ -795,34 +809,51 @@ impl GameState {
         presented
     }
 
-    // = seg000:a0c9 loc_0a0c9 -> loc_09efd — load and play the current subtitle line's voice
-    // `.voc` over the lip-sync engine. Reads current_subtitle_id, which
-    // show_voice_subtitle set. DOS runs this AFTER the spoken-line event fires.
+    // = seg000:9efd play_dialogue_voc — load and play the current subtitle
+    // line's voice `.voc` over the lip-sync engine. Reads current_subtitle_id,
+    // which show_voice_subtitle set. The in-line caller (seg000:a0c9) runs
+    // this AFTER the spoken-line event fires.
     pub(crate) fn play_dialogue_voc(&mut self) {
         // = seg000:9efd/9f00 [last_line_voc_bank_flag] = data_047dc (the shared
         //   fixed-block voc-bank flag, armed by travel_play_flyover_line at
         //   seg000:96db or forced by play_dialogue_voc_with_bank_flag); the
         //   WHAT verb replays with the saved value.
         self.last_line_voc_bank_flag = self.data_047dc;
-        // = seg000:a6cc..a6e4 load_voc_and_lipsync_data's game-over branch:
-        //   with current_lip_sync_resource_id == 0xffff (apply_pending_room_
-        //   screen_request) the line is not the subtitle's phrase but the
-        //   fixed index in data_0a6d3 (0x0fff, alternately 0x1fff — the
-        //   variant-B file), named after the head's own letter
-        //   (talking_head_id): PM\PMFFFO.VOC for the Harkonnen captain.
-        if self.current_lip_sync_resource_id == 0xffff {
-            let index = self.game_over_voc_index;
-            self.game_over_voc_index ^= 0x1000;
-            self.play_talking_head_voc(index);
+        // = seg000:9f03..9f0a ax = current_subtitle_id; bx =
+        //   current_lip_sync_resource_id; call load_voc_and_lipsync_data (a6cc);
+        //   9f0d jnb ret — nothing started.
+        if !self
+            .load_voc_and_lipsync_data(self.current_subtitle_id, self.current_lip_sync_resource_id)
+        {
             return;
         }
-        // = seg000:9f03..9f0a ax = current_subtitle_id; bx =
-        //   current_lip_sync_resource_id; call load_voc_and_lipsync_data (a6cc).
-        //   Its index transform:
+        // = seg000:9f0f cmp current_lip_sync_resource_id,10h; jnb loc_09f19;
+        //   9f16 call loc_09f1c — for an in-range head, settle into the calm
+        //   idle as the line starts so it is already in the paused calm idle
+        //   when the line ends (no lively "talk" frames afterward).
+        if self.current_lip_sync_resource_id < 0x10 {
+            self.idle_settle_for_voice();
+        }
+    }
+
+    // = seg000:a6cc load_voc_and_lipsync_data — load and start the voice .voc
+    // for phrase `ax` spoken by lip-sync id `bx`. Returns true when a clip
+    // started (DOS: carry set), false when no file was found.
+    pub(crate) fn load_voc_and_lipsync_data(&mut self, ax: u16, bx: u16) -> bool {
+        // = seg000:a6cc..a6e4 the game-over branch: with bx == 0xffff
+        //   (apply_pending_room_screen_request) the line is not the phrase
+        //   but the fixed index in data_0a6d3 (0x0fff, alternately 0x1fff —
+        //   the variant-B file), named after the head's own letter
+        //   (talking_head_id): PM\PMFFFO.VOC for the Harkonnen captain.
+        if bx == 0xffff {
+            let index = self.game_over_voc_index;
+            self.game_over_voc_index ^= 0x1000;
+            return self.play_talking_head_voc(index);
+        }
         // = seg000:a6e7 bl = min(speaker, 0x0e) — the voc directory id;
         // = seg000:a6ee ah &= 0xf3 — strip the phrase-marker bits.
-        let dir_id = self.current_lip_sync_resource_id.min(0x0e);
-        let mut voc_index = self.current_subtitle_id & 0xf3ff;
+        let dir_id = bx.min(0x0e);
+        let mut voc_index = ax & 0xf3ff;
         if self.data_047dc != 0 {
             // = seg000:a6f8 sub ax,[per_person_voc_base_table[0x10]]; a6fc add
             //   ax,3e7h — a fixed-block line (fly-over narration / the fixed-block
@@ -846,8 +877,8 @@ impl GameState {
         // = seg000:a710..a726 — the dir_id == 0x0e troop special (voc index
         //   0x2c/0x2d retargets the lip-sync id to 0x0c) is not modelled.
 
-        // = seg000:a0c9 loc_0a0c9 -> loc_09efd: load and play the voice .voc + lip-sync.
-        self.play_talking_head_voc(voc_index);
+        // = seg000:a727.. build the file name, load it and start playback.
+        self.play_talking_head_voc(voc_index)
     }
 
     // = seg000:9ef1 play_dialogue_voc_with_bank_flag — run the loc_09efd
@@ -1309,10 +1340,74 @@ impl GameState {
             // = seg000:a157 callback_event_dialogue_line_09_speaker_
             //   dependent_effect_2.
             0x09 => self.dialogue_event_09_speaker_dependent(),
-            // = seg000:a1ed (0x0e) increase_final_attack_stage, a28e (0x0d) the
-            //   command-menu/PALPLAN redraw — unported.
+            // = seg000:a28e callback_event_dialogue_line_0d_show_location_on_map.
+            0x0d => self.dialogue_event_0d_show_location_on_map(),
+            // = seg000:a1ed (0x0e) increase_final_attack_stage — unported.
             _ => println!("dispatch_dialogue_line_event: unported event 0x{event:02x}"),
         }
+    }
+
+    // = seg000:a28e callback_event_dialogue_line_0d_show_location_on_map —
+    // the line names a location (staged_name_location): with no named head
+    // speaking, queue the location's narration clip to follow the line; and
+    // unless the location is the current one, draw the PALPLAN map inset over
+    // the room with the globe zoomed on it.
+    fn dialogue_event_0d_show_location_on_map(&mut self) {
+        let li = self.staged_name_location;
+        // = seg000:a28f cmp current_lip_sync_resource_id,0eh; jb — the player
+        //   or the narrator is speaking: queue the location's narration clip
+        //   (map_hover_narration_clip on the location ptr) for the voice
+        //   task's drained path.
+        if self.current_lip_sync_resource_id >= 0x0e {
+            let ptr = crate::locations::location_ptr_from_index(li);
+            self.chained_narration_clip = self.map_hover_narration_clip(ptr);
+        }
+        // = seg000:a2a0 cmp voice_subtitle_mode,1; jz ret.
+        if self.voice_subtitle_mode == 1 {
+            return;
+        }
+        // = seg000:a2a7 cmp staged_name_location_ptr,current_location_ptr; jz ret.
+        if li == self.current_location_index as usize {
+            return;
+        }
+        // = seg000:a2b0 mov [room_render_flags], 0.
+        self.room_render_flags = 0;
+        // = seg000:a2b5 ax = 21h (PALPLAN); open_resource_by_index; a2bb si =
+        //   icon_list_dialogue_map_inset; draw_icons_list_at_si — the inset
+        //   frame (sprite 7 at (168, 23)).
+        self.open_sprite_bank(sprite_bank::PALPLAN);
+        self.with_active_bank_sheet(|s, sheet| {
+            s.draw_icons_list_at_si(&DIALOGUE_MAP_INSET_ICONS, sheet);
+        });
+        // = seg000:a2c1..a2d4 [not needed] — move the mode-0 subtitle strip's
+        //   2a80h-byte sprite buffer (subtitle_strip_buffer_ptr) up to end at
+        //   data_0a5bf so the globe renderer's scratch does not overwrite it.
+        //   The port renders the strip from its own state.
+        // = seg000:a2d8..a2dd di = staged_name_location_ptr; push di; call
+        //   set_zoomed_globe_pos_from_location.
+        self.set_zoomed_globe_pos_from_location(li);
+        // = seg000:a2e0 data_046eb = 1 — the windowed map drawing.
+        self.data_046eb = 1;
+        // = seg000:a2e5..a2eb copy dialogue_map_inset_view_rect into
+        //   data_046e3_rect.
+        self.map_view_rect = DIALOGUE_MAP_INSET_VIEW_RECT;
+        // = seg000:a2ee call loc_05b93 — sprite clip = the map window (the
+        //   port passes map_view_clip_rect per draw).
+        // = seg000:a2f1 call map_draw_zoomed_globe.
+        self.map_draw_zoomed_globe();
+        // = seg000:a2f4 call load_icones_sprites.
+        self.open_icones_spritesheet();
+        // = seg000:a2f7 call map_build_and_draw_location_markers.
+        self.map_build_and_draw_location_markers();
+        // = seg000:a2fa/a2fb pop si; call draw_location_target_cross.
+        self.draw_location_target_cross(li);
+        // = seg000:a2fe data_046eb = 0.
+        self.data_046eb = 0;
+        // = seg000:a303 si = dialogue_map_inset_frame_rect; call
+        //   gfx_copy_rect_fb1_to_fb2 — keep the inset in the clean backdrop.
+        let yoff = self.y_offset as i16;
+        let r = DIALOGUE_MAP_INSET_FRAME_RECT;
+        self.gfx_copy_rect_fb1_to_fb2(rect(r.x0, r.y0 + yoff, r.x1, r.y1 + yoff));
     }
 
     // = seg000:a24a callback_event_dialogue_line_04_05_acceptrefuseargue_

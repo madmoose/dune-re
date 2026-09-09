@@ -1268,7 +1268,7 @@ impl GameState {
     // narration voice clip index: a location ptr gives 0x2bc +
     // (first_name - 1) * 16 + last_name; the 0xffXX desert states add 0x2bc
     // with 16-bit wrap (0xffff -> 0x2bb, 0xfff0+n -> 0x2ac+n).
-    fn map_hover_narration_clip(&self, hover: u16) -> u16 {
+    pub(crate) fn map_hover_narration_clip(&self, hover: u16) -> u16 {
         // = seg000:456e cmp ah,0ffh; jz loc_04582 — the desert states pass
         //   through unchanged.
         let ax = if hover & 0xff00 == 0xff00 {

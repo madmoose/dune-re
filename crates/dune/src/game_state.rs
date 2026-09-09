@@ -1000,6 +1000,10 @@ pub struct GameState {
     // init 0x100 = locations[0]). The event scheduler re-stages it after the
     // per-period events may have staged other locations (seg000:1b85).
     pub(crate) condit_staged_location: usize,
+    // = seg001:47e6 staged_name_location_ptr — the location whose name the
+    // 0x81/0x82 placeholders were staged for (stage_location_name_placeholders);
+    // the dialogue-line-0x0d callback zooms the map inset on it.
+    pub(crate) staged_name_location: usize,
 
     // = seg001:11d3 ARRAY_PTR_Location_prospector_destinations — the
     // prospector troop's (troops[2]) queue of destination location ptrs;
@@ -1385,6 +1389,10 @@ pub struct GameState {
     // == 0xffff): the voc index of the mocking line, 0x0fff / 0x1fff
     // (P<head>FFF / P<head>FFF..B), its bit 12 toggled after every load.
     pub(crate) game_over_voc_index: u16,
+    // = seg001:dc30 chained_narration_clip — the narration voc index the
+    // dialogue-line-0x0d callback queues; the voice task plays it through the
+    // player's PO bank once the spoken line drains (seg000:a789).
+    pub(crate) chained_narration_clip: u16,
 
     // Port-only stand-in for dune37s0.sav: the save image create_save_cl
     // writes at seg000:0029 (cl = 0xff, slot '0') right after init_game_ui.
@@ -1691,6 +1699,11 @@ pub struct GameState {
     // = seg001:4732 data_04732 — room-entry flags; bit 0 requests the extra
     // location overlay SAL (loc_0488a) on the normal draw_room_game_screen path.
     pub(crate) data_04732: u8,
+    // = seg001:144c _byte_208FC_loaded_SAL_index — which of the four .SAL
+    // files open_sal_resource has loaded (0xff: none yet).
+    pub(crate) loaded_sal_index: u8,
+    // = seg001:bc6e _work_2B11E_SAL_data — the loaded .SAL, parsed.
+    pub(crate) sal_sheet: Option<crate::RoomSheet>,
 
     // = seg001:4735 desert_step_counter — low 7 bits count the desert-walk
     // steps since the last room-entry; msb is set by ui_click_move_room when the counter is updated,
@@ -2630,6 +2643,7 @@ impl GameState {
             travel_no_location_dest: 0,
             travel_step_accum: 0,
             condit_staged_location: 0,
+            staged_name_location: 0,
             prospector_destinations: [0; 4],
 
             // = the seg001:11eb statics: identity COMMAND ids, except 0x8b
@@ -2755,6 +2769,7 @@ impl GameState {
             hnm_lop_cursor: 0,
             hnm_lop_remaining: 0,
             voc_filename: *b"PF\\PF001I .VOC",
+            chained_narration_clip: 0,
             game_over_voc_index: 0x0fff,
             initial_game_image: None,
             music_cd_playlist: crate::music::MUSIC_CD_STANDARD_ORDER,
@@ -2812,6 +2827,8 @@ impl GameState {
             spice_mining_troops_with_harvester_in_location: 0,
             sprite_anim: crate::room_scene::SpriteAnim::default(),
             data_04732: 0,
+            loaded_sal_index: 0xff,
+            sal_sheet: None,
             desert_step_counter: 0,
             room_redraw_request: 0,
             map_ornithopter_mode: 0,
@@ -2913,16 +2930,13 @@ impl GameState {
             hnm_video_frame_ready: false,
             voc_pcm_playing: false,
 
-            // = seg000:e65c..e662 initialize_system warps the pointer to its
-            // startup position (237, 171) via warp_mouse_cursor (seg000:db03).
+            // Seeded to the startup position so the shared input and the
+            // host pointer agree before initialize_system runs its warp.
             mouse_pos_x: MOUSE_START_X,
             mouse_pos_y: MOUSE_START_Y,
             mouse_draw_pos_x: 0,
             mouse_draw_pos_y: 0,
-
-            // = seg000:e64a mov [cursor_hide_counter], 0ffh — the cursor starts
-            // hidden; the first redraw_mouse pass (game_loop) clears the counter
-            // and shows it.
+            // Starts hidden; initialize_system sets the DOS value.
             cursor_hide_counter: -1,
             mouse_cursor_restore_needed: 0,
             idle_anim_trigger: 0,
@@ -3004,9 +3018,11 @@ impl GameState {
     // `skip_intro` is a port-only convenience (no DOS equivalent): when set it
     // jumps straight to the in-game UI, skipping the intro/credits/intro2.
     pub fn start(&mut self, skip_intro: bool) {
-        // = seg000:e594 initialize_system → initialize_resources, run before start in DOS
-        // (the port front-loads the constructor's DNCHAR/COMMAND loads and defers
-        // the rest; this brings in the resources interpreted at runtime).
+        // = seg000:0006 call initialize_system.
+        self.initialize_system();
+        // = seg000:0009 call initialize_resources (the port front-loads the
+        // constructor's DNCHAR/COMMAND loads and defers the rest; this brings
+        // in the resources interpreted at runtime).
         self.initialize_resources();
 
         // ESC anywhere in the intro skips straight into the game; a non-ESC key
@@ -3066,6 +3082,59 @@ impl GameState {
         // invokes it from the windowed runtime (bin/dune.rs) right after start()
         // returns, so headless setup renders/tests that call start() do not enter
         // its infinite loop.
+    }
+
+    // = seg000:e594 initialize_system — the DOS startup: clear the data
+    // segment, load the VGA driver, allocate the framebuffers, hook the
+    // interrupts, probe the input and audio devices, then leave fb1 active,
+    // cleared and copied to fb2. Most of it is DOS machinery the port has
+    // no use for; the steps that touch game state are kept in DOS order.
+    pub fn initialize_system(&mut self) {
+        // = seg000:e599..e5b1 [not needed] — zero seg001 from _word_2316C_error_msg
+        //   up, seed the bump allocator and compute the back-buffer segment.
+        // = seg000:e5c2..e5da [not needed] — INT 21h default-drive and
+        //   Ctrl-Break queries.
+        // = seg000:e5dc call open_dune_dat — DatFile::open, run by the binary
+        //   before the constructor.
+        // = seg000:e57b load_driver_ax_with_vtable_at_si [not needed] — load
+        //   DNVGA.BIN or DN386.BIN (cmd arg bit 0) and bind its vtable; the
+        //   gfx module is that driver compiled in.
+        // = seg000:e5ee..e5f2 vga_get_framebuffer_info [not needed] — the
+        //   screen buffer segment and size come from the driver.
+        // = seg000:e5f5 call set_screen_as_active_framebuffer.
+        self.set_screen_as_active_framebuffer();
+        // = seg000:e5fc..e60d [not needed] — bump-allocate fb1 (and the front
+        //   buffer when the driver has none); the port's framebuffers are
+        //   fields.
+        // = seg000:e610 vga_set_mode_13h [not needed].
+        // = seg000:e614..e61e language_setting = (cmd_args >> 2) & 7 — the
+        //   port has no language switch yet; the field stays 0.
+        // = seg000:e622..e62f initialize_joystick / initialize_mouse
+        //   [not needed] — device probes (cmd arg bits 7 and 6).
+        // = seg000:e632 initialize_pit_timer [not needed] — hook INT 8 and
+        //   calibrate the timer; the port's clock is the frame sink's.
+        // = seg000:e635 init_extended_memory_allocator [not needed].
+        // = seg000:e638..e640 vga_set_grayscale_mode [not needed] — cmd arg
+        //   bit 1.
+        // = seg000:e644 mov [joystick_table_ptr], 271ch [not needed].
+        // = seg000:e64a mov [cursor_hide_counter], 0ffh — the cursor starts
+        // hidden; the first redraw_mouse pass (game_loop) clears the counter
+        // and shows it.
+        self.cursor_hide_counter = -1;
+        // = seg000:e64f..e659 define_mouse_range (0,0)-(319,199) [not needed]
+        //   — the window bounds the pointer.
+        // = seg000:e65c..e662 call warp_mouse_cursor — the startup pointer
+        // position (237, 171).
+        self.warp_mouse_cursor(MOUSE_START_X, MOUSE_START_Y);
+        // = seg000:e665 initialize_audio [not needed] — the driver pick and
+        //   FREQ.HSQ timing test.
+        // = seg000:e668 hnm_initialize_memory_handler [not needed].
+        // = seg000:e66b call set_fb1_as_active_framebuffer.
+        self.set_fb1_as_active_framebuffer();
+        // = seg000:e66e call gfx_clear_active_framebuffer.
+        self.gfx_clear_active_framebuffer();
+        // = seg000:e671 jmp copy_active_framebuffer_to_framebuffer_2.
+        self.copy_active_framebuffer_to_framebuffer_2();
     }
 
     // = seg000:00b0 initialize_resources (its seg000:00d1 initialize_resources2
@@ -4713,6 +4782,18 @@ impl GameState {
         }
         gfx::vga_copy_rect(&mut self.screen, &self.framebuffer, rect);
         self.send_frame_to_display();
+    }
+
+    // = seg000:c477 gfx_copy_rect_fb1_to_fb2 — copy `rect` from fb1 into fb2
+    // (the clean scene backup), so a later fb2 restore keeps what was drawn.
+    // An empty rect does nothing.
+    pub(crate) fn gfx_copy_rect_fb1_to_fb2(&mut self, rect: Rect) {
+        // = seg000:c482..c488 sub bp,dx / sub ax,bx — bail on a zero-area rect.
+        if rect.x1 <= rect.x0 || rect.y1 <= rect.y0 {
+            return;
+        }
+        // = seg000:c48a..c493 es = fb2, ds = fb1; vga_copy_rect.
+        gfx::vga_copy_rect(&mut self.framebuffer_saved, &self.framebuffer, rect);
     }
 
     // = seg000:127c is_Gurney_Halleck_and_between_game_phases_15_and_20 — true

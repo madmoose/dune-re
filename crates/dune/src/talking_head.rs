@@ -587,7 +587,7 @@ impl GameState {
     // heads with current_lip_sync_resource_id < 0x10), settle the head into the
     // calm resting idle right away. So by the time the line finishes the head is
     // already in the paused calm idle — no lively "talk" frames play afterward.
-    fn idle_settle_for_voice(&mut self) {
+    pub(crate) fn idle_settle_for_voice(&mut self) {
         // = seg000:9f1c setup_lip_sync_data_from_current (the port composites on demand).
         // = seg000:9f1f or data_047d1, 10h.
         if let Some(head) = self.talking_head.as_mut() {
@@ -1051,16 +1051,17 @@ impl GameState {
             .collect()
     }
 
-    // = seg000:9efd loc_09efd + load_voc_and_lipsync_data (a6e6) + loc_0a75c —
-    // load the current head's voice .voc for `voc_index` and, on success, start
-    // PCM playback and install the lip-sync frame task. On failure (file absent
-    // under both suffixes) the head just keeps idling (the carry-clear ret path).
+    // = seg000:a727 load_voc_and_lipsync_data's load tail (loc_0a727) +
+    // loc_0a75c — build the file name, load the current head's voice .voc for
+    // `voc_index` and, on success, start PCM playback and install the
+    // lip-sync frame task. Returns false when the file is absent under both
+    // suffixes (the carry-clear ret path): the head just keeps idling.
     //
-    // `voc_index` is the post-transform index (the caller applies the a6ee
-    // `ah &= 0xf3` strip + the data_0d7f4 per-person base subtraction).
-    pub(crate) fn play_talking_head_voc(&mut self, voc_index: u16) {
+    // `voc_index` is the post-transform index (load_voc_and_lipsync_data
+    // applies the a6ee `ah &= 0xf3` strip + the per-person base subtraction).
+    pub(crate) fn play_talking_head_voc(&mut self, voc_index: u16) -> bool {
         let Some(head) = self.talking_head.as_ref() else {
-            return;
+            return false;
         };
         // = seg000:a6cc load_voc_and_lipsync_data (seg000:a6e6): the voc directory id is the
         // lip-sync id clamped to 0x0e (`cmp bl,0eh; jb +; mov bl,0eh`). The
@@ -1082,23 +1083,15 @@ impl GameState {
                 // 'I' <-> 'O') and retries once.
                 self.voc_filename[8] ^= 6;
                 let Ok(data) = self.dat_file.read(&self.voc_filename_str()) else {
-                    return; // no voice file in this DAT — keep idling.
+                    return false; // no voice file in this DAT — keep idling.
                 };
                 data
             }
         };
         // = seg000:a83f voc_get_lipsync_data seg000:a85a
         let Some(voc) = crate::voc::parse(&data) else {
-            return;
+            return false;
         };
-
-        // = seg000:9efd loc_09efd 9f0f: cmp current_lip_sync_resource_id, 10h; jnb loc_09f19;
-        //   call loc_09f1c — for an in-range head, settle into the calm idle as
-        //   the line starts so it is already in the paused calm idle when the line
-        //   ends (no lively "talk" frames afterward).
-        if self.current_lip_sync_resource_id < 0x10 {
-            self.idle_settle_for_voice();
-        }
 
         // = seg000:a754 — the voice is about to start: duck the score under it
         self.midi_duck_music_volume();
@@ -1139,6 +1132,7 @@ impl GameState {
         // = seg000:a75c loc_0a75c add_frame_task(bp=0, lip_sync_frame_task). Polls the PCM
         // sample clock every tick and advances the mouth.
         self.add_frame_task(0, crate::TaskId::TalkingHeadVoc);
+        true
     }
 
     // = seg000:ac30 call_pcm_vtable_end_loop — end the driver's VOC loop
@@ -1270,8 +1264,7 @@ impl GameState {
 
         if done {
             // = the frame task's drained path: seg000:a7ce pcm_test_audio_done
-            // -> loc_0a789 -> lip_sync_stop (the data_0dc30 chained-voc branch
-            // at a793 is not ported). Revert to idle (mouth=0); the idle task
+            // -> loc_0a789. Revert to idle (mouth=0); the idle task
             // then resumes. DOS does NOT settle here — the idle finishes its
             // current lively animation and settles to the calm expression only
             // when the [47ceh] countdown runs out (loc_09a1d -> loc_09a3b),
@@ -1284,6 +1277,22 @@ impl GameState {
                 // reset or redraw here. The last stamped mouth stays on
                 // screen until an idle calm-window redraw covers its box,
                 // exactly as in DOS.
+            }
+            // = seg000:a789 xor ax,ax; xchg ax,[chained_narration_clip]; or
+            //   ax,ax; jz lip_sync_stop — a queued location narration follows
+            //   the line.
+            let chained = std::mem::take(&mut self.chained_narration_clip);
+            if chained != 0 {
+                // = seg000:a793..a7a3 push ax; call lip_sync_stop; pop ax; add
+                //   ax,[per_person_voc_base_table[14]]; bl = 0eh; call
+                //   load_voc_and_lipsync_data — the clip plays through the
+                //   player's PO bank (the rebase inside cancels the add);
+                //   jnb ret / jmp loc_0a75c (the start, inside the port's
+                //   play_talking_head_voc).
+                self.lip_sync_stop();
+                let ax = chained.wrapping_add(self.voc_base(0x0e));
+                self.load_voc_and_lipsync_data(ax, 0x0e);
+                return;
             }
             self.lip_sync_stop();
             return;

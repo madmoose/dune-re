@@ -11,11 +11,9 @@ use std::sync::{Arc, Mutex};
 
 use crate::{GameState, gfx};
 
-// = seg000:e65c/e65f — the startup pointer position. initialize_system warps
-// the mouse to (237, 171) via warp_mouse_cursor (seg000:e662 -> seg000:db03),
-// which stores mouse_pos_x/y and pushes the position into the INT 33 driver
-// (set_mouse_pos, seg000:dae3). The port seeds InputState and GameState with
-// the same position and warps the OS pointer to match at window creation.
+// The startup pointer position (seg000:e65c/e65f): initialize_system warps
+// the mouse there via warp_mouse_cursor. The port also seeds InputState with
+// it and warps the OS pointer to match at window creation.
 pub const MOUSE_START_X: u16 = 237;
 pub const MOUSE_START_Y: u16 = 171;
 
@@ -481,6 +479,23 @@ impl GameState {
         } else {
             self.publish_overlay_cursor();
         }
+    }
+
+    // = seg000:db03 warp_mouse_cursor — move the pointer to (x, y): hide the
+    // cursor, store the position, push it into the driver and show the cursor
+    // again. At startup the cursor is nested-hidden, so the draw is a no-op.
+    pub(crate) fn warp_mouse_cursor(&mut self, x: u16, y: u16) {
+        // = seg000:db03 call call_restore_cursor.
+        self.call_restore_cursor();
+        // = seg000:db06/db0a store mouse_pos_x/y.
+        self.mouse_pos_x = x;
+        self.mouse_pos_y = y;
+        // = seg000:dae3 set_mouse_pos [not needed] — INT 33,4: push the
+        //   position into the mouse driver. The port's equivalent is the host
+        //   pointer warp at window creation (main.rs); the shared input is
+        //   seeded with the same position.
+        // = seg000:db11 jmp draw_mouse.
+        self.draw_mouse();
     }
 
     // = seg000:dbec draw_mouse — show the cursor one nesting level, restoring it

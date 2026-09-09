@@ -859,6 +859,17 @@ impl GameState {
         self.intro_play_hnm_with_frame_task();
     }
 
+    // = seg000:0981 draw_room_for_scene — the intro's room draw: open the
+    // scene's .SAL, draw the room, and keep it as the clean backdrop.
+    fn draw_room_for_scene(&mut self, location_and_room: u16, location_appearance: u16) {
+        // = seg000:0981 call set_scene_and_open_sal.
+        self.set_scene_and_open_sal(location_and_room, location_appearance);
+        // = seg000:0984 call draw_room_scene.
+        self.draw_location_room(location_and_room, location_appearance);
+        // = seg000:0987 jmp copy_active_framebuffer_to_framebuffer_2.
+        self.copy_active_framebuffer_to_framebuffer_2();
+    }
+
     // = seg000:0972 intro_palace_equipment_room. Clears the active framebuffer
     // and draws the palace equipment room through the generic room/scene
     // renderer, driven by the same constants the DOS routine uses:
@@ -867,20 +878,16 @@ impl GameState {
     //   seg000:0975 mov dx, 2002h        ; location_and_room
     //   seg000:0978 persons_in_room = 0  ; no characters in this scene
     //   seg000:097e mov bx, 180h         ; location_appearance (bh=1)
-    //   seg000:0981 call loc_008f0       ; -> open_SAL_resource
-    //   seg000:0984 call loc_037b2       ; -> draw_SAL
-    //   seg000:0987 jmp  copy_active_framebuffer_to_framebuffer_2
+    //   seg000:0981 call draw_room_for_scene
     //
-    // draw_location_room resolves dx/bx into PALACE.SAL room 9 + EQUI.HSQ via
+    // draw_room_for_scene resolves dx/bx into PALACE.SAL room 9 + EQUI.HSQ via
     // the ported scene tables (see room_scene). The room lands in the game-area
-    // rect (screen rows 24..175) at fb_base_ofs = 24, set by play_intro. DOS
-    // then copies the active framebuffer to framebuffer_2; the dune-rs model
-    // tracks a single offscreen framebuffer, so that copy is implicit.
+    // rect (screen rows 24..175) at fb_base_ofs = 24, set by play_intro.
     fn stage_13_init(&mut self) {
         self.gfx_clear_active_framebuffer();
         // = seg000:0978 persons_in_room = 0: the equipment room has no person.
         self.persons_in_room = 0;
-        self.draw_location_room(0x2002, 0x180);
+        self.draw_room_for_scene(0x2002, 0x180);
     }
 
     fn stage_13_play(&mut self) {}
@@ -890,7 +897,7 @@ impl GameState {
     // (sal_read_position_markers -> sal_draw_character).
     fn stage_14_init(&mut self) {
         self.persons_in_room = 2;
-        self.draw_location_room(0x2004, 0x180);
+        self.draw_room_for_scene(0x2004, 0x180);
     }
 
     fn stage_14_play(&mut self) {}
@@ -901,7 +908,7 @@ impl GameState {
     // lip-sync data and renders the first frame via loc_0978e.
     fn stage_15_init(&mut self) {
         self.persons_in_room = 0;
-        self.draw_location_room(0x200a, 0x180);
+        self.draw_room_for_scene(0x200a, 0x180);
         // = seg000:099b xor al,al (LETO); seg000:099d loc_0099d xor dx,dx.
         // = seg000:09d0 data_0478c = 1eh (loc_009c7) — the intro head's lively idle budget, 4 × 0x1e frames.
         self.subtitle_word_count = 0x1e;
@@ -920,7 +927,9 @@ impl GameState {
     // success, start PCM playback and install the lip-sync frame task.
     pub fn intro_talking_head_play(&mut self) {
         // = seg000:0798 current_subtitle_id = 0x190.
-        self.play_talking_head_voc(0x190);
+        self.current_subtitle_id = 0x190;
+        // = seg000:079e call loc_09efd.
+        self.play_dialogue_voc();
     }
 
     // = seg000:0771 intro_lady_jessica_2. Draw the empty palace room
@@ -929,7 +938,7 @@ impl GameState {
     // lip-sync data and renders the first frame.
     fn stage_16_init(&mut self) {
         self.persons_in_room = 0;
-        self.draw_location_room(0x2004, 0x180);
+        self.draw_room_for_scene(0x2004, 0x180);
         // = seg000:0777 mov al,1 (JESS); seg000:0779 jmp loc_0099d.
         // = seg000:09d0 data_0478c = 1eh (loc_009c7) — the intro head's lively idle budget, 4 × 0x1e frames.
         self.subtitle_word_count = 0x1e;
@@ -1030,7 +1039,7 @@ impl GameState {
         self.gfx_clear_active_framebuffer();
         // = seg000:0785 jmp loc_00981 — DOS does NOT set persons_in_room here;
         // it carries over (= 0), drawing the empty sietch.
-        self.draw_location_room(0x803, 0x1080);
+        self.draw_room_for_scene(0x803, 0x1080);
     }
 
     // Stage 20 play = loc_00f66 (no-op). The 0x10 transition reveals the room
@@ -1123,7 +1132,7 @@ impl GameState {
     fn stage_23_init(&mut self) {
         // = seg000:07cc persons_in_room = 0x100: person 8 stands in the room.
         self.persons_in_room = 0x100;
-        self.draw_location_room(0x802, 0x1080);
+        self.draw_room_for_scene(0x802, 0x1080);
         // = seg000:07d5 mov word ptr [12h], 0 — reset after the room is drawn.
         self.persons_in_room = 0;
         // = seg000:07db mov al,5 (STIL).
@@ -1453,7 +1462,7 @@ impl GameState {
     fn stage_38_init(&mut self) {
         // = seg000:07e0 mov al,4; call play_pcm_al.
         self.intro_play_pcm("SN4.HSQ");
-        self.draw_location_room(0x804, 0x1080);
+        self.draw_room_for_scene(0x804, 0x1080);
     }
 
     // = seg000:abdb play_pcm_al — the intro's sound-effect start: nothing when

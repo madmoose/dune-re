@@ -1576,6 +1576,18 @@ impl GameState {
         self.draw_icones_sprite_above_point(0x4c, sx - 13, sy);
     }
 
+    // = seg000:62fe draw_location_target_cross — draw the ICONES target cross
+    // (sprite 0x36) above a location's map position, if it is inside the map
+    // window.
+    pub(crate) fn draw_location_target_cross(&mut self, location_index: usize) {
+        // = seg000:62fe call location_visible_on_map; 6322 jb ret.
+        let Some((sx, sy)) = self.location_visible_on_map(location_index) else {
+            return;
+        };
+        // = seg000:6301 ax = 0x36; jmp draw_icones_sprite_above_point.
+        self.draw_icones_sprite_above_point(0x36, sx, sy);
+    }
+
     // = seg000:6322 draw_icones_sprite_above_point — the shared marker tail:
     // push the active bank and open ICONES, subtract the sprite's height from
     // the y so it sits above the point, draw it clipped to the map window,

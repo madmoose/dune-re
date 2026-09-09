@@ -66,10 +66,13 @@ its own framebuffer and paces frames itself.
 ## Interrupts and startup checks
 
 - `seg000:e913 install_interrupt_handlers` — hook the PIT, keyboard and mouse interrupt vectors from _word_21DC3_interrupt_table.
+- `seg000:e85c initialize_pit_timer` — hook INT 8, wait for the first tick and derive the timer calibration byte data_0efd9; the port's clock is the frame sink's.
+- `seg000:e57b load_driver_ax_with_vtable_at_si` — load DNVGA.BIN or DN386.BIN and bind its vtable; the gfx module is that driver compiled in.
 - `seg000:a87e audio_test_frequency` — play FREQ.HSQ at startup to time the PCM driver.
 
 ## Dead code
 
+- `seg000:08e5 unused_midi_fade_out` — fade the music out over 200h ticks and return with CF clear, shaped like an intro script step; nothing references it.
 - `seg000:676e loc_0676e` — a `stc; ret` after map_spawn_troop_icon's own return; nothing jumps to it.
 - `seg000:6a6b loc_06a6b` — end the troop contact and clear the occupation bits; nothing references it.
 

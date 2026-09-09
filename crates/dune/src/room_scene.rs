@@ -1244,10 +1244,72 @@ impl GameState {
         }
     }
 
-    // = seg000:0972..0987 — the generic
-    // "draw an in-game room" entry: open the SAL for `location_appearance`
-    // (loc_008f0 -> open_SAL_resource) and draw the room selected by
-    // `location_and_room` (loc_037b2 -> draw_SAL) into the active framebuffer.
+    // = seg000:08f0 set_scene_and_open_sal — record the scene block for
+    // `location_and_room` (dx) and `location_appearance` (bx), then open the
+    // location's .SAL.
+    pub(crate) fn set_scene_and_open_sal(
+        &mut self,
+        location_and_room: u16,
+        location_appearance: u16,
+    ) {
+        // = seg000:08f0..08f5 room_render_flags = 0; sky_fade_active = 0.
+        self.room_render_flags = 0;
+        self.sky_fade_active = false;
+        // = seg000:08f8/08fc the two scene words.
+        self.location_and_room = location_and_room;
+        self.location_appearance = location_appearance;
+        // = seg000:0900 mov [current_scene],dh.
+        self.data_00008 = (location_and_room >> 8) as u8;
+        // = seg000:0904..090b current_location_ptr = slot bh (1-based) * 1ch +
+        //   the location table base.
+        self.current_location_index = (location_appearance >> 8).wrapping_sub(1);
+        // = seg000:090e jmp open_SAL_resource.
+        self.open_sal_resource();
+    }
+
+    // = seg000:2d74 open_SAL_resource — load the current location's .SAL into
+    // the SAL work buffer unless it is the one already loaded. No current
+    // location, an out-of-range index, or a sietch/desert index (below 2)
+    // while room-entry flag bit 0 is set leave the loaded SAL alone.
+    pub(crate) fn open_sal_resource(&mut self) {
+        // = seg000:2d74..2d7c si = current_location_ptr; cmp si,100h; jb ret.
+        let li = self.current_location_index as usize;
+        if li >= self.locations.len() {
+            return;
+        }
+        // = seg000:2d7e/2d80 xor ax,ax; call calc_SAL_index.
+        let mut index = calc_sal_index(self.locations[li].appearance);
+        // = seg000:2d83..2d8d cmp ax,2; jnb; test data_04732,1; jnz ret.
+        if index < 2 && self.data_04732 & 1 != 0 {
+            return;
+        }
+        // = seg000:2d8f..2d96 cmp ax,4; ja ret; jnz; dec ax — the four .SAL
+        //   files; index 4 maps onto HARK.
+        if index > 4 {
+            return;
+        }
+        if index == 4 {
+            index = 3;
+        }
+        // = seg000:2d97..2d9d cmp loaded_SAL_index,al; jz ret; store.
+        if self.loaded_sal_index == index as u8 {
+            return;
+        }
+        self.loaded_sal_index = index as u8;
+        // = seg000:2da0..2dad ax += 0a1h (RES_SIET_SAL..); open_resource_by_
+        //   index_si_into_esdi into _work_2B11E_SAL_data;
+        //   adjust_sub_resource_pointers.
+        let sal = self
+            .dat_file
+            .read(SAL_NAMES[index])
+            .expect("failed to read SAL");
+        self.sal_sheet = Some(RoomSheet::new(&sal).expect("failed to parse SAL"));
+    }
+
+    // = seg000:37b2 draw_room_scene / seg000:3b59 draw_SAL — draw the room
+    // selected by `location_and_room` from the loaded .SAL (open_sal_resource)
+    // into the active framebuffer. The callers pass the current scene words;
+    // the intro's draw_room_for_scene opens the SAL first.
     //
     // The normal draw_SAL path (room byte < 0x80) is modelled, including the
     // clear_game_area it runs first (see draw_sal_room) and the standing-person
@@ -1257,13 +1319,6 @@ impl GameState {
     // different way, is not ported. The caller still owns setting
     // `persons_in_room` before drawing.
     pub fn draw_location_room(&mut self, location_and_room: u16, location_appearance: u16) {
-        // = seg000:08f8/08fc (loc_008f0) — record the scene being drawn so
-        // get_location_and_room / add_room_frame_task can read it back.
-        self.location_and_room = location_and_room;
-        self.location_appearance = location_appearance;
-        // = seg000:0900 mov [current_scene],dh.
-        self.data_00008 = (location_and_room >> 8) as u8;
-
         // = seg000:37b8 orni_hotspot_x = 0 — every DOS room draw runs the
         // loc_037b5 prologue (draw_room_scene, and the zoom re-render via
         // seg000:3b2d), clearing the parked-orni hover hotspot until this
@@ -1274,19 +1329,7 @@ impl GameState {
 
         let dh = (location_and_room >> 8) as usize;
         let dl = (location_and_room & 0xff) as usize;
-        let bh = (location_appearance >> 8) as usize;
-
-        // = seg000:0904..090b (loc_008f0) — every scene open recomputes the
-        // current-location record from the 1-based location slot bh.
-        self.current_location_index = bh as u16 - 1;
-
-        // = seg000:08f0 loc_008f0 / open_SAL_resource / calc_SAL_index: locations[bh-1]
-        //   .apparence picks the SAL. open_SAL_resource maps a calc result of
-        //   4 back to 3, so SAL indices clamp to the four SAL files.
-        let apparence = self.locations[bh - 1].appearance;
-        // open_SAL_resource clamps a calc result of 4 back to 3 for the four
-        // SAL files (draw_outdoor_backdrop keeps the unclamped 0..4 index).
-        let sal_name = SAL_NAMES[calc_sal_index(apparence).min(3)];
+        let _ = location_appearance;
 
         // = seg000:3efe loc_03efe: pick scene record (dl-1) in the table starting at
         //   SCENE_DISPATCH[dh]. The record's `background` byte drives draw_SAL.
@@ -1325,7 +1368,7 @@ impl GameState {
             self.draw_outdoor_backdrop();
         }
 
-        self.draw_sal_room(sal_name, room, sheet_name, sheet_index != 0);
+        self.draw_sal_room(room, sheet_name, sheet_index != 0);
 
         // = seg000:3a24..3a7b draw_room_scene's post-SAL orni pass.
         self.draw_room_ornis();
@@ -1541,16 +1584,15 @@ impl GameState {
     // framebuffer at the current fb_base_ofs (state.y_offset), landing in the
     // game-area rect (rows 24..175). The recursive sprite/polygon/line decode
     // lives in RoomSheet/RoomRenderer.
-    fn draw_sal_room(
-        &mut self,
-        sal_name: &str,
-        room: usize,
-        sprite_sheet_name: &str,
-        apply_sheet_palette: bool,
-    ) {
-        let sal = self.dat_file.read(sal_name).expect("failed to read SAL");
-        let room_sheet = RoomSheet::new(&sal).expect("failed to parse SAL");
-        let Some(room) = room_sheet.get_room(room) else {
+    fn draw_sal_room(&mut self, room: usize, sprite_sheet_name: &str, apply_sheet_palette: bool) {
+        // The room comes from the .SAL open_sal_resource loaded (DOS draws
+        // from _work_2B11E_SAL_data whatever it holds).
+        let Some(room) = self
+            .sal_sheet
+            .as_ref()
+            .and_then(|s| s.get_room(room))
+            .cloned()
+        else {
             return;
         };
 
