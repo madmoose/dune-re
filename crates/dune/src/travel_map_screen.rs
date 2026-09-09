@@ -877,6 +877,9 @@ impl GameState {
     // the map window (data_046e3_rect). The port passes it per draw call
     // instead of storing the segvga clip rect; like the segvga clip, it lives
     // in fb_base_ofs (y_offset) space.
+    // = seg000:5b8d map_set_restore_and_clip_rect_to_window [not needed] —
+    // also copies the window into data_d83c_rect (the restore rect) first;
+    // the port has no restore rect, its presents take explicit rects.
     pub(crate) fn map_view_clip_rect(&self) -> Rect {
         let yoff = self.y_offset as i16;
         let r = self.map_view_rect;
@@ -2530,6 +2533,20 @@ impl GameState {
         }
     }
 
+    // = seg000:4913 callback_transition_worm_ride_first_frame — the
+    // transition callback for the worm ride: VER.HNM's first frame (hnm
+    // 0x0e) into the game area, then set_sky_palette.
+    fn callback_transition_worm_ride_first_frame(&mut self) {
+        self.hnm_load_first_frame("VER.HNM", 0);
+        self.set_sky_palette();
+    }
+
+    // = seg000:4ab8 travel_set_active — travel_active (data_04727) = 0xff:
+    // arm the game loop's travel pump.
+    fn travel_set_active(&mut self) {
+        self.travel_active = 0xff;
+    }
+
     // = seg000:4afd hnm_present_flight_frame — the resource-flag bit 4
     // full-screen present the flight clips take after each decoded frame
     // (from hnm_decode_video_frame, seg000:ccee): restore the minimap rect
@@ -2781,13 +2798,10 @@ impl GameState {
         // = seg000:47ad/47b2 ui_hud_head_index = 0; call ui_hud_head_draw.
         self.ui_hud_head_index = 0;
         self.ui_hud_head_draw();
-        // = seg000:47b5..47ba transition(al = 0x10, bp = callback_transition_
-        //   04913): VER.HNM's first frame (hnm 0x0e) into the game area, then
-        //   set_sky_palette, wiped in with the dotted-columns effect.
-        self.transition(0x10, 0, |s| {
-            s.hnm_load_first_frame("VER.HNM", 0);
-            s.set_sky_palette();
-        });
+        // = seg000:47b5..47ba transition(al = 0x10, bp =
+        //   callback_transition_worm_ride_first_frame), wiped in with the
+        //   dotted-columns effect.
+        self.transition(0x10, 0, Self::callback_transition_worm_ride_first_frame);
         // = seg000:47bd..47c5 suppress_sky_240_255 = 1 around play_worm_ride_clip.
         self.data_0227d = 1;
         self.play_worm_ride_clip();
@@ -2988,10 +3002,9 @@ impl GameState {
             if self.data_046eb & 0x80 == 0 {
                 self.draw_room_game_screen_scene_reload();
             }
-            // = seg000:4779 call frame_task_callback_04ab8 — data_04727 =
-            //   0xff arms the game loop's travel pump (tick_in_game_travel,
-            //   still a stub).
-            self.travel_active = 0xff;
+            // = seg000:4779 call travel_set_active — arms the game loop's
+            //   travel pump.
+            self.travel_set_active();
             // = seg000:477c..478c in orni-travel mode the departing orni
             //   leaves the pad and the narration stops; done.
             if self.game_screen_mode_flags & 3 == 1 {

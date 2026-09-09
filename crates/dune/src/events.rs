@@ -725,9 +725,9 @@ impl GameState {
                 return;
             }
             // = seg000:2137/213a 4 days past: the room-screen type-7
-            //   consequence (loc_0215f).
+            //   consequence (arm_room_screen_request_7).
             if diff >= 4 {
-                self.pending_room_screen_request = 7;
+                self.arm_room_screen_request_7();
                 return;
             }
             // = seg000:213c..2152 the reminder person id from the 0x2161
@@ -736,7 +736,7 @@ impl GameState {
             let person = SHIPMENT_REMINDER_TABLE[idx - 4];
             // = seg000:2154/2156 a zero entry escalates to the consequence.
             if person == 0 {
-                self.pending_room_screen_request = 7;
+                self.arm_room_screen_request_7();
                 return;
             }
             // = seg000:2158..215c comm_add_person_sighting((person << 8) |
@@ -745,9 +745,9 @@ impl GameState {
             return;
         }
         // = seg000:20bc/20c3 an unpaid shipment goes straight to the
-        //   consequence (loc_0215f).
+        //   consequence (arm_room_screen_request_7).
         if self.spice_shipment_unpaid != 0 {
-            self.pending_room_screen_request = 7;
+            self.arm_room_screen_request_7();
             return;
         }
         // = seg000:20c6..20ce ahead of the event day: days_left = event day -

@@ -109,6 +109,16 @@ pub struct AttackState {
     particles: [Particle; MAX_PARTICLES], // unk_23170
 }
 
+// = seg000:0cf2 night_attack_step_axis_accumulate — add al (|velocity|) to
+// the accumulator bl, ror ax,5 so the carry-out lands in ah, shr ah,3: bl =
+// the new accumulator, dl = the pixel step (the bl/bh and dl/dh swaps serve
+// the two-axis caller).
+fn night_attack_step_axis_accumulate(bl: i8, al: u8) -> (i8, i8) {
+    let sum = al.wrapping_add(bl as u8) as u16;
+    let rotated = sum.rotate_right(5);
+    ((rotated >> 11) as i8, rotated as i8)
+}
+
 impl AttackState {
     // `seed` is the live in-game palette at the moment the night attack starts.
     // DOS's open_onmap_spritesheet -> apply_sprite_sheet_palette overlays *only*
@@ -552,19 +562,14 @@ impl AttackState {
     // axis: the carry out of (accumulator + |v|) rotated right by 5 is the
     // pixel step, with v's sign restored.
     fn night_attack_step_axis(&self, bl: i8, v: i8) -> (i8, i8) {
-        let al = v.abs();
-        let sum: u16 = (al + bl) as u8 as u16;
-        let rotated1 = sum.rotate_right(5);
-
-        let iter1_bl = (rotated1 >> 11) as i8;
-        let mut iter1_dl = rotated1 as i8;
-
+        // = seg000:0cec..0cf0 al = dl; js loc_00d05 (neg al; call
+        //   night_attack_step_axis_accumulate; neg dh).
+        let (bl, dl) = night_attack_step_axis_accumulate(bl, v.unsigned_abs());
         if v < 0 {
-            iter1_dl = -iter1_dl;
+            (bl, dl.wrapping_neg())
+        } else {
+            (bl, dl)
         }
-
-        // Return final values after both iterations and swaps
-        (iter1_bl, iter1_dl)
     }
 
     // = seg000:0d0d night_attack_sky_flash_step — start the sky flash (ONMAP

@@ -157,10 +157,8 @@ impl GameState {
         // 0x40 steps × 0x10 ticks = 0x400 ticks, plus a tail hold.
         self.wait_interruptable(0x4b0);
 
-        // = seg000:0282 call loc_03950 — disarm: countdown = 0,
-        // remove_frame_task(loc_03916). seg000:0285 sky_fade_active = 0.
-        self.sky_fade_countdown = 0;
-        self.remove_frame_task(crate::TaskId::SkyFade);
+        // = seg000:0282 call sky_fade_disarm; 0285 sky_fade_active = 0.
+        self.sky_fade_disarm();
         self.sky_fade_active = false;
 
         // = seg000:028a bp = gfx_clear_active_framebuffer (0xc0ad); al = 0x10;

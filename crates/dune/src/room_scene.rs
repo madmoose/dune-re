@@ -1950,10 +1950,9 @@ impl GameState {
     // live palette's sky range toward palette_to_transition_from, decrements the
     // step counter, and self-removes when it reaches zero (or when disarmed).
     pub(crate) fn tick_sky_fade(&mut self) {
-        // = seg000:3916 cmp [46dfh],0; jz loc_03950 — disarmed → stop.
+        // = seg000:3916 cmp [46dfh],0; jz sky_fade_disarm — disarmed → stop.
         if !self.sky_fade_active {
-            self.sky_fade_countdown = 0;
-            self.remove_frame_task(crate::TaskId::SkyFade);
+            self.sky_fade_disarm();
             return;
         }
         // = seg000:391d loc_0391d: vga_fade_step(al=[46d7h]) over the [22e3h]
@@ -1964,10 +1963,17 @@ impl GameState {
         // The DOS step writes the VGA DAC directly. The HNM task presents every
         // decoded frame, but the fade outlives the clip, so present here too.
         self.send_frame_to_display();
-        // = seg000:394e/loc_03950: counter exhausted → remove_frame_task(3916h).
+        // = seg000:394e dec; jnz ret — counter exhausted → sky_fade_disarm.
         if self.sky_fade_countdown == 0 {
-            self.remove_frame_task(crate::TaskId::SkyFade);
+            self.sky_fade_disarm();
         }
+    }
+
+    // = seg000:3950 sky_fade_disarm — stop the sky palette fade:
+    // sky_fade_countdown = 0 and remove frame_task_callback_03916.
+    pub(crate) fn sky_fade_disarm(&mut self) {
+        self.sky_fade_countdown = 0;
+        self.remove_frame_task(crate::TaskId::SkyFade);
     }
 
     // = seg000:391d loc_0391d / segvga:0ad7 vga_fade_step — picks the span from [22e3h]: ==0 → bx=0x180/cx=0xf0 (entries

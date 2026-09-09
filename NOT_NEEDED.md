@@ -129,3 +129,5 @@ with it:
 - `seg000:a9a1 close_pcm_voice_file_handle` — close the streaming voice file's DOS handle (INT 21h/3Eh) unless it is the shared DUNE.DAT handle; the port reads voice clips whole from the DAT.
 - `seg000:6670 location_sum_harvest_total_of_same_occupation` — unreachable: no caller in DNCDPRG sums harvest_total over the location's troops sharing a troop's occupation nibble.
 - `seg000:667d callback_troop_sum_harvest_total_if_same_occupation` — the per-troop step of that unreachable sum.
+- `seg000:8454 troop_settle_into_location_unreachable` — unreachable: no caller settles a troop into its location this way (clear occupation bits 0-1, link, clear bit 6, register its equipment).
+- `seg000:a1ca clear_dialogue_interrupt_gate_unreferenced` — an unreferenced twin of callback_event_dialogue_line_02_stay_here.

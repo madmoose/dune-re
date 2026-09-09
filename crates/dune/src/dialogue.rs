@@ -1316,42 +1316,18 @@ impl GameState {
     // first-time-only callbacks (0x0b/0x0c/0x0e test `[si], 0x80`) can check it.
     pub(crate) fn dispatch_dialogue_line_event(&mut self, event: u8, word0_lo: u8) {
         match event {
-            // = seg000:a1d0 callback_event_dialogue_line_01_follow_me.
-            1 => self.dialogue_interrupt_gate = 0xff,
-            // = seg000:a1d6 callback_event_dialogue_line_02_stay_here.
-            2 => self.dialogue_interrupt_gate = 0,
-            // = seg000:a1e8 callback_event_dialogue_line_06_end_dialogue —
-            //   request the end of the talk walk (consumed at seg000:a09d).
-            6 => self.dialogue_end_request = self.dialogue_end_request.wrapping_add(1),
-            // = seg000:a1dc callback_event_dialogue_line_07_show_equipment_in_map.
-            7 => self.dialogue_interrupt_gate = 0x80,
-            // = seg000:a219 callback_event_dialogue_line_0b_increase_game_phase_
-            //   by_1_and_do_more — first time only (the spoken bit gates
-            //   repeats): advance the story one phase.
-            0x0b if word0_lo & 0x80 == 0 => {
-                // = seg000:a21e inc byte [game_phase].
-                self.game_phase = self.game_phase.wrapping_add(1);
-                // = seg000:a222 number_of_days_since_last_game_phase_change_
-                //   ds_ff = 0.
-                self.days_since_last_game_phase_change = 0;
-                // = seg000:a227 call run_game_phase_triggers.
-                self.run_game_phase_triggers();
-                // = seg000:a22a..a231 a bump to phase 1 additionally reveals
-                //   Duncan Idaho.
-                if self.game_phase == PHASE_01_DUNCAN_AVAILABLE {
-                    self.make_duncan_idaho_visible();
-                }
+            1 => self.callback_event_dialogue_line_01_follow_me(),
+            2 => self.callback_event_dialogue_line_02_stay_here(),
+            6 => self.callback_event_dialogue_line_06_end_dialogue(),
+            7 => self.callback_event_dialogue_line_07_show_equipment_in_map_dialogue(),
+            0x0b => {
+                self.callback_event_dialogue_line_0b_increase_game_phase_by_1_and_do_more(word0_lo)
             }
-            // = seg000:a235 callback_event_dialogue_line_0c_increase_game_phase_
-            //   by_4_if_dialogue_bit_set — first time only.
-            0x0c if word0_lo & 0x80 == 0 => {
-                // = seg000:a23a..a241 al = (game_phase & 0xfc) + 4; jmp
-                //   set_game_phase_and_trigger_callbacks.
-                let phase = (self.game_phase & 0xfc).wrapping_add(4);
-                self.set_game_phase_and_trigger_callbacks(phase);
-            }
-            // = the already-spoken no-ops of 0x0b/0x0c (test [si],80h; jnz ret).
-            0x0b | 0x0c => {}
+            0x0c => self
+                .callback_event_dialogue_line_0c_increase_game_phase_by_4_if_dialogue_bit_set(
+                    word0_lo,
+                ),
+            0x0e => self.callback_event_dialogue_line_0e_increase_final_attack_stage(word0_lo),
             // = seg000:a25b callback_event_dialogue_line_0a — the line wants
             //   the speaker to hold up a sign with a number on it (Duncan's
             //   spice stock, the smuggler's bill). Arms the overlay; the idle
@@ -1362,23 +1338,7 @@ impl GameState {
             //   (sequence.rs). Below phase 0x14 this is the prospector's
             //   spice-map scene.
             3 => self.dialogue_event_trigger_cutscene(),
-            // = seg000:a172 callback_event_dialogue_line_0f_speaker_dependent_
-            //   effect_3 — keyed on the speaker (current_lip_sync_resource_id).
-            0x0f => match self.current_lip_sync_resource_id {
-                // = seg000:a175..a17a — Jessica (speaker 1): mark
-                //   desert-exhaustion remark for the CONDIT gate at ds:f5;
-                //   the hour tick clears it again when Paul recovers
-                //   (seg000:1b3a).
-                1 => {
-                    self.for_condit_jessica_commented_on_exhaustion_ds_f5 = self
-                        .for_condit_jessica_commented_on_exhaustion_ds_f5
-                        .wrapping_add(1);
-                }
-                // = seg000:a17e/a183 jmp callback_event_dialogue_line_0f_
-                //   Duncan_Idaho (seg000:24a3).
-                3 => self.dialogue_event_0f_duncan_idaho(),
-                _ => {}
-            },
+            0x0f => self.callback_event_dialogue_line_0f_speaker_dependent_effect_3(),
             // = seg000:a244 / a248 the accept/refuse/argue entries.
             0x04 => self.callback_event_dialogue_line_04_acceptrefuseargue(),
             0x05 => self.callback_event_dialogue_line_05_acceptrefuseargue(),
@@ -1390,8 +1350,97 @@ impl GameState {
             0x09 => self.dialogue_event_09_speaker_dependent(),
             // = seg000:a28e callback_event_dialogue_line_0d_show_location_on_map.
             0x0d => self.dialogue_event_0d_show_location_on_map(),
-            // = seg000:a1ed (0x0e) increase_final_attack_stage — unported.
             _ => println!("dispatch_dialogue_line_event: unported event 0x{event:02x}"),
+        }
+    }
+
+    // = seg000:a1d0 callback_event_dialogue_line_01_follow_me —
+    // dialogue_interrupt_gate = 0xff.
+    fn callback_event_dialogue_line_01_follow_me(&mut self) {
+        self.dialogue_interrupt_gate = 0xff;
+    }
+
+    // = seg000:a1d6 callback_event_dialogue_line_02_stay_here —
+    // dialogue_interrupt_gate = 0.
+    fn callback_event_dialogue_line_02_stay_here(&mut self) {
+        self.dialogue_interrupt_gate = 0;
+    }
+
+    // = seg000:a1dc callback_event_dialogue_line_07_show_equipment_in_map_dialogue
+    // — dialogue_interrupt_gate = 0x80.
+    fn callback_event_dialogue_line_07_show_equipment_in_map_dialogue(&mut self) {
+        self.dialogue_interrupt_gate = 0x80;
+    }
+
+    // = seg000:a1e8 callback_event_dialogue_line_06_end_dialogue — request
+    // the end of the talk walk (consumed at seg000:a09d).
+    fn callback_event_dialogue_line_06_end_dialogue(&mut self) {
+        self.dialogue_end_request = self.dialogue_end_request.wrapping_add(1);
+    }
+
+    // = seg000:a1ed callback_event_dialogue_line_0e_increase_final_attack_stage
+    // — first time only (test [si],80h; jnz ret): inc final_attack_stage_ds_c2.
+    fn callback_event_dialogue_line_0e_increase_final_attack_stage(&mut self, word0_lo: u8) {
+        if word0_lo & 0x80 != 0 {
+            return;
+        }
+        self.final_attack_stage = self.final_attack_stage.wrapping_add(1);
+    }
+
+    // = seg000:a219 callback_event_dialogue_line_0b_increase_game_phase_by_1_and_do_more
+    // — first time only (the spoken bit gates repeats): advance the story one
+    // phase.
+    fn callback_event_dialogue_line_0b_increase_game_phase_by_1_and_do_more(
+        &mut self,
+        word0_lo: u8,
+    ) {
+        // = seg000:a219 test [si],80h; jnz ret.
+        if word0_lo & 0x80 != 0 {
+            return;
+        }
+        // = seg000:a21e inc byte [game_phase].
+        self.game_phase = self.game_phase.wrapping_add(1);
+        // = seg000:a222 number_of_days_since_last_game_phase_change_ds_ff = 0.
+        self.days_since_last_game_phase_change = 0;
+        // = seg000:a227 call run_game_phase_triggers.
+        self.run_game_phase_triggers();
+        // = seg000:a22a..a231 a bump to phase 1 additionally reveals Duncan
+        //   Idaho.
+        if self.game_phase == PHASE_01_DUNCAN_AVAILABLE {
+            self.make_duncan_idaho_visible();
+        }
+    }
+
+    // = seg000:a235 callback_event_dialogue_line_0c_increase_game_phase_by_4_if_dialogue_bit_set
+    // — first time only: al = (game_phase & 0xfc) + 4; jmp
+    // set_game_phase_and_trigger_callbacks.
+    fn callback_event_dialogue_line_0c_increase_game_phase_by_4_if_dialogue_bit_set(
+        &mut self,
+        word0_lo: u8,
+    ) {
+        if word0_lo & 0x80 != 0 {
+            return;
+        }
+        let phase = (self.game_phase & 0xfc).wrapping_add(4);
+        self.set_game_phase_and_trigger_callbacks(phase);
+    }
+
+    // = seg000:a172 callback_event_dialogue_line_0f_speaker_dependent_effect_3
+    // — keyed on the speaker (current_lip_sync_resource_id).
+    fn callback_event_dialogue_line_0f_speaker_dependent_effect_3(&mut self) {
+        match self.current_lip_sync_resource_id {
+            // = seg000:a175..a17a — Jessica (speaker 1): mark the
+            //   desert-exhaustion remark for the CONDIT gate at ds:f5; the
+            //   hour tick clears it again when Paul recovers (seg000:1b3a).
+            1 => {
+                self.for_condit_jessica_commented_on_exhaustion_ds_f5 = self
+                    .for_condit_jessica_commented_on_exhaustion_ds_f5
+                    .wrapping_add(1);
+            }
+            // = seg000:a17e/a183 jmp callback_event_dialogue_line_0f_
+            //   Duncan_Idaho (seg000:24a3).
+            3 => self.dialogue_event_0f_duncan_idaho(),
+            _ => {}
         }
     }
 

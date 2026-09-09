@@ -3178,18 +3178,20 @@ impl GameState {
         //   record, so this popup becomes the open one and a click inside it
         //   routes here, not to the map.
         self.map_popup = self.map_troop_contact_text_panel.popup;
-        // = seg000:7a22/7a24 al = 2; call loc_07b0f — data_046d8 = 0, then the
-        //   popup's open effect (run_vga_effect al=2 = xor_bracket_zoom_to_panel,
-        //   ds:si = the icon rect after the xchg): the XOR box trail from the
-        //   icon to the panel centre and the expanding corner brackets, before
-        //   the panel is drawn (loc_07b1b). DOS runs the effect even with no
-        //   icon on the map (si is then stale); the port skips it.
-        self.map_popup_anim_suppress = false;
+        // = seg000:7a22/7a24 al = 2; call map_popup_open_effect — the popup's
+        //   open effect (xor_bracket_zoom_to_panel, ds:si = the icon rect
+        //   after the xchg): the XOR box trail from the icon to the panel
+        //   centre and the expanding corner brackets, before the panel is
+        //   drawn. DOS runs the effect even with no icon on the map (si is
+        //   then stale); the port skips the effect and draws the panel.
+        self.map_popup_anim_rect = r;
         if let Some(src) = icon_pos {
-            self.xor_bracket_zoom_to_panel(r, src);
+            self.map_popup_anim_src = src;
+            self.map_popup_open_effect(2, self.map_troop_contact_text_panel);
+        } else {
+            self.map_popup_anim_suppress = false;
+            self.map_draw_panel_record(self.map_troop_contact_text_panel);
         }
-        // = seg000:7a67 loc_07b1b — the panel fill + frame from the record.
-        self.map_draw_panel_record(self.map_troop_contact_text_panel);
         // = seg000:7a32..7a50 the subtitle descriptor's origin (the panel
         //   origin + (0x49, 3)) and the popup's own text insets.
         self.map_contact_subtitle_pos = (r.x0 + 0x49, r.y0 + 3);
@@ -3696,13 +3698,11 @@ impl GameState {
         //   and its icons over the popup's rect.
         let r = self.map_troop_contact_text_panel.rect;
         self.troop_icons_update_dirty_rect(r);
-        // = seg000:7b9d/7b9f al = 4; call loc_07b2b — the popup's close effect
-        //   (run_vga_effect al=4 = xor_bracket_zoom_from_panel) unless data_046d8
-        //   suppresses it: the brackets shrink back and the box trail returns
-        //   to the icon, over the freshly repainted map.
-        if !self.map_popup_anim_suppress {
-            self.xor_bracket_zoom_from_panel();
-        }
+        // = seg000:7b9d/7b9f al = 4; call map_popup_close_effect — the
+        //   popup's close effect (xor_bracket_zoom_from_panel) unless
+        //   data_046d8 suppresses it: the brackets shrink back and the box
+        //   trail returns to the icon, over the freshly repainted map.
+        self.map_popup_close_effect(4);
     }
 
     // = seg000:8763 menu_callback_choice_multiple_no_more_orders — the order
@@ -3862,26 +3862,57 @@ impl GameState {
         let r = p.rect;
         // = seg000:5f5f mov [map_popup_ptr], si
         self.map_popup = p.popup;
-        // = seg000:5f65..5f76
+        // = seg000:5f65..5f76 comm_glow_index[0..2] = (x, y) - 10 — the
+        //   effect's source point; al = 6; jmp map_popup_open_effect.
         self.map_popup_anim_src = (x, y);
         self.map_popup_anim_rect = r;
-        self.map_popup_anim_suppress = false;
-        self.animate_popup_outline(false);
-        // = seg000:7b1b loc_07b1b — the panel fill + frame (fill [rec+9],
-        //   frame [rec+8]).
-        self.map_draw_panel_record(p);
+        self.map_popup_open_effect(6, p);
     }
 
-    // The popup's outline scale animation (effects al=6 / al=8,
-    // gfx::xor_rect_outline_anim): the popup callers stage the source point
-    // (the icon / marker position — the DOS record holds it less 10, hence
-    // the -10 here against the driver's +8) and the panel rect; the close
-    // paths replay it reversed. The close repaints the map under the panel
-    // first (the caller), so the shrinking outline plays over the clean map.
-    fn animate_popup_outline(&mut self, reverse: bool) {
+    // = seg000:7b0f map_popup_open_effect — open a map popup with vga effect
+    // al: clear the close-suppress flag (data_046d8), swap si<->di so ds:si =
+    // the animation source (icon/marker point) and es:di = the panel record,
+    // run the effect, then fall into the panel fill+frame (loc_07b1b).
+    // al=6 xor_rect_outline_advance from the info/location popups
+    // (seg000:5f76); al=2 xor_bracket_zoom_to_panel from the troop-contact
+    // popup (seg000:7a24).
+    fn map_popup_open_effect(&mut self, al: u8, panel: PanelRecord) {
+        self.map_popup_anim_suppress = false;
+        self.run_vga_effect(al);
+        // = seg000:7b1b loc_07b1b — the panel fill + frame (fill [rec+9],
+        //   frame [rec+8]).
+        self.map_draw_panel_record(panel);
+    }
+
+    // = seg000:7b2b map_popup_close_effect — close a map popup with vga
+    // effect al, unless data_046d8 suppresses it (set by map_select_troop
+    // when a new selection replaces the panel). al=8
+    // xor_rect_outline_reverse from the info/location popups (seg000:5fad);
+    // al=4 xor_bracket_zoom_from_panel from the troop-contact popup
+    // (seg000:7b9f). The close repaints the map under the panel first (the
+    // caller), so the shrinking effect plays over the clean map.
+    fn map_popup_close_effect(&mut self, al: u8) {
+        if !self.map_popup_anim_suppress {
+            self.run_vga_effect(al);
+        }
+    }
+
+    // = seg000:c0e8 run_vga_effect — run a vga_effect_dispatch effect (al)
+    // over the screen: es = screen, bp = the PIT counter (the per-frame wait
+    // reference), ds:si / es:di per the effect. The popup callers stage the
+    // source point (the icon / marker position — the DOS record holds it
+    // less 10, hence the -10 here against the driver's +8) and the panel
+    // rect in map_popup_anim_src / map_popup_anim_rect.
+    fn run_vga_effect(&mut self, al: u8) {
         let (sx, sy) = self.map_popup_anim_src;
         let r = self.map_popup_anim_rect;
-        gfx::xor_rect_outline_anim(self, (sx - 10, sy - 10), r, reverse);
+        match al {
+            2 => self.xor_bracket_zoom_to_panel(r, (sx, sy)),
+            4 => self.xor_bracket_zoom_from_panel(),
+            6 => gfx::xor_rect_outline_anim(self, (sx - 10, sy - 10), r, false),
+            8 => gfx::xor_rect_outline_anim(self, (sx - 10, sy - 10), r, true),
+            _ => {}
+        }
     }
 
     // = seg000:8865 font_draw_interpolated_string_w_color_at_pos — an
@@ -4140,14 +4171,12 @@ impl GameState {
         }
         // = seg000:79e8/79eb si = data_018df; loc_05f9f: fb1 active, clear
         //   map_popup_ptr, repaint the map under the panel, then the outline
-        //   scale-out (loc_07b2b, effect al=8) unless suppressed.
+        //   scale-out (map_popup_close_effect, effect al=8).
         self.set_fb1_as_active_framebuffer();
         self.map_popup = MapPanelRef::None;
         let r = self.map_troop_info_panel.rect;
         self.troop_icons_update_dirty_rect(r);
-        if !self.map_popup_anim_suppress {
-            self.animate_popup_outline(true);
-        }
+        self.map_popup_close_effect(8);
     }
 
     // = seg000:5fb0 loc_05fb0 — an LMB click near a location marker: open the
@@ -4659,14 +4688,12 @@ impl GameState {
         self.map_location_popup_class = 0;
         // = seg000:5f9c si = data_01668; loc_05f9f: fb1 active, clear
         //   map_popup_ptr, repaint the map under the panel, then the outline
-        //   scale-out (loc_07b2b, effect al=8) unless suppressed.
+        //   scale-out (map_popup_close_effect, effect al=8).
         self.set_fb1_as_active_framebuffer();
         self.map_popup = MapPanelRef::None;
         let r = self.map_location_info_panel.rect;
         self.troop_icons_update_dirty_rect(r);
-        if !self.map_popup_anim_suppress {
-            self.animate_popup_outline(true);
-        }
+        self.map_popup_close_effect(8);
     }
 
     // = seg000:50db menu_callback_choice_move_to_location_orni — GO THERE

@@ -1093,11 +1093,9 @@ impl GameState {
                 //   port matches that quirk.
                 self.npc_assign_companion_slot(speaker);
                 if night {
-                    // = the pushed loc_09840 continuation (seg000:9821/9824):
-                    //   during the night attack the head overlay is torn down
-                    //   and the game area restored + presented over the
-                    //   scripted attack scene.
-                    self.tear_down_prior_talking_head_overlay();
+                    // = the pushed dialogue_end_teardown_head_and_restore_
+                    //   game_area continuation (seg000:9821/9824).
+                    self.dialogue_end_teardown_head_and_restore_game_area();
                 }
             } else {
                 // = seg000:982e call npc_remove_companion_slot — the speaker no
@@ -1106,9 +1104,9 @@ impl GameState {
                 self.npc_remove_companion_slot(speaker);
                 if night {
                     // = seg000:9831/9836 jnz loc_0983f — the ret lands on the
-                    //   pushed loc_09840 continuation: drop the head overlay and
-                    //   restore the game area over the attack scene.
-                    self.tear_down_prior_talking_head_overlay();
+                    //   pushed dialogue_end_teardown_head_and_restore_game_area
+                    //   continuation.
+                    self.dialogue_end_teardown_head_and_restore_game_area();
                 } else if self.room_render_flags & 1 == 0 {
                     // = seg000:9838 test room_render_flags,1; 983d jz loc_09879 —
                     //   re-render the room + raise the HUD head unless bit 0 set.
@@ -2868,6 +2866,16 @@ impl GameState {
 
         // = the loc_098e6 tail `jmp loc_09b8b`.
         self.stop_lip_sync_and_remove_idle_head_task();
+    }
+
+    // = seg000:9840 dialogue_end_teardown_head_and_restore_game_area — the
+    // continuation pushed for the night attack's dialogue end (seg000:981a):
+    // stop the lip-sync and idle head task, restore the game area from fb2
+    // and present it (no room re-render over the scripted attack scene).
+    fn dialogue_end_teardown_head_and_restore_game_area(&mut self) {
+        self.stop_lip_sync_and_remove_idle_head_task();
+        self.copy_game_area_fb2_to_fb1();
+        self.present_game_area();
     }
 
     // = seg000:9b8b stop_lip_sync_and_remove_idle_head_task — stop any voice

@@ -483,14 +483,19 @@ impl GameState {
         // = seg000:2690..2696 the plain room into fb1.
         self.gfx_call_bp_with_front_buffer_as_screen(GameState::draw_room_game_screen);
         self.comm_displayed_message_person = 0;
-        // = seg000:269b..26a0 transition 8 through callback_transition_026a6:
-        //   the game area back from fb2 and the HUD head.
-        self.transition(8, 0, |s| {
-            s.copy_game_area_fb2_to_fb1();
-            s.ui_hud_head_draw();
-        });
+        // = seg000:269b..26a0 transition 8 through
+        //   comm_shipment_room_restore_callback.
+        self.transition(8, 0, Self::comm_shipment_room_restore_callback);
         // = seg000:26a3 jmp comm_fade_out_glow.
         self.comm_fade_out_glow();
+    }
+
+    // = seg000:26a6 comm_shipment_room_restore_callback — the transition
+    // callback ending the shipment scene: the game area back from fb2 and
+    // the HUD head.
+    fn comm_shipment_room_restore_callback(&mut self) {
+        self.copy_game_area_fb2_to_fb1();
+        self.ui_hud_head_draw();
     }
 
     // = seg000:2555 callback_transition_02555 — the shipment scene's planet
@@ -965,14 +970,21 @@ impl GameState {
         self.draw_active_bank_sprite(person as u16 + 0x1e, x, y);
     }
 
+    // = seg000:215f arm_room_screen_request_7 — pending_room_screen_request
+    // = 7: the spice-shipment consequence (an unpaid or 4-days-late shipment,
+    // or the Harkonnen attack report).
+    pub(crate) fn arm_room_screen_request_7(&mut self) {
+        self.pending_room_screen_request = 7;
+    }
+
     // = seg000:28e1 comm_dismiss_message_face — take the displayed face down:
     // the Harkonnen attack report (ds:24 == 0x0c) first arms the type-7 room
     // request; then transition 8 back to the room scene and fade the glow
     // out.
     fn comm_dismiss_message_face(&mut self) {
-        // = seg000:28e1..28e8 the loc_0215f consequence hook.
+        // = seg000:28e1..28e8 the arm_room_screen_request_7 consequence hook.
         if self.for_dialogue_enemies_ds_24 == 0x0c {
-            self.pending_room_screen_request = 7;
+            self.arm_room_screen_request_7();
         }
         // = seg000:28eb no face up: nothing to dismiss.
         if self.comm_displayed_message_person == 0 {
