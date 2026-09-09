@@ -117,7 +117,7 @@ impl AttackState {
     // applying the ATTACK.HSQ overlay, so draw() (which copies the whole 256-entry
     // palette back out) does not zero the entries ATTACK.HSQ omits — which would
     // otherwise blacken the in-game palette for the rest of the intro.
-    pub fn new(seed: &Palette, spritesheet_data: &[u8]) -> Self {
+    pub fn new(seed: &Palette, spritesheet_data: &[u8], backdrop_sprite: u16) -> Self {
         let mut attack = Self {
             screen: Screen::default(),
             gfx: Graphics::default(),
@@ -142,7 +142,7 @@ impl AttackState {
         attack.gfx.pal_5bf.copy_from(seed);
 
         attack.load_spritesheet(spritesheet_data);
-        attack.draw_background();
+        attack.draw_background(backdrop_sprite);
 
         attack
     }
@@ -169,7 +169,7 @@ impl AttackState {
         self.screen.pal.copy_from(&self.gfx.pal_2bf);
     }
 
-    fn draw_background(&mut self) {
+    fn draw_background(&mut self, backdrop_sprite: u16) {
         let fb = &mut self.framebuffer;
 
         let mut x = 0;
@@ -188,7 +188,10 @@ impl AttackState {
             x += sprite.width();
         }
 
-        let sprite_list = [(49, 0, 76), (1, 0, 134)];
+        // = seg001:11dd _stru_2068D_icon_list — the backdrop (0x31 by default;
+        //   location_arrival_hostility_check patches it by location type) and
+        //   sprite 1.
+        let sprite_list = [(backdrop_sprite, 0, 76), (1, 0, 134)];
         for (id, x, y) in sprite_list {
             draw_sprite_from_sheet(&self.sprite_sheet, id, x, y + self.gfx.y_offset, fb).unwrap();
         }

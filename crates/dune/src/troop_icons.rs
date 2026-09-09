@@ -116,6 +116,27 @@ pub(crate) struct TroopIcon {
     pub(crate) script_base: u16,
 }
 
+// = seg000:c7d4 popup_preserve_over_repaint — the rect of an open popup
+// panel to preserve over a dirty-rect repaint: its intersection with the
+// clipped repaint rect (None when empty). DOS copies that rect from the
+// still-intact visible screen into fb1 before the publish (seg000:c817..c825);
+// the port, composing in place, grabs the pixels before the fb2 restore and
+// lays them back after the icon draws (troop_icons_update_dirty_rect).
+fn popup_preserve_over_repaint(panel: Rect, clipped: Rect, yoff: i16) -> Option<Rect> {
+    // = seg000:c7d4..c7ef the four early-outs, c7f1..c80f the clamps.
+    let pr = rect(
+        panel.x0.max(clipped.x0),
+        (panel.y0 + yoff).max(clipped.y0),
+        panel.x1.min(clipped.x1),
+        (panel.y1 + yoff).min(clipped.y1),
+    );
+    // = seg000:c80f..c815 sub bp,dx; jbe; sub ax,bx; jbe.
+    if pr.x1 <= pr.x0 || pr.y1 <= pr.y0 {
+        return None;
+    }
+    Some(pr)
+}
+
 impl GameState {
     // = seg000:c60b troop_icon_spawn — append a troop icon: centre the ONMAP
     // sprite on (cx, cy), fill a new record and bump troop_icon_count.
@@ -375,15 +396,7 @@ impl GameState {
         let popup_save: Vec<(Rect, Vec<u8>)> = popup_rects
             .into_iter()
             .filter_map(|p| {
-                let pr = rect(
-                    p.x0.max(clipped.x0),
-                    (p.y0 + yoff).max(clipped.y0),
-                    p.x1.min(clipped.x1),
-                    (p.y1 + yoff).min(clipped.y1),
-                );
-                if pr.x1 <= pr.x0 || pr.y1 <= pr.y0 {
-                    return None;
-                }
+                let pr = popup_preserve_over_repaint(p, clipped, yoff)?;
                 let src = match self.screen_buffer {
                     crate::FbId::Fb1 => &self.framebuffer,
                     _ => &self.screen,

@@ -14,6 +14,7 @@ The port reads the mouse and keyboard from the window; there is no joystick.
 - `seg000:e9f4 mouse_func_uncalled` — a mouse-driver event handler that nothing installs (dead code).
 - `seg000:db44 shl_cx_and_dx` — the mouse-range scaling helper of define_mouse_range.
 - `seg000:db14 define_mouse_range` — store the mouse clip region and set the INT 33h range; the window bounds the pointer in the port.
+- `seg000:dd10 joystick_poll_into_mouse` — the cmd-arg JOY path of poll_pointer_input: fold the game port's stick into the mouse position and buttons.
 - `seg000:dce0 read_game_port` — time the game port's axis pulses (port 201h) into bx/dx; called by the joystick calibration and the mouse-handler joystick path (seg000:dd10 / dd91).
 
 ## HNM streaming

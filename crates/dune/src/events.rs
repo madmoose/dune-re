@@ -964,10 +964,12 @@ impl GameState {
         if self.night_attack_stage == 0 {
             return;
         }
-        // = seg000:1bf3/1bf7 call location_related_to_dying_if_arriving_at_
-        //   fortress_0503c on the current location — the attack resolution /
-        //   death check. Not ported. TODO.
-        println!("night_attack_period_step: attack resolution (seg000:503c) not ported");
+        // = seg000:1bf3/1bf7 di = current_location_ptr; call
+        //   location_arrival_hostility_check.
+        let li = self.current_location_index as usize;
+        if li < self.locations.len() {
+            self.location_arrival_hostility_check(li);
+        }
         // = seg000:1bfa..1c01 a pending room-screen request is forced to
         //   type 6.
         if self.pending_room_screen_request != 0 {

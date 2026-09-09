@@ -2877,7 +2877,11 @@ impl GameState {
         // entries. Seeding here also makes the field the same instance the
         // Intro28Attack frame task ticks (tick_intro_28).
         let spritesheet_data = self.dat_file.read("ATTACK.HSQ").unwrap();
-        self.attack = Some(AttackState::new(&self.palette, &spritesheet_data));
+        self.attack = Some(AttackState::new(
+            &self.palette,
+            &spritesheet_data,
+            self.night_attack_backdrop_sprite,
+        ));
         // Draw the static background into fb1 so the stage's 0x10 transition
         // reveals it; the task then animates the particles over it.
         self.attack

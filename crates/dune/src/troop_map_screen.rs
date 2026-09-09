@@ -4443,6 +4443,52 @@ impl GameState {
         (cx, dx)
     }
 
+    // = seg000:503c location_arrival_hostility_check — on arrival at `li`
+    // (and each night-attack period at the current location): clear the
+    // battle gauge byte and night_attack_stage; a location in battle, or a
+    // non-Atreides one with attacking troops, arms the night attack (stage
+    // 1, the gauge, the ATTACK backdrop sprite by location type); otherwise
+    // Harkonnen troops present request room screen 4.
+    pub(crate) fn location_arrival_hostility_check(&mut self, li: usize) {
+        // = seg000:503c/5041.
+        self.for_condit_battle_related_ds_fd = 0;
+        self.night_attack_stage = 0;
+        // = seg000:5046 test status,2; jnz loc_05058.
+        let mut arm = self.locations[li].status & 2 != 0;
+        let mut harkonnen = 0;
+        if !arm {
+            // = seg000:504c call location_is_Atreides_05d36; jb ret.
+            if self.location_is_atreides(li) {
+                return;
+            }
+            // = seg000:5051..5056 or dx,dx; jz loc_0507a.
+            let (cx, dx) = self.location_count_harkonnen_and_attacking_troops(li);
+            harkonnen = cx;
+            arm = dx != 0;
+        }
+        if !arm {
+            // = seg000:507a/507c jcxz ret; pending_room_screen_request = 4.
+            if harkonnen != 0 {
+                self.pending_room_screen_request = 4;
+            }
+            return;
+        }
+        // = seg000:5058/505c inc night_attack_stage; call location_seed_battle_gauge.
+        self.night_attack_stage = self.night_attack_stage.wrapping_add(1);
+        self.location_seed_battle_gauge(li);
+        // = seg000:505f..5075 the backdrop sprite by appearance: 2fh below
+        //   20h, 30h from 20h (and for 30h itself), 33h from 28h.
+        let al = self.locations[li].appearance;
+        let sprite = if al < 0x20 {
+            0x2f
+        } else if al == 0x30 || al < 0x28 {
+            0x30
+        } else {
+            0x33
+        };
+        self.night_attack_backdrop_sprite = sprite;
+    }
+
     // = seg000:6144 location_seed_battle_gauge — ds:fd = the location's
     // battle gauge | 1, the night attack's CONDIT byte.
     pub(crate) fn location_seed_battle_gauge(&mut self, li: usize) {

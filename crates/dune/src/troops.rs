@@ -2491,7 +2491,10 @@ impl GameState {
                 }
             }
             // = seg000:6c99..6ca2 a troop under 20 strong may be folded into
-            //   another at its location (troop_06d19). Not ported.
+            //   another at its location; jb loc_06cc3 — merged, done.
+            if self.troops[ti].population < 0x14 && self.troop_merge_into_smallest_neighbour(ti) {
+                continue;
+            }
             // = seg000:6ca4..6ca9 test occupation,0a0h — captured (0x20) or
             //   unrallied (0x80) troops do nothing.
             let t = self.troops[ti];
@@ -2569,6 +2572,67 @@ impl GameState {
             10 => self.troop_occupation_event_bulb_growing(ti),
             _ => {}
         }
+    }
+
+    // = seg000:6d19 troop_merge_into_smallest_neighbour — fold a small idle
+    // troop (occupation 0, not Harkonnen, not the prospector) into the
+    // smallest hired troop at its location whose population still fits: the
+    // population moves over, the merged troop keeps only the equipment the
+    // two share while the target gets every bit (and bitfield_10 bit 9),
+    // then the merged troop leaves play. Returns DOS's carry: merged.
+    fn troop_merge_into_smallest_neighbour(&mut self, ti: usize) -> bool {
+        let t = self.troops[ti];
+        // = seg000:6d19..6d29 test occupation,0e3h; test bitfield_10,80h;
+        //   cmp troop,troops[2].
+        if t.occupation & 0xe3 != 0 || t.bitfield_10 & 0x80 != 0 || ti == 2 {
+            return false;
+        }
+        let li = locations::location_index_from_ptr(t.offset_of_location);
+        // = seg000:6d2e..6d3a bx = 0; cl = !population; dx = troop;
+        //   callback_troop_merge_candidate over the hired troops here.
+        let mut best: Option<usize> = None;
+        let mut cl = !t.population;
+        self.for_each_hired_troop_in_location(li, |s, tj| {
+            s.callback_troop_merge_candidate(tj, ti, &mut best, &mut cl);
+        });
+        // = seg000:6d3d or bx,bx; jz ret.
+        let Some(target) = best else {
+            return false;
+        };
+        // = seg000:6d41..6d55 the population and the equipment move over.
+        let eq = self.troops[ti].equipment;
+        let target_eq = self.troops[target].equipment;
+        self.troops[target].population = self.troops[target].population.wrapping_add(t.population);
+        self.troops[ti].equipment = eq & target_eq;
+        self.troops[target].equipment = target_eq | eq;
+        self.troops[target].bitfield_10 |= 0x200;
+        // = seg000:6d5a/6d5d call troop_remove_from_play; stc.
+        self.troop_remove_from_play(ti);
+        true
+    }
+
+    // = seg000:6d5f callback_troop_merge_candidate — per hired troop: skip
+    // captured/unrallied troops, the prospector and the merging troop; a
+    // population at most `cl` (255 - the merging troop's population, then
+    // the best so far) becomes the candidate, `cl` = its population.
+    fn callback_troop_merge_candidate(
+        &self,
+        ti: usize,
+        merging: usize,
+        best: &mut Option<usize>,
+        cl: &mut u8,
+    ) {
+        let t = &self.troops[ti];
+        // = seg000:6d5f..6d6d.
+        if t.occupation & 0xa0 != 0 || ti == 2 || ti == merging {
+            return;
+        }
+        // = seg000:6d6f..6d78 cmp cl,al; jb; bx = troop; cl = al.
+        if *cl < t.population {
+            return;
+        }
+        *best = Some(ti);
+        *cl = t.population;
     }
 
     // = seg000:6d7b troop_usually_decrease_skills_every_4_days — every 64

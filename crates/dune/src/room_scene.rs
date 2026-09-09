@@ -634,9 +634,9 @@ impl GameState {
         //   arrived-at location is the current location record again.
         self.current_location_index = loc_index as u16;
         self.last_location_index = loc_index;
-        // = seg000:402e call location_related_to_dying_if_arriving_at_
-        //   fortress_0503c — the occupation check (arms the night attack when
-        //   the location is enemy-held). TODO: needs the troop system.
+        // = seg000:402e call location_arrival_hostility_check — arms the
+        //   night attack when the location is enemy-held.
+        self.location_arrival_hostility_check(loc_index);
         // = seg000:4031/4037 data_0009a/data_00098 = 0 — the massive-attack
         //   troop accumulators (seg000:7326); not modelled, no ported reader.
         // = seg000:403d call location_mark_discovered.

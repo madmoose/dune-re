@@ -542,6 +542,11 @@ pub struct GameState {
 
     // = seg001:002b night_attack_stage.
     pub(crate) night_attack_stage: u8,
+    // = seg001:11dd _stru_2068D_icon_list[0].index — the ATTACK.HSQ backdrop
+    // sprite of the night attack, set by location_arrival_hostility_check
+    // from the location type (0x2f sietch, 0x30 village, 0x33 fortress);
+    // static 0x31.
+    pub(crate) night_attack_backdrop_sprite: u16,
 
     // = seg001:004c related_to_contacting_troops_ds_4c — 0xff while the
     // contacted troop answers from outside the visibility range, so the
@@ -2561,6 +2566,7 @@ impl GameState {
             charisma: 0,
             game_phase: 0,
             night_attack_stage: 0,
+            night_attack_backdrop_sprite: 0x31,
             contacting_troops_ds_4c: 0,
             spice_in_stock: 0,
             area_controlled_by_atreides: 0,
