@@ -790,6 +790,10 @@ pub struct GameState {
     // DESERT_EXHAUSTION_GAUNT_THRESHOLD (seg000:1b36); Jessica's desert
     // dialogue reads it.
     pub(crate) for_condit_jessica_commented_on_exhaustion_ds_f5: u8,
+    // = seg001:00f7 for_condit_Gurney_Stilgar_Chani_at_location_ds_f7 — the
+    // named NPCs at the staged location, bit person_index
+    // (condit_stage_named_npcs_at_location).
+    pub(crate) for_condit_gurney_stilgar_chani_at_location_ds_f7: u8,
 
     // = seg001:00f2 for_condit_Chani_prisoner_location_area_and_name_ds_f2 —
     // (first_name << 8) | last_name of the sietch Chani is held prisoner in,
@@ -2638,6 +2642,7 @@ impl GameState {
             data_000ee: 0,
             desert_exhaustion_counter: 0,
             for_condit_jessica_commented_on_exhaustion_ds_f5: 0,
+            for_condit_gurney_stilgar_chani_at_location_ds_f7: 0,
             for_condit_paul_next_to_harvester_ds_f6: 0,
             for_condit_chani_prisoner_location_area_and_name_ds_f2: 0,
             number_of_locations_with_illness: 0,
@@ -4863,6 +4868,13 @@ impl GameState {
     // back buffer.
     pub(crate) fn copy_rect_back_to_fb1(&mut self, rect: Rect) {
         self.copy_rect_seg_to_fb1(FbId::Back, rect);
+    }
+
+    // = seg000:c4aa copy_rect_screen_to_fb1 — copy `rect` from the visible
+    // screen into fb1, keeping fb1 in step after a draw straight to the
+    // screen; an empty rect does nothing.
+    pub(crate) fn copy_rect_screen_to_fb1(&mut self, rect: Rect) {
+        self.copy_rect_seg_to_fb1(FbId::Screen, rect);
     }
 
     // = seg000:c474 copy_game_rect_fb1_to_fb2 — snapshot the game-area rect

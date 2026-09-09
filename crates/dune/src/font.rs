@@ -226,6 +226,8 @@ impl GameState {
     }
 
     // = seg000:d096 font_draw_glyph_func_tall / seg000:d12f font_draw_glyph_func_small
+    // = seg000:d16a font_draw_glyph_func — the plain glyph drawer both select
+    //   (GENERIC.HSQ sprite c - 0x20; the port renders the DNCHAR bitmaps).
     // — draw glyph `c` at the pen into
     // the active framebuffer with the current colour, then advance the pen x by
     // the glyph width. (DOS picks tall/small via the _off_219C8 pointer; the

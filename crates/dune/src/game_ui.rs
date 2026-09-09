@@ -179,23 +179,27 @@ pub(crate) const NAV_PANEL_GLOBE: NavPanel = [
 /// time-of-day phase (game_time & 0xf). Each phase gives the screen position of
 /// ICONES sprite 0x4a then sprite 0x4b; an x of 0 means that body is off screen.
 #[rustfmt::skip]
+// = seg001:1f06 date_area_rect — the HUD date/time indicator rect (6, 181)-
+// (30, 198) the refresh copies from the screen into fb1.
+const DATE_AREA_RECT: crate::Rect = crate::rect::rect(6, 181, 30, 198);
+
 const SUN_MOON_COORDS: [[(u16, u16); 2]; 16] = [
-    [(  6, 187), ( 25, 186)],
-    [(  6, 186), ( 26, 188)],
-    [(  6, 185), (  0,   0)],
-    [(  7, 183), (  0,   0)],
-    [(  9, 182), (  0,   0)],
-    [( 10, 181), (  0,   0)],
-    [( 13, 181), (  0,   0)],
-    [( 16, 181), (  0,   0)],
-    [( 18, 182), (  0,   0)],
-    [( 20, 183), (  0,   0)],
-    [( 20, 185), (  0,   0)],
-    [( 20, 186), (  8, 188)],
-    [( 20, 187), (  9, 186)],
-    [(  0,   0), ( 12, 183)],
-    [(  0,   0), ( 17, 182)],
-    [(  0,   0), ( 23, 183)],
+    [(6, 187), (25, 186)],
+    [(6, 186), (26, 188)],
+    [(6, 185), (0, 0)],
+    [(7, 183), (0, 0)],
+    [(9, 182), (0, 0)],
+    [(10, 181), (0, 0)],
+    [(13, 181), (0, 0)],
+    [(16, 181), (0, 0)],
+    [(18, 182), (0, 0)],
+    [(20, 183), (0, 0)],
+    [(20, 185), (0, 0)],
+    [(20, 186), (8, 188)],
+    [(20, 187), (9, 186)],
+    [(0, 0), (12, 183)],
+    [(0, 0), (17, 182)],
+    [(0, 0), (23, 183)],
 ];
 
 /// = seg001:1c76 ui_nav_panel_room — the room-view navigation panel template:
@@ -1001,9 +1005,11 @@ impl GameState {
         self.draw_ui_element(bg);
         // = seg000:1a26 call ui_draw_date_and_time_indicator.
         self.ui_draw_date_and_time_indicator();
-        // = seg000:1a29 si = 1f06h; gfx_copy_rect_to_screen — DOS copies the
-        // updated rect to VGA. The port draws straight into the screen buffer, so
-        // present the frame (unless composing offscreen, where the caller blits).
+        // = seg000:1a29/1a2c si = date_area_rect; call copy_rect_screen_to_fb1
+        //   — the indicator was drawn on the screen; fb1 follows. The port
+        //   then presents the frame (unless composing offscreen, where the
+        //   caller blits).
+        self.copy_rect_screen_to_fb1(DATE_AREA_RECT);
         if !self.front_buffer_is_fb1() {
             self.send_frame_to_display();
         }
@@ -1099,12 +1105,8 @@ impl GameState {
         //   left — the same live records the nav_panel_alt install fills. A
         //   click anywhere with an arrow cursor thus scrolls the map, and the
         //   held-button auto-repeat re-hits the same pseudo record.
-        match self.cursor_image {
-            Some(CursorShapeId::Up) => return Some(13),
-            Some(CursorShapeId::Right) => return Some(14),
-            Some(CursorShapeId::Down) => return Some(15),
-            Some(CursorShapeId::Left) => return Some(16),
-            _ => {}
+        if let Some(i) = self.set_di_to_ui_elements_ptr_based_on_cursor_image() {
+            return Some(i);
         }
         let x = self.mouse_pos_x;
         let y = self.mouse_pos_y;
@@ -1229,13 +1231,42 @@ impl GameState {
     // (seg000:d904..d941); the room record itself has nothing to do on a miss.
     fn room_mouse_lmb(&mut self) {}
 
+    // = seg000:d694 set_di_to_ui_elements_ptr_based_on_cursor_image — the four
+    // travel-arrow cursor shapes resolve to the nav-panel arrow records 13
+    // (up), 14 (right), 15 (down) and 16 (left): di steps one record per
+    // miss, stc on a match.
+    fn set_di_to_ui_elements_ptr_based_on_cursor_image(&self) -> Option<usize> {
+        match self.cursor_image {
+            Some(CursorShapeId::Up) => Some(13),
+            Some(CursorShapeId::Right) => Some(14),
+            Some(CursorShapeId::Down) => Some(15),
+            Some(CursorShapeId::Left) => Some(16),
+            _ => None,
+        }
+    }
+
+    // = seg000:d65a ui_element_press_feedback — press feedback for HUD element
+    // `i`: with flag 0x2000, bump its sprite by one, draw it, restore the
+    // sprite. (DOS also records the element in data_0dc60, which only the
+    // unreferenced ui_element_release_redraw_unused reads.)
+    fn ui_element_press_feedback(&mut self, i: usize) {
+        // = seg000:d65a test [di+9],20h; jz ret.
+        if self.ui_elements[i].flags & 0x2000 == 0 {
+            return;
+        }
+        // = seg000:d664..d673 inc [di+0ah]; draw_ui_elements_list_at_ds_si
+        //   (cx = 1); dec [di+0ah].
+        self.ui_elements[i].sprite_id += 1;
+        self.draw_ui_elements_list(i, 1);
+        self.ui_elements[i].sprite_id -= 1;
+    }
+
     // = seg000:d918 loc_0d918 — finish a press that landed on HUD element `i`:
     // optionally arm it for held auto-repeat, latch the click time, and fire it.
     fn ui_element_press(&mut self, i: usize) {
         // = seg000:d918 mov [data_0dc60],di — record the pressed element.
-        // = seg000:d91c call game_loop_sub_0d65a — press-feedback redraw: if the
-        //   record carries flag 0x2000 it bumps the sprite one frame, redraws, and
-        //   restores it. TODO: port the press-down sprite redraw (cosmetic).
+        // = seg000:d91c call ui_element_press_feedback.
+        self.ui_element_press_feedback(i);
         // = seg000:d91f test [di+9],40h — the 0x4000 flag marks a repeatable /
         //   draggable element (e.g. a +/- knob).
         if self.ui_elements[i].flags & 0x4000 != 0 {

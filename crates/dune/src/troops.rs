@@ -1891,9 +1891,10 @@ impl GameState {
         // = seg000:335d.
         self.condit_tally_troops_at_location(loc_index);
         // = seg000:3360..3379 compute_location_available_equipment -> the
-        //   ds:53 unused-equipment mask; 337d sub_03385. TODO: not yet
-        //   ported.
+        //   ds:53 unused-equipment mask. TODO: not yet ported.
         self.location_condit.unused_equipment = 0;
+        // = seg000:337d call condit_stage_named_npcs_at_location.
+        self.condit_stage_named_npcs_at_location(loc_index);
         // = seg000:3380 call condit_scan_nearest_locations.
         self.condit_scan_nearest_locations(loc_index);
     }
@@ -2007,6 +2008,36 @@ impl GameState {
         } else {
             strength
         }
+    }
+
+    // = seg000:3385 condit_stage_named_npcs_at_location — ds:f7 = the named
+    // NPCs at location `li` (bit person_index): Gurney (room_persons[4]),
+    // Stilgar ([5]) and Chani ([7]) whose location code is the location's
+    // slot; nothing for the location the player is at.
+    fn condit_stage_named_npcs_at_location(&mut self, li: usize) {
+        // = seg000:3385 ds:f7 = 0.
+        self.for_condit_gurney_stilgar_chani_at_location_ds_f7 = 0;
+        // = seg000:338a cmp location,[last_location_ptr]; jz ret.
+        if li == self.last_location_index {
+            return;
+        }
+        // = seg000:3390..339c bx = (slot << 8) | 80h, the in-room location
+        //   code of the 1-based slot.
+        let code = ((li as u16 + 1) << 8) | 0x80;
+        // = seg000:339e..33aa the three persons.
+        for person in [4usize, 5, 7] {
+            self.npc_mark_presence_at_ds_f7_if_in_location(person, code);
+        }
+    }
+
+    // = seg000:33ad NPC_mark_presence_at_ds_f7_if_in_location_033ad — a room
+    // person whose location code matches sets its person_index bit in ds:f7.
+    fn npc_mark_presence_at_ds_f7_if_in_location(&mut self, person: usize, code: u16) {
+        let p = &self.room_persons[person];
+        if p.location_appearance != code {
+            return;
+        }
+        self.for_condit_gurney_stilgar_chani_at_location_ds_f7 |= 1u8 << (p.person_index & 7);
     }
 
     // = seg000:34a5 prepare_location_data_for_condit_sub_034a5 — clear the
@@ -4086,16 +4117,27 @@ impl GameState {
     // alone, everyone else switches to occupation 6 (defending).
     pub(crate) fn troop_location_notify_residents(&mut self, li: usize) {
         self.for_each_hired_troop_in_location(li, |s, tj| {
-            let occ = s.troops[tj].occupation;
-            if occ & 0x20 != 0 {
-                return;
-            }
-            match occ & 0x0f {
-                1 => s.troop_make_stop_working(tj),
-                6 => {}
-                _ => s.troop_set_occupation(tj, 6),
-            }
+            s.callback_troop_notify_resident(tj);
         });
+    }
+
+    // = seg000:8403 callback_troop_notify_resident — a captured troop is left
+    // alone; a spice miner (occupation 1) stops working; a troop already at 6
+    // stays; everyone else switches to occupation 6 (defending).
+    fn callback_troop_notify_resident(&mut self, ti: usize) {
+        let occ = self.troops[ti].occupation;
+        // = seg000:8403 test occupation,20h; jnz ret.
+        if occ & 0x20 != 0 {
+            return;
+        }
+        match occ & 0x0f {
+            // = seg000:841c jmp callback_troop_make_troop_stop_working.
+            1 => self.troop_make_stop_working(ti),
+            // = seg000:8412/8414 cmp al,6; jz ret.
+            6 => {}
+            // = seg000:8416/8418 cl = 6; call troop_set_occupation.
+            _ => self.troop_set_occupation(ti, 6),
+        }
     }
 
     // = seg000:841f loc_0841f — the turn-around arrival (occupation low bits

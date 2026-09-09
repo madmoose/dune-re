@@ -615,6 +615,17 @@ impl GameState {
     // (comm_drop_oldest_sighting, seg000:272f). From game phase 0x38, when
     // not already in the COMM room (room 8), vision message 0x201 ("A message
     // has arrived in the palace.") is queued.
+    // = seg000:272f comm_drop_oldest_sighting — drop the oldest COMM
+    // sighting: the later entries shift down one, the freed slot is zeroed
+    // and comm_sighting_count drops by one; an empty list is left alone.
+    fn comm_drop_oldest_sighting(&mut self) {
+        if self.comm_sightings.is_empty() {
+            return;
+        }
+        self.comm_sightings.remove(0);
+        self.data_000c8 = self.comm_sightings.len() as u8;
+    }
+
     pub(crate) fn comm_add_person_sighting(&mut self, sighting: u16) {
         // = seg000:26dd..26ea the dedup scan.
         if self.comm_sightings.contains(&sighting) {
@@ -623,7 +634,7 @@ impl GameState {
         // = seg000:26f8..2706 at 10 entries drop the oldest and append as
         //   the 10th.
         if self.comm_sightings.len() >= 10 {
-            self.comm_sightings.remove(0);
+            self.comm_drop_oldest_sighting();
         }
         // = seg000:270d/270f store + count — data_000c8 is DOS's
         //   comm_sighting_count byte (seg001:00c8), kept in step with the

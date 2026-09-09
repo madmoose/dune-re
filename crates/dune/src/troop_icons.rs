@@ -429,14 +429,12 @@ impl GameState {
         //   fifo keeps the list order; the map's by-depth policy (0xc835)
         //   layers back-to-front by ascending x1 + y1, flag-0x40 icons last.
         if self.troop_icon_draw_by_depth {
-            order.sort_by_key(|&i| {
-                let ic = &self.troop_icons[i];
-                if ic.flags & 0x40 != 0 {
-                    i32::MAX
-                } else {
-                    ic.rect.x1 as i32 + ic.rect.y1 as i32
-                }
-            });
+            // = the repeated pick: each pass takes the next icon out of the
+            //   list (the DOS xchg zeroes its slot) until none is left.
+            let mut remaining = std::mem::take(&mut order);
+            while let Some(k) = self.troop_icons_pick_next_by_depth(&remaining) {
+                order.push(remaining.remove(k));
+            }
         }
         // The icon draws land on the front buffer, like the restore above.
         let saved = self.active_fb();
@@ -473,6 +471,30 @@ impl GameState {
         if !self.front_buffer_is_fb1() {
             self.send_frame_to_display();
         }
+    }
+
+    // = seg000:c835 troop_icons_pick_next_by_depth — the draw-order pick,
+    // depth-sorted: the position in `list` of the icon with the smallest
+    // bottom-right corner sum (x1 + y1), so the icons layer back-to-front
+    // down the map; flag-0x40 icons score 0x7fff and so draw last. None
+    // when the list is empty (DOS: dx stays 0xffff, the sign the caller
+    // tests).
+    fn troop_icons_pick_next_by_depth(&self, list: &[usize]) -> Option<usize> {
+        let mut best: Option<(usize, u16)> = None;
+        for (k, &i) in list.iter().enumerate() {
+            let ic = &self.troop_icons[i];
+            // = seg000:c83f..c84b ax = x1 + y1, or 7fffh for flag 40h.
+            let score = if ic.flags & 0x40 != 0 {
+                0x7fff
+            } else {
+                (ic.rect.x1 as u16).wrapping_add(ic.rect.y1 as u16)
+            };
+            // = seg000:c84e..c854 cmp ax,dx; ja — a lower-or-equal score wins.
+            if best.is_none_or(|(_, d)| score <= d) {
+                best = Some((k, score));
+            }
+        }
+        best.map(|(k, _)| k)
     }
 
     // = seg000:686e troop_icon_screen_pos — the troop's icon screen position

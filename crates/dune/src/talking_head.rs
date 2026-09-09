@@ -545,11 +545,7 @@ impl GameState {
         //   placeholder reads is what appears on the sign.
         let (string_id, x, y, color) = (row.string_id, row.x, row.y, row.color);
         self.font_select_small_font();
-        let s = self.get_phrase_or_command_string(string_id).to_vec();
-        let text = self.format_interpolated_string(&s);
-        self.font_state.color = color;
-        self.font_set_draw_position(x, y);
-        self.font_draw_string(&text);
+        self.font_draw_interpolated_string_w_color_at_pos(string_id, color, x, y);
         // = seg000:9afe..9b07 back to the tall font, then publish the game area.
         self.font_select_tall_font();
         self.call_restore_cursor();

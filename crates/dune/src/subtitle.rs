@@ -172,6 +172,26 @@ impl GameState {
         self.draw_subtitle_body(text);
     }
 
+    // = seg000:8df0 subtitle_drop_justification_if_overspread — with layout
+    // flag bit 0 (full justification): clear it when any laid-out line with
+    // words (subtitle_line_table) has an inter-word advance of 0x1e or more
+    // (over-spread looks bad).
+    fn subtitle_drop_justification_if_overspread(&mut self, lines: &[SubLine]) {
+        // = seg000:8df0 test [subtitle_layout_flags],1; jz ret.
+        if self.subtitle_layout_flags & 1 == 0 {
+            return;
+        }
+        // = seg000:8df8..8e0b the line table: a line with words (word != 0)
+        //   whose advance >= 1eh.
+        if lines
+            .iter()
+            .any(|l| !l.words.is_empty() && l.advance >= 0x1e)
+        {
+            // = seg000:8e0f and [subtitle_layout_flags],0feh.
+            self.subtitle_layout_flags &= !0x01;
+        }
+    }
+
     // = seg000:88d2 loc_088d2 — interpolate `src` into the 0xa6b0 buffer and,
     // in a text-showing subtitle mode (< 2), lay it out and draw it. The talk
     // verb's multi-part continuation re-enters the subtitle pipeline here
@@ -590,15 +610,8 @@ impl GameState {
         // = seg000:8b1b call draw_speech_bubble — also records the bubble
         //   state and the pen origin.
         let strip = self.draw_speech_bubble(layout, rect, &lines);
-        // = seg000:8b1e loc_08df0 — drop full justification when any line's
-        //   inter-word advance stretched past 0x1e (over-spread looks bad).
-        if self.subtitle_layout_flags & 1 != 0
-            && lines
-                .iter()
-                .any(|l| !l.words.is_empty() && l.advance >= 0x1e)
-        {
-            self.subtitle_layout_flags &= !0x01;
-        }
+        // = seg000:8b1e call subtitle_drop_justification_if_overspread.
+        self.subtitle_drop_justification_if_overspread(&lines);
         // = seg000:8b21..8b88 the pen start: rect origin + padding, then the
         //   vertical placement by subtitle_layout_flags bits 2..3 (the
         //   default 9 has 8 = centre vertically; the mode-0 strip's 1 = top).

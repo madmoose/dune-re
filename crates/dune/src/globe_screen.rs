@@ -616,16 +616,23 @@ impl GameState {
             // y1-1}, colour byte [si+8] = 7.
             self.draw_rect_outline(r.x0, r.y0, r.x1 - 1, r.y1 - 1, 7);
             self.send_frame_to_display();
-            // = seg000:bcf9 call globe_zoom_box_shimmer_step — shrink the rect by one, run the
-            // 2x zoom shimmer inside it for 10 ticks, restore the rect.
-            let inner = Rect {
-                x0: r.x0 + 1,
-                y0: r.y0 + 1,
-                x1: r.x1 - 1,
-                y1: r.y1 - 1,
-            };
-            self.blit_fb1_to_screen_effect(0, inner);
+            // = seg000:bcf9 call globe_zoom_box_shimmer_step.
+            self.globe_zoom_box_shimmer_step(r);
         }
+    }
+
+    // = seg000:bd00 globe_zoom_box_shimmer_step — shrink the zoom-box rect
+    // (data_0dd06) by one on all sides, run the zoom shimmer inside it
+    // (blit_fb1_to_screen_effect al = 0, cx = 10 ticks), and restore the
+    // rect. The port passes the rect by value, so the restore is implicit.
+    fn globe_zoom_box_shimmer_step(&mut self, r: Rect) {
+        let inner = Rect {
+            x0: r.x0 + 1,
+            y0: r.y0 + 1,
+            x1: r.x1 - 1,
+            y1: r.y1 - 1,
+        };
+        self.blit_fb1_to_screen_effect(0, inner);
     }
 
     // = seg000:5a3d ui_transition_to_map_interface — leave the globe for the

@@ -105,6 +105,7 @@ fn condit_var_name(addr: u16) -> Option<(&'static str, bool)> {
         0xe4 => ("nearest_harkonnen_area.loc_ptr", true),
         0xe6 => ("nearest_harkonnen_area.octant", false),
         0xf5 => ("for_condit_desert_walk_ds_f5", false),
+        0xf7 => ("for_condit_Gurney_Stilgar_Chani_at_location_ds_f7", false),
         0xf8 => ("number_of_locations_with_illness", false),
         0xf9 => ("chani_troop_illness_cure_progress", false),
         0xfd => ("for_condit_battle_related_ds_fd", false),
@@ -296,6 +297,8 @@ impl GameState {
             // = seg001:00f5 for_condit_desert_walk_related_ds_f5.
             0xf5 => self.for_condit_jessica_commented_on_exhaustion_ds_f5,
             // = seg001:00f8/00f9 the illness-plot counters (events.rs).
+            // = seg001:00f7 for_condit_Gurney_Stilgar_Chani_at_location_ds_f7.
+            0xf7 => self.for_condit_gurney_stilgar_chani_at_location_ds_f7,
             0xf8 => self.number_of_locations_with_illness,
             0xf9 => self.chani_troop_illness_cure_progress,
             // = seg001:00fb room_view_toggle.

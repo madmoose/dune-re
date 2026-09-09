@@ -71,12 +71,14 @@ its own framebuffer and paces frames itself.
 - `seg000:e913 install_interrupt_handlers` — hook the PIT, keyboard and mouse interrupt vectors from _word_21DC3_interrupt_table.
 - `seg000:e85c initialize_pit_timer` — hook INT 8, wait for the first tick and derive the timer calibration byte data_0efd9; the port's clock is the frame sink's.
 - `seg000:e57b load_driver_ax_with_vtable_at_si` — load DNVGA.BIN or DN386.BIN and bind its vtable; the gfx module is that driver compiled in.
+- `seg000:efba pit_timer_callback_midi` — the PIT ISR's MIDI tick (MIDI_Tick into the status/measure/ticks words); the port's MIDI driver ticks on its own clock.
 - `seg000:a87e audio_test_frequency` — play FREQ.HSQ at startup to time the PCM driver.
 
 ## Dead code
 
 - `seg000:08e5 unused_midi_fade_out` — fade the music out over 200h ticks and return with CF clear, shaped like an intro script step; nothing references it.
 - `seg000:676e loc_0676e` — a `stc; ret` after map_spawn_troop_icon's own return; nothing jumps to it.
+- `seg000:d677 ui_element_release_redraw_unused` — unreferenced: redraw the HUD element ui_element_press_feedback recorded.
 - `seg000:5381 find_nearest_location_unused` — an unreferenced variant of iterate_over_locations_and_coordinates without the hidden-location test.
 - `seg000:53b6 find_nearest_fortress_unused` — an unreferenced variant of iterate_over_locations_and_coordinates restricted to fortresses.
 - `seg000:7419 callback_troop_location_07419` — an unreferenced variant of the attack callback's tail (occupation 6 -> location_battle_won, else the casualty roll).

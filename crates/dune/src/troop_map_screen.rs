@@ -3218,8 +3218,11 @@ impl GameState {
         );
         // = seg000:7ad9/7b02 si = the animation's first frame; call draw_talking_head_in_box.
         self.draw_talking_head_in_box(anim, 0);
-        // = seg000:7b06/7b09 si = data_047d4; call gfx_copy_rect_to_screen —
-        //   the popup drew into the screen buffer, so publish it.
+        // = seg000:7b06/7b09 si = data_047d4; call copy_rect_screen_to_fb1 —
+        //   the popup drew into the screen buffer; fb1 follows, and the port
+        //   publishes it.
+        let popup_box = self.head_popup_box;
+        self.copy_rect_screen_to_fb1(popup_box);
         if !self.front_buffer_is_fb1() {
             self.send_frame_to_display();
         }
@@ -3843,14 +3846,24 @@ impl GameState {
         gfx::xor_rect_outline_anim(self, (sx - 10, sy - 10), r, reverse);
     }
 
-    // = an interpolated COMMAND/PHRASE string (the live-number placeholders
-    // read the staged CONDIT block) at a pen with a colour word — the DOS
-    // font_draw_interpolated_string_w_color_at_pos.
-    fn map_draw_interp_string(&mut self, id: u16, color: u16, x: u16, y: u16) {
-        let s = self.get_phrase_or_command_string(id).to_vec();
-        let text = self.format_interpolated_string(&s);
+    // = seg000:8865 font_draw_interpolated_string_w_color_at_pos — an
+    // interpolated COMMAND/PHRASE string (the live-number placeholders read
+    // the staged CONDIT block) at (x, y) with the colour word.
+    pub(crate) fn font_draw_interpolated_string_w_color_at_pos(
+        &mut self,
+        id: u16,
+        color: u16,
+        x: u16,
+        y: u16,
+    ) {
+        // = seg000:886a/886e the colour word and the pen.
         self.font_state.color = color;
         self.font_set_draw_position(x, y);
+        // = seg000:8871..887b get_phrase_or_command_string_si; expand_phrase_
+        //   tokens; format_interpolated_string into data_0a6b0.
+        let s = self.get_phrase_or_command_string(id).to_vec();
+        let text = self.format_interpolated_string(&s);
+        // = seg000:8881 call font_draw_string.
         self.font_draw_string(&text);
     }
 
@@ -3888,7 +3901,7 @@ impl GameState {
         } else {
             cmd::SETTLED_IN
         };
-        self.map_draw_interp_string(hdr, panel.text_color(0x9a), header_x, y);
+        self.font_draw_interpolated_string_w_color_at_pos(hdr, panel.text_color(0x9a), header_x, y);
         // = seg000:7929 sub dx,8 — the pen drops to x0+4 for the location
         //   name AND stays there for every following line.
         let x0 = header_x - 8;
@@ -3906,12 +3919,17 @@ impl GameState {
             } else {
                 cmd::CAPTURED
             };
-            self.map_draw_interp_string(id, panel.text_color(0x9a), x0, y);
+            self.font_draw_interpolated_string_w_color_at_pos(id, panel.text_color(0x9a), x0, y);
             y += 0x11;
         } else {
             // = seg000:794c..794f the troop line: the 0x84 occupation caption
             //   (subst id 4) then "N men  Motiv. N%".
-            self.map_draw_interp_string(cmd::MEN_AND_MOTIVATION, panel.text_color(0x9a), x0, y);
+            self.font_draw_interpolated_string_w_color_at_pos(
+                cmd::MEN_AND_MOTIVATION,
+                panel.text_color(0x9a),
+                x0,
+                y,
+            );
             y += 0x0f;
             // = seg000:7955 occupation 2 skips the caption + status lines.
             if occ != 2 {
@@ -3949,7 +3967,12 @@ impl GameState {
                         0
                     };
                     if id != 0 {
-                        self.map_draw_interp_string(id, panel.text_color(0x9a), x0, y);
+                        self.font_draw_interpolated_string_w_color_at_pos(
+                            id,
+                            panel.text_color(0x9a),
+                            x0,
+                            y,
+                        );
                         y += 0x11;
                     }
                 }

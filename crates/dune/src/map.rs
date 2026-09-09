@@ -316,6 +316,21 @@ impl GameState {
     }
 }
 
+// = seg000:64ef map_disc_emit_span_pair — one disc span on two rows: cx = dx -
+// di + 1 (the length), dx = di (the start x), the span callback with bx (the
+// upper row) and again with si (the mirrored row).
+fn map_disc_emit_span_pair(
+    emit: &mut impl FnMut(i16, u16, i16),
+    bx: i16,
+    si: i16,
+    di: i16,
+    dx: i16,
+) {
+    let len = dx.wrapping_sub(di).wrapping_add(1) as u16;
+    emit(bx, len, di);
+    emit(si, len, di);
+}
+
 // = seg000:64b2 map_disc_rasterize — emit the spans of a disc of `radius`
 // around the origin as (row, len, x_start), each span on two rows (bx and its
 // mirror si, seg000:64ef map_disc_emit_span_pair). A register-for-register
@@ -328,11 +343,8 @@ pub(crate) fn map_disc_rasterize(radius: u16, mut emit: impl FnMut(i16, u16, i16
     let mut bp = 0i16;
     let mut dx = 0i16;
     let mut di = 0i16;
-    let mut emit_pair = |bx: i16, si: i16, di: i16, dx: i16| {
-        let len = dx.wrapping_sub(di).wrapping_add(1) as u16;
-        emit(bx, len, di);
-        emit(si, len, di);
-    };
+    let mut emit_pair =
+        |bx: i16, si: i16, di: i16, dx: i16| map_disc_emit_span_pair(&mut emit, bx, si, di, dx);
     // = seg000:64c1..64d3
     loop {
         ax = ax.wrapping_sub(bp);
