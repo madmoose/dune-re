@@ -515,7 +515,7 @@ impl GameState {
     // (the seg000:1ce4 jb skips the Atreides holdings — everything the
     // Harkonnens still exploit) + rand_iterated(sum/16). (The location count
     // accumulates in dx but has no store.)
-    fn accumulate_harkonnen_spice_production(&mut self) {
+    pub(crate) fn accumulate_harkonnen_spice_production(&mut self) {
         let mut sum = 0u16;
         for li in 0..self.locations.len() {
             if !self.location_is_atreides(li) {

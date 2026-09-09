@@ -230,11 +230,8 @@ impl GameState {
                     self.locations[found].spice_density = 0;
                     if !self.location_is_atreides(found) && found >= 2 {
                         self.locations[found].status &= 0x7f;
-                        // = seg000:658c call location_battle_won_for_fortress_07443
-                        //   (unported).
-                        println!(
-                            "map_vegetation_span: location_battle_won_for_fortress_07443 unported"
-                        );
+                        // = seg000:658c call location_battle_won_for_fortress_07443.
+                        self.location_battle_won_for_fortress(found);
                     }
                 }
                 al = al & !0x30 | 0x20;

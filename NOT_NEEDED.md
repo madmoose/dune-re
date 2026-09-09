@@ -74,6 +74,8 @@ its own framebuffer and paces frames itself.
 
 - `seg000:08e5 unused_midi_fade_out` — fade the music out over 200h ticks and return with CF clear, shaped like an intro script step; nothing references it.
 - `seg000:676e loc_0676e` — a `stc; ret` after map_spawn_troop_icon's own return; nothing jumps to it.
+- `seg000:7419 callback_troop_location_07419` — an unreferenced variant of the attack callback's tail (occupation 6 -> location_battle_won, else the casualty roll).
+- `seg000:7516 callback_troop_07516` — unreferenced: troop_attack_take_losses for an attacking troop.
 - `seg000:6a6b loc_06a6b` — end the troop contact and clear the occupation bits; nothing references it.
 
 ## Memory management

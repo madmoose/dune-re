@@ -4,6 +4,7 @@
 
 mod attack;
 mod avi;
+mod battle;
 mod book_screen;
 mod cmd;
 mod color;

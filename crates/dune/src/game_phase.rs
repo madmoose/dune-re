@@ -604,10 +604,8 @@ impl GameState {
         // = seg000:6f87..6f8e al = ((new & 0xfc) - (old & 0xfc)) >> 2.
         let steps = (self.charisma & 0xfc).wrapping_sub(old & 0xfc) >> 2;
         if steps != 0 {
-            // = seg000:6f90 jnz increase_motivation_for_all_active_troops —
-            //   +steps motivation on every active troop. TODO: the troop
-            //   system is not ported.
-            println!("increase_charisma: +{steps} troop motivation unported");
+            // = seg000:6f90 jnz increase_motivation_for_all_active_troops.
+            self.increase_motivation_for_all_active_troops(steps);
         }
     }
 

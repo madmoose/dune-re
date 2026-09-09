@@ -1902,7 +1902,7 @@ impl GameState {
     // troop strength words for CONDIT: zero ds:94/96/5c/5e, accumulate over
     // the location's troop chain (callback_troop_accumulate_strength), then
     // ds:9c = the battle balance.
-    fn condit_stage_location_strengths(&mut self, loc_index: usize) {
+    pub(crate) fn condit_stage_location_strengths(&mut self, loc_index: usize) {
         // = seg000:33be..33c9 the four words cleared.
         let lc = &mut self.location_condit;
         lc.harkonnen_strength = 0;
@@ -1971,7 +1971,7 @@ impl GameState {
     // and 2 adds that base times 2, 4, 8 and 16, an overflow saturating the
     // word. The high byte is the strength; a zero strength counts 1 for any
     // troop with people in it.
-    fn troop_battle_strength(&self, ti: usize) -> u16 {
+    pub(crate) fn troop_battle_strength(&self, ti: usize) -> u16 {
         let t = &self.troops[ti];
         // = seg000:342d..3439 al = 2 * modifier + army_skill, 0xff on carry.
         let modifier = self.troop_compute_motivation_modifier(ti);
@@ -2554,14 +2554,15 @@ impl GameState {
 
     // = seg000:6c26 array_callbacks_for_troop_occupation_06c26 — the per-period
     // callback for each occupation nibble. Spice mining (0), prospecting (1),
-    // military training (4) and irrigation (8) are ported; the others
-    // (espionage, attacking, wind-trap assembly, bulb growing) are their own
+    // military training (4), attacking (6) and irrigation (8) are ported; the
+    // others (espionage, wind-trap assembly, bulb growing) are their own
     // subsystems, and slots 2/3/7/11..15 are nullsub_00f66.
     fn run_troop_occupation_callback(&mut self, ti: usize) {
         match self.troops[ti].occupation & 0x0f {
             0 => self.troop_occupation_event_spice_mining(ti),
             1 => self.troop_occupation_event_spice_prospecting(ti),
             4 => self.troop_occupation_event_military_training(ti),
+            6 => self.troop_occupation_event_attacking(ti),
             8 => self.troop_occupation_event_irrigation(ti),
             _ => {}
         }
@@ -2824,7 +2825,7 @@ impl GameState {
 
     // = seg000:6e02 location_evict_unhired_harkonnen_troops — remove every
     // unhired Harkonnen troop; the chain walk stops at a removal, so repeat.
-    fn location_evict_unhired_harkonnen_troops(&mut self, li: usize) {
+    pub(crate) fn location_evict_unhired_harkonnen_troops(&mut self, li: usize) {
         loop {
             let mut removed = 0;
             // = seg000:764d callback_troop_evict_unhired_harkonnen.
@@ -3260,7 +3261,7 @@ impl GameState {
     // 1 army, 2 ecology. When the raise carries the skill into a new rank
     // (its high nibble changes) the rank-up is marked in bitfield_10 bits
     // 0-1 as `skill + 1`, which the troop's dialogue reads.
-    fn troop_raise_skill(&mut self, ti: usize, skill: u8, by: u8) {
+    pub(crate) fn troop_raise_skill(&mut self, ti: usize, skill: u8, by: u8) {
         let t = &mut self.troops[ti];
         let field = match skill {
             0 => &mut t.spice_skill,
@@ -3407,10 +3408,29 @@ impl GameState {
             // = the nullsub_00f66 slots: nothing to test.
             _ => false,
         };
-        // = seg000:6bb6..6bd6 troop_sync_occupation_stopped_bit — the answer
-        //   lives in occupation bit 0x10; flipping it swaps the icon, and when the
-        //   troop resumes working, restarts its clocks. The carry the caller
-        //   reads is the viability answer, not the flip (DOS pushf/popf).
+        // = seg000:6bb6 jmp troop_sync_occupation_stopped_bit.
+        self.troop_sync_occupation_stopped_bit(ti, not_viable)
+    }
+
+    // = seg000:6b8a troop_location_test_for_location_area_prospected —
+    // prospecting only pays where the area is not prospected yet (status
+    // bits 6 and 0 both clear); the answer goes through the stopped-bit sync.
+    // Returns DOS's carry: true = NOT viable.
+    pub(crate) fn troop_location_test_for_location_area_prospected(
+        &mut self,
+        ti: usize,
+        li: usize,
+    ) -> bool {
+        let not_viable = self.locations[li].status & 0x41 != 0;
+        self.troop_sync_occupation_stopped_bit(ti, not_viable)
+    }
+
+    // = seg000:6bb6 troop_sync_occupation_stopped_bit — the shared tail of
+    // the viability tests: the answer lives in occupation bit 0x10; flipping
+    // it swaps the icon, and when the troop resumes working, restarts its
+    // clocks. The carry the caller reads is the viability answer, not the
+    // flip (DOS pushf/popf).
+    fn troop_sync_occupation_stopped_bit(&mut self, ti: usize, not_viable: bool) -> bool {
         let stopped = self.troops[ti].occupation & 0x10 != 0;
         if stopped != not_viable {
             self.troops[ti].occupation ^= 0x10;
@@ -3634,10 +3654,8 @@ impl GameState {
                 }
             } else if self.troops[ti].troop_id == self.locations[li].troop_id {
                 // = seg000:8390..8397 settling as the chain head is the
-                //   battle won (troop_location_07429): the messages, the
-                //   post-battle troop callbacks, the Harkonnen enslaving and
-                //   the final-attack staging. Not ported. TODO.
-                println!("troop_arrive_at_destination: battle won (seg000:7429) not ported");
+                //   battle won: jmp location_battle_won.
+                self.location_battle_won(ti, li);
             } else {
                 self.troop_location_notify_residents(li);
             }
@@ -3711,7 +3729,7 @@ impl GameState {
     // at position 1 (9 for a Harkonnen troop, the mirrored slot bank);
     // otherwise it links after the tail and takes the first free position
     // from a 30-slot occupancy scan (Harkonnen troops scan from slot 9).
-    fn troop_link_into_location(&mut self, ti: usize, li: usize) {
+    pub(crate) fn troop_link_into_location(&mut self, ti: usize, li: usize) {
         let id = self.troops[ti].troop_id;
         let harkonnen = self.troops[ti].bitfield_10 & 0x80 != 0;
         // = seg000:8521..853f the empty chain.
@@ -3978,7 +3996,7 @@ impl GameState {
     // = seg000:7f75 troop_location_unregister_troop_equipment_from_location_
     // equipment — the inverse of the register: subtract the troop's
     // held-equipment bits from the location's counts, clamped at 0.
-    fn troop_unregister_equipment_from_location(&mut self, ti: usize, li: usize) {
+    pub(crate) fn troop_unregister_equipment_from_location(&mut self, ti: usize, li: usize) {
         let eq = self.troops[ti].equipment;
         for slot in 0..7 {
             if eq & (0x80 >> slot) != 0 {
