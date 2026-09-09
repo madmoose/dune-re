@@ -992,7 +992,7 @@ impl GameState {
             .apply_palette_update(&mut self.palette)
             .expect("failed to apply palette");
 
-        gfx::draw_sprite_on_framebuffer(self, &sprite_sheet, 0, 0, 0);
+        self.draw_sprite_on_framebuffer(&sprite_sheet, 0, 0, 0);
     }
 
     fn stage_18_play(&mut self) {}
@@ -1093,7 +1093,7 @@ impl GameState {
             // = seg000:07a9 draw_icons_list_at_si(_stru_209B0) — the sky.
             s.draw_icons_list_at_si(&SKY_ICON_LIST, sheet);
             // = seg000:07af mov ax,1; mov dx,54h; mov bx,0bh.
-            let _ = gfx::draw_sprite_on_framebuffer(s, sheet, 1, 0x54, 0x0b);
+            let _ = s.draw_sprite_on_framebuffer(sheet, 1, 0x54, 0x0b);
         });
         // = seg000:07be mov al,6 (KYNE); loc_0099d xor dx,dx.
         // = seg000:09d0 data_0478c = 1eh (loc_009c7) — the intro head's lively idle budget, 4 × 0x1e frames.
@@ -1148,7 +1148,7 @@ impl GameState {
         // loc_00802 dropped the SUNRS sheet, so re-open it for this one sprite.
         let sunrs = self.dat_file.read("SUNRS.HSQ").expect("read SUNRS.HSQ");
         let sheet = SpriteSheet::from_slice(&sunrs).expect("parse SUNRS.HSQ");
-        let _ = gfx::draw_sprite_on_framebuffer(self, &sheet, 7, 0x13, 0x4a);
+        let _ = self.draw_sprite_on_framebuffer(&sheet, 7, 0x13, 0x4a);
     }
 
     // = seg000:087b loc_0087b — install the sky palette-cycling frame task
@@ -1760,15 +1760,8 @@ impl GameState {
         for &(idx, x, y) in list {
             let flip_x = idx & 0x4000 != 0;
             let flip_y = idx & 0x2000 != 0;
-            let _ = gfx::draw_sprite_on_framebuffer_flipped(
-                self,
-                sheet,
-                idx & 0x1ff,
-                x,
-                y,
-                flip_x,
-                flip_y,
-            );
+            let _ =
+                self.draw_sprite_on_framebuffer_flipped(sheet, idx & 0x1ff, x, y, flip_x, flip_y);
         }
     }
 

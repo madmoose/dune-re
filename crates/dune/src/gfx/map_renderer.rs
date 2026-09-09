@@ -95,18 +95,6 @@ impl MapRenderer {
         self.buffer[addr] = v;
     }
 
-    // = segvga:206a/208f/20a7 `stc; adc al,al; add al,al; shl al,1; shl al,1`
-    // — unpack a map cell's low-nibble height into the interpolation range:
-    // ((cell & 0x0f) * 2 + 1) * 8. `offset` is signed: the run seed reads
-    // `[si-1]`, the cell before the rotation offset, so an offset of 0 reads
-    // the byte preceding the row (the previous row's last cell) exactly as
-    // DOS's segment-relative pointer does.
-    fn read_map_pixel(map: &[u8], map_base: usize, offset: isize) -> u8 {
-        let b = map[map_base.wrapping_add_signed(offset)];
-
-        (((b & 0x0f) << 1) + 1) << 3
-    }
-
     // = segvga:2025 loc_segvga_02025 — interpolate one map row into the
     // scratch at `output`, 4 px per cell, rotated so longitude `lng` is the
     // row centre. Rows shorter than 88 cells (segvga:204b) are centred by
@@ -195,6 +183,18 @@ impl MapRenderer {
             }
             p0 = p1;
         }
+    }
+
+    // = segvga:206a/208f/20a7 `stc; adc al,al; add al,al; shl al,1; shl al,1`
+    // — unpack a map cell's low-nibble height into the interpolation range:
+    // ((cell & 0x0f) * 2 + 1) * 8. `offset` is signed: the run seed reads
+    // `[si-1]`, the cell before the rotation offset, so an offset of 0 reads
+    // the byte preceding the row (the previous row's last cell) exactly as
+    // DOS's segment-relative pointer does.
+    fn read_map_pixel(map: &[u8], map_base: usize, offset: isize) -> u8 {
+        let b = map[map_base.wrapping_add_signed(offset)];
+
+        (((b & 0x0f) << 1) + 1) << 3
     }
 
     // = segvga:2123 map_band_interpolate_north / segvga:2153 map_band_interpolate_south

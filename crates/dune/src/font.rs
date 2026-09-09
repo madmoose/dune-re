@@ -16,7 +16,7 @@ pub enum TextAlign {
 }
 
 pub struct Font {
-    data: Box<[u8]>,
+    pub(crate) data: Box<[u8]>,
 }
 
 impl Font {
@@ -32,45 +32,6 @@ impl Font {
             TextSize::Large => self.data[c as usize],
             TextSize::Small => self.data[c as usize + 0x80],
         }
-    }
-
-    // = segvga:1bf5 vga_draw_glyph — blit one 1bpp glyph (1 byte/row, MSB first)
-    // at (x, y). `color` is the DOS colour word (bg << 8) | fg: set bits draw the
-    // low byte (fg); clear bits draw the high byte (bg), except bg == 0 leaves
-    // them transparent (the BH == 0 path). The glyph bitmaps follow the width
-    // tables in DNCHAR.BIN: tall at 0x100 (9 rows/glyph), small at 0x580 (7 rows/
-    // glyph). Returns the glyph's advance width.
-    pub fn draw_glyph(
-        &self,
-        framebuffer: &mut FrameBuffer,
-        x: u16,
-        y: u16,
-        c: u8,
-        size: TextSize,
-        color: u16,
-    ) -> u16 {
-        let fg = color as u8;
-        let bg = (color >> 8) as u8;
-        let mut glyph_ofs = match size {
-            TextSize::Large => 0x100 + glyph_height(size) as usize * c as usize,
-            TextSize::Small => 0x580 + glyph_height(size) as usize * c as usize,
-        };
-        let h = glyph_height(size) as u16;
-        let w = self.glyph_width(c, size) as u16;
-
-        for y in y..y + h {
-            let mut mask = 0x80;
-            for x in x..x + w {
-                if self.data[glyph_ofs] & mask != 0 {
-                    framebuffer.set(x, y, fg);
-                } else if bg != 0 {
-                    framebuffer.set(x, y, bg);
-                }
-                mask >>= 1;
-            }
-            glyph_ofs += 1;
-        }
-        w
     }
 }
 
@@ -193,7 +154,7 @@ pub fn draw_text(
     }
 }
 
-fn glyph_height(size: TextSize) -> u8 {
+pub(crate) fn glyph_height(size: TextSize) -> u8 {
     match size {
         TextSize::Large => 9,
         TextSize::Small => 7,

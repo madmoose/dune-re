@@ -1,4 +1,4 @@
-use crate::{FrameBuffer, Rect, SpriteSheet, blit, sprite::Sprite};
+use crate::{FrameBuffer, Rect, SpriteSheet, gfx::blit, sprite::Sprite};
 
 pub struct SpriteBlitter<'a> {
     sprite: &'a Sprite,

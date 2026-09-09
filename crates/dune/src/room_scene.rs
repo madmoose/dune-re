@@ -29,11 +29,12 @@
 //! 0x3a -> room 9 + EQUI.HSQ.
 
 use crate::{
-    DrawOptions, GameState, Rect, RoomRenderer, RoomSheet, SpriteSheet, blit,
+    DrawOptions, GameState, Rect, RoomRenderer, RoomSheet, SpriteSheet,
     game_phase::{
         PHASE_10_TUONO_HARG_FOUND, PHASE_24_ARMORY_FOUND, PHASE_54_GREENHOUSE_OPENED,
         PHASE_C8_GAME_WON,
     },
+    gfx::blit,
     room_game_screen::{NPC_COMPANION, NPC_LEFT_BEHIND, NPC_STORY_BIT},
     sal_position_markers, sal_position_markers_from_list, sprite_bank,
 };

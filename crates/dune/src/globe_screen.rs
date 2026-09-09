@@ -30,10 +30,139 @@
 use crate::{
     GameState, Rect, cmd,
     game_ui::MouseHandlers,
-    globe_renderer::GLOBE_CLIP_RECT,
+    gfx::globe_renderer::{GLOBE_CLIP_RECT, GlobeRenderer},
     menu_defs::{self, MenuRef},
+    rect::rect,
     sprite_bank,
 };
+
+// = seg001:2448 _word_218F8_rect — the globe-view navigation mouse hot-zone.
+const GLOBE_NAV_RECT: Rect = rect(96, 25, 224, 134);
+
+impl GameState {
+    // = seg000:b8a7 setup_globe_draw — load GLOBDATA and seed the globe
+    // orientation from the zoomed-globe centre, then open FRESK (whose
+    // palette the globe colours live in) and flush the palette.
+    pub(crate) fn setup_globe_draw(&mut self) {
+        // = seg000:b8a9..b8af si = 0x92 (GLOBDATA.HSQ) into RESOURCE_GLOBDATA
+        // (seg001:4c60). The renderer also snapshots MAP.HSQ (= the res_map_ofs
+        // buffer) and the TABLAT rows (= RESOURCE_TABLAT).
+        let globdata = self
+            .dat_file
+            .read("GLOBDATA.HSQ")
+            .expect("load GLOBDATA.HSQ");
+        let tablat = self.dat_file.read("TABLAT.BIN").expect("load TABLAT.BIN");
+        self.globe_renderer = Some(GlobeRenderer::new(&globdata, &self.map, &tablat));
+
+        // = seg000:b8b2..b8ba dx = zoomed_globe_longitude,
+        // bx = zoomed_globe_latitude; call set_globe_tilt_and_rotation.
+        self.set_globe_tilt_and_rotation(self.zoomed_globe_longitude, self.zoomed_globe_latitude);
+
+        // = seg000:b8bd..b8c0 ax = 1; open_resource_by_index — FRESK.HSQ
+        // (also applies its embedded palette).
+        self.open_sprite_bank(sprite_bank::FRESK);
+        // = seg000:b8c3 jmp update_screen_palette.
+        self.update_screen_palette();
+    }
+
+    // = seg000:ba75 set_globe_tilt_and_rotation — seed the rotation phase
+    // (= the _dword_23DFC fixed point: hi word of 398 * longitude, i.e. the
+    // longitude in 1/398ths of a revolution) and the clamped tilt
+    // (_word_21910_globe_tilt). The DOS table rebuilds
+    // (recalculate_globe_rotation_table, build_globe_tilt_window_table) are
+    // folded into GlobeRenderer::draw.
+    pub(crate) fn set_globe_tilt_and_rotation(&mut self, rotation: u16, tilt: i16) {
+        // = seg000:ba78..ba7f mov ax,18eh; mul dx; mov [si],dx.
+        self.globe_rotation = ((398 * rotation as u32) >> 16) as u16;
+        // = seg000:ba86..ba96 clamp the tilt magnitude up to at least 0x20
+        // (unsigned compares: 0..0x1f → 0x20, -0x1f..-1 → -0x20), so the view
+        // is never exactly equator-centred.
+        let tilt = if (tilt as u16) < 0x20 { 0x20 } else { tilt };
+        let tilt = if (tilt as u16) >= 0xffe0 { -0x20 } else { tilt };
+        self.globe_tilt = tilt;
+    }
+
+    // = seg000:b85a draw_globe_with_atmosphere — the globe main view: the
+    // FRESK atmosphere ring with the globe pixels rendered inside it.
+    pub(crate) fn draw_globe_with_atmosphere(&mut self) {
+        // = seg000:b85a..b85d ax = 1; open_resource_by_index — FRESK.HSQ.
+        self.open_sprite_bank(sprite_bank::FRESK);
+        // = seg000:b860..b869 draw_sprite(ax=2, dx=0x5b, bx=0x14) — the
+        // atmosphere ring at (91, 20). DOS register convention: dx=X, bx=Y.
+        self.draw_active_bank_sprite(2, 0x5b, 0x14);
+        // = seg000:b86c..b86f set_mouse_nav_rect(_word_218F8_rect).
+        self.set_mouse_nav_rect(GLOBE_NAV_RECT);
+        // = seg000:b872..b878 sprite clip rect = _word_218F0_rect
+        // {96,15,234,134}. The port passes clip rects per draw call (see
+        // map_screen_open) and the globe disc stays inside it, so nothing is
+        // stored here.
+        // = seg000:b87b jmp map_func_gfx.
+        self.map_func_gfx();
+    }
+
+    // = seg000:b977 map_func_gfx — render the globe pixels into fb1
+    // (es = _word_2D086_framebuffer_1_seg) from the MAP centre
+    // (ds:si = res_map_ofs) and the rotation table (bp = RESOURCE_TABLAT),
+    // via segvga vga_globe_init (the gfx vtable slot at seg001:3911).
+    pub(crate) fn map_func_gfx(&mut self) {
+        // = seg000:b97e al = globe_draw_area_control_colors — nonzero (the
+        // SEE RESULTS mode) renders the red/blue area-control palette.
+        let area_control = self.globe_draw_area_control_colors != 0;
+        let phase = self.globe_rotation;
+        let tilt = self.globe_tilt;
+        if let Some(globe) = self.globe_renderer.as_mut() {
+            globe.draw(&mut self.framebuffer, phase, tilt, area_control);
+        }
+    }
+
+    // = seg000:b8ea add_globe_rotation_frame_task — install
+    // frame_task_callback_0b9ae with interval 1 (bp=1). Tail-called by
+    // intro2_scene_globe (seg000:02f5) and the map screen globe path
+    // (seg000:b415).
+    pub(crate) fn add_globe_rotation_frame_task(&mut self) {
+        self.add_frame_task(1, crate::TaskId::GlobeRotation);
+    }
+
+    // = seg000:b9ae frame_task_callback_0b9ae — the globe rotation task. DOS
+    // draws one outline row into fb1 per tick (es = fb1; vga_globe_setup) and
+    // on the pass-complete carry return presents the sprite clip rect from
+    // fb1 to the screen, then advances the rotation phase by 1 for the next
+    // pass — the slow globe spin. The port draws nothing on the row ticks
+    // (partial passes are never presented) and renders the whole pass on the
+    // completing tick instead.
+    pub(crate) fn tick_globe_rotation(&mut self) {
+        let Some(globe) = self.globe_renderer.as_mut() else {
+            return;
+        };
+        // = seg000:b9b2 call vga_globe_setup; jb — nothing to do until the
+        // pass completes.
+        if !globe.tick_outline_row() {
+            return;
+        }
+        // The pass the task's row ticks drew, rendered in one go, then the
+        // seg000:b98e present/advance tail shared with the button redraws.
+        self.map_func_gfx();
+        self.globe_present_and_advance();
+    }
+
+    // = seg000:b9e0 globe_rotation_increment_ax — advance the rotation phase
+    // (the _dword_23DFC seed word) by ax, wrapping into 0..398 (one
+    // revolution). The fall-through rebuild of the per-row fp table
+    // (seg000:b9f4 → recalculate_globe_rotation_table) happens in the next
+    // GlobeRenderer::draw.
+    pub(crate) fn globe_rotation_increment(&mut self, ax: i16) {
+        let mut phase = self.globe_rotation as i16 + ax;
+        // = seg000:b9ea jns / add dx,cx — wrap a negative phase up.
+        if phase < 0 {
+            phase += 398;
+        }
+        // = seg000:b9ee cmp dx,cx; js / sub dx,cx — wrap an overflow down.
+        if phase >= 398 {
+            phase -= 398;
+        }
+        self.globe_rotation = phase as u16;
+    }
+}
 
 // = seg001:2562 data_02562 — the globe view's MouseHandlers record: only the
 // idle hover (globe_mouse_idle) and the LMB press (globe_mouse_lmb) do work; every other

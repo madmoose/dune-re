@@ -931,7 +931,7 @@ impl GameState {
         self.comm_displayed_message_person = person;
         // = seg000:28a4/28a7 the glow pulse over the current screen.
         self.comm_fade_in_glow();
-        gfx::gfx_copy_whole_framebuf_to_screen(self);
+        self.gfx_copy_whole_framebuf_to_screen();
         // = seg000:28aa wait out the person + 0x1a voice clip.
         self.wait_for_narration_voice_clip();
         // = seg000:28ad..28b2 transition 8 to comm_draw_message_face.
@@ -974,7 +974,7 @@ impl GameState {
         }
         // = seg000:28f2..28ff snapshot, then transition 8 through the room
         // redraw (callback_transition_02dd3).
-        gfx::gfx_copy_whole_framebuf_to_screen(self);
+        self.gfx_copy_whole_framebuf_to_screen();
         self.data_047a6 = 0xff;
         self.transition(8, 0, |s| s.draw_room_scene_and_present());
         // = seg000:2902/2907 clear the face and fade the glow out.

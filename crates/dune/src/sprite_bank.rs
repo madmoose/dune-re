@@ -418,6 +418,44 @@ impl GameState {
         // *center_y = center_y.saturating_sub_unsigned(height / 2);
     }
 
+    // Draw a sprite into the active framebuffer at logical (x, y). The
+    // destination y is shifted by `self.y_offset` to mirror how DOS segvga
+    // blits auto-apply `fb_base_ofs`. Used by the intro stage 11 icon list.
+    pub(crate) fn draw_sprite_on_framebuffer(
+        &mut self,
+        sheet: &SpriteSheet,
+        sprite_id: u16,
+        x: i16,
+        y: i16,
+    ) -> std::io::Result<()> {
+        let physical_y = y + self.y_offset as i16;
+        draw_sprite_from_sheet(sheet, sprite_id, x, physical_y, self.active_fb_mut())
+    }
+
+    // As draw_sprite_on_framebuffer, but honouring the sprite's mirror flags. The
+    // icon-list entries carry these in the high bits of the sprite word (DOS
+    // `and ch,60h; or ah,ch` in draw_sprite_clobbering_bx_dx): 0x4000 = flip-x,
+    // 0x2000 = flip-y.
+    pub(crate) fn draw_sprite_on_framebuffer_flipped(
+        &mut self,
+        sheet: &SpriteSheet,
+        sprite_id: u16,
+        x: i16,
+        y: i16,
+        flip_x: bool,
+        flip_y: bool,
+    ) -> std::io::Result<()> {
+        let physical_y = y + self.y_offset as i16;
+        let Some(sprite) = sheet.get_sprite(sprite_id) else {
+            return Ok(());
+        };
+        sprite_blitter(sprite, self.active_fb_mut())
+            .at(x, physical_y)
+            .flip_x(flip_x)
+            .flip_y(flip_y)
+            .draw()
+    }
+
     // = seg000:c22f draw_sprite_clobbering_bx_dx.
     pub fn draw_active_bank_sprite(&mut self, sprite_id: u16, x: i16, y: i16) {
         let slot = self.banks.active_bank_id as usize;

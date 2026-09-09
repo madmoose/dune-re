@@ -221,7 +221,7 @@ impl GameState {
         let row = (fy as i16).min(0x71);
         // = seg000:3b43..3b4f es=fb2, ds=fb1, bp=6, call vga_zoom_screen — zoom
         // the freshly-drawn room into fb2 at 4× around the clicked character.
-        crate::zoom::vga_zoom_fb1_to_fb2(self, col, row, 6);
+        crate::gfx::zoom::vga_zoom_fb1_to_fb2(self, col, row, 6);
         // = seg000:3b55 jmp copy_game_area_to_screen_fb2_to_fb1 — copy the zoomed
         // game area from fb2 back to fb1.
         self.copy_game_area_fb2_to_fb1();

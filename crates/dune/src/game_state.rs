@@ -2,16 +2,14 @@ use crate::{
     CursorMode, CursorShapeId, DatFile, Equipment, Font, FontState, FrameBuffer, InputState,
     Location, MapPanelRef, Palette, PanelRecord, Rect, SpriteSheet, TalkingHead,
     attack::AttackState,
-    blit, cmd,
+    cmd,
     frame_slot::FrameSink,
     game_phase::{PHASE_15_FIRST_VISION, PHASE_20_THUFIR_FOUND, PHASE_C8_GAME_WON},
     game_ui::{self, MouseHandlers, NavPanel, ROOM_MOUSE_HANDLERS, UI_ELEMENTS_INIT, UiElement},
-    gfx::{self, palette_flush},
-    globe_renderer::GlobeRenderer,
+    gfx::{self, blit, globe_renderer::GlobeRenderer, map_renderer::MapRenderer, palette_flush},
     hnm::hnm_id_by_name,
     input::SharedInput,
     locations::LOCATIONS,
-    map_renderer::MapRenderer,
     menu_defs::{self, MenuRef},
     midi::{self, Midi},
     mouse::{MOUSE_START_X, MOUSE_START_Y, SharedCursor},
@@ -4069,7 +4067,145 @@ impl GameState {
 
         true
     }
+}
 
+// = seg001:27b6 per-scene zoom focal points (col, row), indexed by the talking
+// head id. These line up with the 17 talking-head characters (LETO=0, JESS=1,
+// …, CHAN=7, …). A (0, 0) entry means "no zoom for this character".
+#[rustfmt::skip]
+const ZOOM_FOCAL_POINTS: [(i16, i16); 17] = [
+    (0x4c, 0x2f), (0x4b, 0x49), (0x00, 0x00), (0x53, 0x25),
+    (0x4c, 0x3e), (0x53, 0x3e), (0x4d, 0x4e), (0x58, 0x3f), // [7] = Chani
+    (0x47, 0x41), (0x56, 0x1b), (0x69, 0x5b), (0x00, 0x00),
+    (0x4a, 0x29), (0x00, 0x00), (0x5e, 0x57), (0x00, 0x00),
+    (0x00, 0x00),
+];
+
+// = seg001:279a per-scale source-rect half-extents (col, row), indexed by the
+// scale selector 1..7. The source rect is centred on the focal point, so its
+// top-left corner is `focal − half_extent`. Each pair is (src_w/2, src_h/2) for
+// that scale's kernel. Index 0 is unused (0 terminates a sequence).
+#[rustfmt::skip]
+const ZOOM_HALF_EXTENTS: [(i16, i16); 8] = [
+    (  0,  0), // [0] unused
+    (140, 66), // [1] 8/7
+    (120, 57), // [2] 4/3
+    (106, 50), // [3] 3/2
+    ( 80, 38), // [4] 2×
+    ( 53, 25), // [5] 3×
+    ( 40, 19), // [6] 4×
+    ( 20,  9), // [7] 8×
+];
+
+// = the zoom step sequences. Positive = scale step; -1 = a long pause on the
+// current frame; the trailing 0 terminator is dropped here (the loop ends at
+// slice end). The intro uses ZOOM_SEQ_FULL because [227dh] is 1.
+const ZOOM_SEQ_FULL: [i8; 7] = [6, -1, 5, 4, 3, 2, 1]; // = seg001:2792
+const ZOOM_SEQ_RAND_A: [i8; 4] = [5, -1, 4, 3]; // = seg001:2789
+const ZOOM_SEQ_RAND_B: [i8; 3] = [4, -1, 3]; // = seg001:278e
+
+// = seg000:dbe6 data_0dbe6 (set to 6 at seg000:0790): the minimum number of timer ticks
+// each zoom step is held (the loc_0c8ed frame-rate gate). game_ticks() is the
+// port's PIT counter equivalent.
+const ZOOM_STEP_TICKS: u64 = 6;
+
+// = seg000:e387 wait_a_bit(0x12c) at seg000:c8aa — the pause held on a -1 sequence entry.
+const ZOOM_PAUSE_TICKS: u64 = 300;
+
+impl GameState {
+    // = seg000:c868 loc_0c868 / seg000:c8c1 loc_0c8c1 — the cinematic zoom-in
+    // reveal, driving the segvga vga_zoom_screen primitive (gfx/zoom.rs):
+    //
+    //   - `loc_0c8c1` (seg000:c8c1): one zoom step. The source rectangle is
+    //     centred on a per-scene focal point — top-left = focal − half-extent,
+    //     clamped ≥ 0 — then the step holds for `data_0dbe6` (= 6) timer ticks.
+    //
+    //   - `loc_0c868` (seg000:c868): the sequencer. The "scene id" is the talking
+    //     head id (`[22a6h]` = `_word_21756_talking_head_id`); it indexes the
+    //     focal-point table (seg001:27b6). A (0,0) focal point, an id ≥ 0x11, or a
+    //     voice already playing skips the zoom. The step sequence is a list of
+    //     signed bytes: a positive value is a scale step, −1 is a long pause on
+    //     the current (close-up) frame, 0 terminates. With `[227dh] != 0` (its
+    //     intro value, 1) the full sequence seg001:2792 is used; otherwise one of
+    //     two shorter sequences is chosen at random. After the sequence the scene
+    //     is redrawn 1:1 (present_game_area).
+    // = seg000:c8c1 loc_0c8c1 — render one zoom step. Centre the `scale`-sized
+    // source rect on `focal` (top-left = focal − half_extent, clamped ≥ 0),
+    // blit it to the screen, then hold for ZOOM_STEP_TICKS.
+    fn zoom_reveal_step(&mut self, focal: (i16, i16), scale: u8) {
+        let (hx, hy) = ZOOM_HALF_EXTENTS[scale as usize];
+        // = sub dx,[si+2796h] / sub bx,[si+2798h], each clamped ≥ 0.
+        let col = (focal.0 - hx).max(0);
+        let row = (focal.1 - hy).max(0);
+
+        gfx::zoom::vga_zoom_screen(self, col, row, scale);
+        self.send_frame_to_display();
+
+        // = seg000:c8ed loc_0c8ed: spin until at least data_0dbe6 (6) ticks have elapsed.
+        let start = self.game_ticks();
+        self.sleep_ticks(start, ZOOM_STEP_TICKS);
+    }
+
+    // = seg000:c868 loc_0c868 — the cinematic zoom-in reveal of the current
+    // talking-head scene. Runs synchronously (no frame tasks) before the head
+    // starts talking; the static composited frame in fb1 is the source.
+    pub fn scene_zoom_in_reveal(&mut self) {
+        // = call is_voc_pcm_playing; jnz ret — don't zoom over a playing voice.
+        let Some(scene) = self
+            .talking_head
+            .as_ref()
+            .filter(|h| !h.speaking)
+            .map(|h| h.talking_head_id as usize)
+        else {
+            return;
+        };
+
+        // = mov si,[22a6h]; cmp si,11h; jnb ret — scene id = talking head id.
+        if scene >= 0x11 {
+            return;
+        }
+
+        // = mov dx,[si+27b6h]; mov bx,[si+27b8h]; or ax; jz ret — (0,0) = none.
+        let focal = ZOOM_FOCAL_POINTS[scene];
+        if focal == (0, 0) {
+            return;
+        }
+
+        // = seg000:c889..c8a0 select the step sequence on suppress_sky_240_255
+        //   (data_0227d): non-zero (the intro, and the cutscene brackets that
+        //   inc/dec it) plays the full pull-back sequence seg001:2792; in the
+        //   game (seg000:029d zeroes it at start) the idle handler's call from
+        //   room_idle_npc_menu_zoom picks one of the two short close-ups at
+        //   random: 5,hold,4,3 or 4,hold,3.
+        let seq: &[i8] = if self.data_0227d != 0 {
+            &ZOOM_SEQ_FULL
+        } else if self.rand_masked(1) == 0 {
+            &ZOOM_SEQ_RAND_A
+        } else {
+            &ZOOM_SEQ_RAND_B
+        };
+
+        // = seg000:c8a3 loc_0c8a3: lodsb; or al,al; jz end; jns step; (negative) pause.
+        for &step in seq {
+            if step == 0 {
+                break;
+            } else if step < 0 {
+                // = mov ax,12ch; call wait_a_bit — hold the close-up.
+                let start = self.game_ticks();
+                self.send_frame_to_display();
+                self.sleep_ticks(start, ZOOM_PAUSE_TICKS);
+            } else {
+                self.zoom_reveal_step(focal, step as u8);
+            }
+        }
+
+        // = seg000:c8bd loc_0c8bd: call present_game_area — final 1:1 reveal of the whole scene.
+        self.gfx_copy_whole_framebuf_to_screen();
+        self.send_frame_to_display();
+    }
+}
+
+impl GameState {
     // = seg000:c8fb loc_0c8fb — foreground-play an HNM clip (DOS ax = the
     // video id) to completion in the game area: open it into fb1, reveal the
     // first frame through the `bp` present callback, then pump frames,
@@ -4307,14 +4443,6 @@ impl GameState {
         fb.pixels_mut()[start..end].fill(0);
     }
 
-    // = seg000:c4cd gfx_copy_whole_framebuf_to_screen. Plain memcpy from
-    // fb1 to the screen buffer — does NOT apply the y-offset (that is
-    // applied to incoming blits inside the gfx module). Delegates to the
-    // gfx-layer implementation.
-    pub fn gfx_copy_whole_framebuf_to_screen(&mut self) {
-        gfx::gfx_copy_whole_framebuf_to_screen(self);
-    }
-
     // = seg000:c0f4 update_screen_palette — flush the live `palette` into the
     // displayed `screen_pal` (DOS uploads it to the VGA DAC). DOS skips the
     // flush while the front buffer is redirected to fb1 (seg000:c0f7 cmp
@@ -4478,6 +4606,23 @@ impl GameState {
                 x += self.font.draw_glyph(fb, x, y, c, TextSize::Small, color);
             }
         }
+    }
+
+    // = seg000:c4cd gfx_copy_whole_framebuf_to_screen. Plain memcpy from fb1
+    // to the front buffer (`screen_buffer`) — does NOT apply `fb_base_ofs`
+    // (matching the DOS `vga_copy_screen_2` behaviour). The y-offset is applied
+    // to incoming draws, not to this outgoing copy.
+    //
+    // When `screen_buffer` is redirected to fb1 (inside
+    // gfx_call_bp_with_front_buffer_as_screen during a stage init), the copy is
+    // fb1 → fb1, i.e. a no-op — the visible screen is left untouched until the
+    // transition reveals fb1.
+    pub(crate) fn gfx_copy_whole_framebuf_to_screen(&mut self) {
+        // Front buffer redirected to fb1: the copy would be fb1 → fb1.
+        if self.front_buffer_is_fb1() {
+            return;
+        }
+        self.screen.copy_from(&self.framebuffer);
     }
 
     // = seg000:c4dd present_game_area — present the game-area rect (0,0)-
@@ -4646,193 +4791,6 @@ impl GameState {
         for y in y0..=y1 {
             plot(x0, y, &mut left);
             plot(x1, y, &mut right);
-        }
-    }
-
-    // = seg000:c0d5 blit_fb1_to_screen_effect — present fb1 to the visible screen
-    // through the segvga vga_effect_dispatch vtable (effect = `al`). The full
-    // dispatcher (vga_effect_dispatch, segvga:3200) reduces `effect` mod 0x1a and
-    // jumps through blit_mode_dispatch_table (segvga:31e6) to one of 13 effects;
-    // only the two the PALACE PLAN drives are wired here (every other effect —
-    // transition_tick 0x0c, panel_anim 0x18, … — is invoked from its own ported
-    // site). DOS scrolls live VGA memory, so the motion is visible as it runs;
-    // the port renders each outer pass into `screen`, presents it, and paces one
-    // PIT tick per pass (DOS has no explicit timer here — the scroll is paced
-    // implicitly by CPU speed — so the 1-tick cadence is a port-side stand-in
-    // that makes the reveal perceptible without pegging a core).
-    pub(crate) fn blit_fb1_to_screen_effect(&mut self, effect: u8, rect: Rect) {
-        match effect {
-            // = segvga:33ca blit_mode_dispatch_table[8] (segvga:31e6)
-            //   blit_scroll_rect_down: the open reveal. The source origin steps
-            //   from y2-2 up to y1 (si -= 0x280 per pass), each pass redrawing a
-            //   taller bottom-anchored window of fb1 at the rect top.
-            0x10 => {
-                let mut src_row = rect.y1 - 2;
-                loop {
-                    let start = self.game_ticks();
-                    gfx::scroll_rect_down_pass(
-                        &mut self.screen,
-                        &self.framebuffer,
-                        self.y_offset,
-                        rect,
-                        src_row,
-                    );
-                    self.send_frame_to_display();
-                    self.sleep_ticks(start, 1);
-
-                    // = jnb loc_033ef: the outer loop ends once the source origin
-                    //   reaches the rect top (si -= 0x280 would borrow).
-                    if src_row <= rect.y0 {
-                        break;
-                    }
-                    src_row -= 2;
-                }
-
-                // = jmp vga_copy_rect: the final clean full-rect copy (identical
-                //   to the last pass, mirroring the DOS tail jump).
-                let yoff = self.y_offset as i16;
-                let r = Rect {
-                    x0: rect.x0,
-                    y0: rect.y0 + yoff,
-                    x1: rect.x1,
-                    y1: rect.y1 + yoff,
-                };
-                gfx::vga_copy_rect(&mut self.screen, &self.framebuffer, r);
-                self.send_frame_to_display();
-            }
-
-            // = segvga:3429 blit_mode_dispatch_table[9] (segvga:31e6)
-            //   blit_scroll_rect_up: the close reveal. The block height bx steps
-            //   down by six per pass (110, 104, …, 2, then a final 0 pass);
-            //   blit_scroll_rect_up has no tail vga_copy_rect (its fill blocks
-            //   lay down every row of fb1).
-            0x12 => {
-                let mut bx = (rect.y1 - rect.y0) - 6;
-                loop {
-                    let start = self.game_ticks();
-                    gfx::scroll_rect_up_pass(
-                        &mut self.screen,
-                        &self.framebuffer,
-                        self.y_offset,
-                        rect,
-                        bx,
-                    );
-                    self.send_frame_to_display();
-                    self.sleep_ticks(start, 1);
-
-                    // = bx -= 6; jnb loc_03445 / cmp bx,-6; mov bx,0; jnz — a
-                    //   borrow that lands on -6 ends the loop; any other borrow
-                    //   runs one last pass at bx = 0.
-                    let next = bx - 6;
-                    if next >= 0 {
-                        bx = next;
-                    } else if next == -6 {
-                        break;
-                    } else {
-                        bx = 0;
-                    }
-                }
-            }
-
-            // = segvga:3581 blit_mode_dispatch_table[0] (segvga:31e6)
-            //   blit_zoom_shimmer: blit the rect's interior from the clean
-            //   fb1 source (ds, per the c0d6/c0da buffer setup) into the
-            //   screen (es) at 2x scale around the rect top-left, cycling
-            //   the 2x2 sub-pixel source offsets (zoom_tile_offsets,
-            //   segvga:2fb7), until the caller's tick budget runs out (cx —
-            //   the globe zoom box, globe_zoom_box_shimmer_step, passes 10).
-            //   Every pass rewrites the whole interior from fb1, so anything
-            //   drawn over the screen inside the rect (the previous zoom-box
-            //   outline) is erased each pass.
-            0x00 => {
-                // = segvga:358b..359e half width/height; nothing on a flat
-                //   rect.
-                let half_w = ((rect.x1 - rect.x0) / 2) as usize;
-                let half_h = ((rect.y1 - rect.y0) / 2) as usize;
-                if half_w == 0 || half_h == 0 {
-                    return;
-                }
-                let yoff = self.y_offset as usize;
-                let w = self.screen.w() as usize;
-                let origin = (rect.y0 as usize + yoff) * w + rect.x0 as usize;
-
-                // = segvga:35a0 the entry tick, segvga:35bb..35c4 the loop
-                //   until cx (10) ticks elapse.
-                let start = self.game_ticks();
-                let mut jitter = [0usize, 321, 1, 320].iter().copied().cycle();
-                loop {
-                    // = segvga:35c8 fb_blit_2x_scaled — lodsb from ds (fb1)
-                    //   every other byte/row, stosw doubled into es (screen).
-                    let off = jitter.next().unwrap();
-                    let src = self.framebuffer.pixels();
-                    let dst = self.screen.pixels_mut();
-                    for j in 0..half_h {
-                        let di = origin + 2 * j * w;
-                        let si = di + off;
-                        for i in 0..half_w {
-                            let c = src[si + 2 * i];
-                            dst[di + 2 * i] = c;
-                            dst[di + 2 * i + 1] = c;
-                            dst[di + w + 2 * i] = c;
-                            dst[di + w + 2 * i + 1] = c;
-                        }
-                    }
-                    self.send_frame_to_display();
-                    // DOS repeats at CPU speed; pace one PIT tick per pass so
-                    // the shimmer is perceptible without pegging a core.
-                    self.sleep_ticks(self.game_ticks(), 1);
-                    if self.game_ticks() - start >= 10 {
-                        break;
-                    }
-                }
-            }
-
-            // = segvga:3500 blit_mode_dispatch_table[5] (segvga:31e6)
-            //   blit_water_ripple — one pass per call (the vision-dream
-            //   shimmer task fires it every 6 ticks): the rect's rows copy
-            //   from fb1 with a per-row horizontal shift from the wave table
-            //   (segvga:3487), the wave origin advancing one row per call
-            //   (data_segvga_034fc). DOS smears the rows in place on the VGA
-            //   surface and cycles the water palette (palette_cycle_water);
-            //   the port simplifies to a clean shifted copy from fb1, which
-            //   reads the same rolling-wave distortion without accumulating
-            //   smear.
-            0x0a => {
-                // = segvga:3487 wave_displacement_tbl — a ±5 px sine-like
-                //   ramp, 116 rows per period.
-                #[rustfmt::skip]
-                const WAVE: [i16; 116] = [
-                    1, 1, 1, 1, 1, 1, 1, 1, 1, 2, 2, 2, 2, 2, 2, 2,
-                    3, 3, 3, 3, 3, 3, 4, 4, 4, 4, 4, 4, 5, 5, 5, 5,
-                    5, 5, 5, 5, 5, 4, 4, 4, 4, 4, 4, 4, 3, 3, 3, 3,
-                    3, 3, 2, 2, 2, 2, 2, 1, 1, 1, 1, 0, 0, 0, -1, -1,
-                    -1, -2, -2, -2, -2, -3, -3, -3, -3, -3, -4, -4, -4, -4, -4, -4,
-                    -5, -5, -5, -5, -5, -5, -5, -5, -5, -4, -4, -4, -4, -4, -4, -3,
-                    -3, -3, -3, -3, -3, -2, -2, -2, -2, -2, -2, -2, -1, -1, -1, -1,
-                    -1, -1, -1, -1,
-                ];
-                let phase = self.vision_shimmer_phase as usize;
-                self.vision_shimmer_phase = self.vision_shimmer_phase.wrapping_add(1);
-                let yoff = self.y_offset as i16;
-                let w = self.screen.w() as i16;
-                let src = self.framebuffer.pixels();
-                let dst = self.screen.pixels_mut();
-                for row in rect.y0..rect.y1 {
-                    let shift = WAVE[(row as usize + phase) % WAVE.len()];
-                    let y = (row + yoff) as usize;
-                    for x in rect.x0..rect.x1 {
-                        let sx = (x + shift).clamp(0, w - 1) as usize;
-                        dst[y * w as usize + x as usize] = src[y * w as usize + sx];
-                    }
-                }
-                self.send_frame_to_display();
-            }
-
-            // = the remaining vga_effect_dispatch effects are unported; this
-            //   dispatcher only serves the PALACE PLAN and GLOBE effects.
-            other => {
-                eprintln!("blit_fb1_to_screen_effect: unhandled effect 0x{other:02x}");
-            }
         }
     }
 

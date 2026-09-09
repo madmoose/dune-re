@@ -5,7 +5,7 @@ use std::{
 
 use bytes_ext::ReadBytesExt;
 
-use crate::{FrameBuffer, Palette, blit, hnm::frame_header::FrameHeader, hsq};
+use crate::{FrameBuffer, Palette, gfx::blit, hnm::frame_header::FrameHeader, hsq};
 
 /// HNM video decoder
 pub struct HnmDecoder<'a> {

@@ -8,7 +8,7 @@ use std::io::{Cursor, Seek};
 use bytes_ext::ReadBytesExt;
 pub use hnm_decoder::HnmDecoder;
 
-use crate::{GameState, blit, hnm::frame_header::FrameHeader, hsq};
+use crate::{GameState, gfx::blit, hnm::frame_header::FrameHeader, hsq};
 
 pub(crate) const DFL2_HNM: usize = 1;
 pub(crate) const MNT1_HNM: usize = 2;

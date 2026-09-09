@@ -11,7 +11,8 @@
 //! documented stubs filled in by later stages.
 
 use crate::{
-    FbId, GameState, Rect, TextSize, blit, gfx,
+    FbId, GameState, Rect, TextSize,
+    gfx::{self, blit},
     settings_ui::{
         SETTINGS_RECORD_BALANCE_MUSIC, SETTINGS_RECORD_BALANCE_MUSIC_DURING_VOICES,
         SETTINGS_RECORD_VOLUME_MUSIC, SETTINGS_RECORD_VOLUME_MUSIC_DURING_VOICES,

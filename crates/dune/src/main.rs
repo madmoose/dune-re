@@ -4,7 +4,6 @@
 
 mod attack;
 mod avi;
-mod blit;
 mod book_screen;
 mod cmd;
 mod color;
@@ -21,7 +20,6 @@ mod game_phase;
 mod game_state;
 mod game_ui;
 mod gfx;
-mod globe_renderer;
 mod globe_screen;
 mod herad;
 mod hnm;
@@ -34,7 +32,6 @@ mod language;
 mod lipsync;
 mod locations;
 mod map;
-mod map_renderer;
 mod menu_defs;
 mod messages;
 mod midi;
@@ -69,7 +66,6 @@ mod troop_map_screen;
 mod troops;
 mod ui_hud_head;
 mod voc;
-mod zoom;
 
 use std::{
     path::PathBuf,

@@ -665,8 +665,8 @@ impl GameState {
                 let first = head.sheet.resource_count().wrapping_sub(3);
                 let x = GAME_OVER_FACE_PANEL.rect.x0 + 1;
                 let y = GAME_OVER_FACE_PANEL.rect.y0 + 1;
-                let _ = gfx::draw_sprite_on_framebuffer(self, &head.sheet, first, x, y);
-                let _ = gfx::draw_sprite_on_framebuffer(self, &head.sheet, first + 1, x, y);
+                let _ = self.draw_sprite_on_framebuffer(&head.sheet, first, x, y);
+                let _ = self.draw_sprite_on_framebuffer(&head.sheet, first + 1, x, y);
                 self.talking_head = Some(head);
             }
             // = seg000:0e1b call [gfx_vtable_vga_palette_flush].
@@ -2981,7 +2981,7 @@ impl GameState {
             // = seg000:48dd/48e0 bp = gfx_copy_whole_framebuf_to_screen; call
             // loc_0c8fb — play the fortress approach FORT.HNM (ax is still the
             // SAL video id, 9) to completion in the game area.
-            self.play_hnm_to_completion(9, gfx::gfx_copy_whole_framebuf_to_screen);
+            self.play_hnm_to_completion(9, GameState::gfx_copy_whole_framebuf_to_screen);
             // = seg000:48e3 jmp loc_048d1 — the fade-in force, as above.
             self.data_046e0 = self.data_046e0.wrapping_sub(1);
         } else {
