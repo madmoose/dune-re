@@ -910,9 +910,16 @@ impl GameState {
         self.persons_in_room = 0;
         self.draw_room_for_scene(0x200a, 0x180);
         // = seg000:099b xor al,al (LETO); seg000:099d loc_0099d xor dx,dx.
-        // = seg000:09d0 data_0478c = 1eh (loc_009c7) — the intro head's lively idle budget, 4 × 0x1e frames.
-        self.subtitle_word_count = 0x1e;
-        self.setup_talking_head(0, 0);
+        self.intro_setup_talking_head(0, 0);
+    }
+
+    // = seg000:4b16 hnm_blit_frame_to_screen — blit the just-decoded HNM
+    // frame to the visible screen: when the screen and fb1 segments differ
+    // (not decoding straight to the screen) copy fb1 (152 rows) to screen row
+    // 24 (vga_copy_partial, es = screen_seg + 0x1e0). The port decodes into
+    // fb1 rows 24..176 and whole-copies, landing on the same screen rows.
+    fn hnm_blit_frame_to_screen(&mut self) {
+        self.gfx_copy_whole_framebuf_to_screen();
     }
 
     // = seg000:0798 intro_talking_head_play — load + play Duke Leto's voice
@@ -940,9 +947,7 @@ impl GameState {
         self.persons_in_room = 0;
         self.draw_room_for_scene(0x2004, 0x180);
         // = seg000:0777 mov al,1 (JESS); seg000:0779 jmp loc_0099d.
-        // = seg000:09d0 data_0478c = 1eh (loc_009c7) — the intro head's lively idle budget, 4 × 0x1e frames.
-        self.subtitle_word_count = 0x1e;
-        self.setup_talking_head(1, 0);
+        self.intro_setup_talking_head(1, 0);
     }
 
     // = seg000:0798 intro_talking_head_play — play Lady Jessica's voice and
@@ -978,7 +983,7 @@ impl GameState {
         // copy_active_framebuffer_to_framebuffer_2 that saves the red backdrop
         // into fb2. (DOS's [478ch]=1 override only shortens the idle countdown,
         // which no longer freezes the head — see tick_talking_head_idle.)
-        // = seg000:09d0 data_0478c = 1eh (loc_009c7), then seg000:096a data_0478c = 1 — Paul's lively idle budget is 4 frames.
+        // = seg000:09d0 data_0478c = 1eh (intro_setup_talking_head), then seg000:096a data_0478c = 1 — Paul's lively idle budget is 4 frames.
         self.subtitle_word_count = 1;
         self.setup_talking_head(0x2d, 0);
     }
@@ -1054,9 +1059,7 @@ impl GameState {
     // transition = 0xffff, so the head must reach the screen via the play
     // step, not a fade — see stage_21_play.)
     fn stage_21_init(&mut self) {
-        // = seg000:09d0 data_0478c = 1eh (loc_009c7) — the intro head's lively idle budget, 4 × 0x1e frames.
-        self.subtitle_word_count = 0x1e;
-        self.setup_talking_head(7, 0);
+        self.intro_setup_talking_head(7, 0);
     }
 
     // = seg000:078d loc_0078d (stage 21 play). DOS does, before falling into
@@ -1107,9 +1110,7 @@ impl GameState {
             let _ = s.draw_sprite_on_framebuffer(sheet, 1, 0x54, 0x0b);
         });
         // = seg000:07be mov al,6 (KYNE); loc_0099d xor dx,dx.
-        // = seg000:09d0 data_0478c = 1eh (loc_009c7) — the intro head's lively idle budget, 4 × 0x1e frames.
-        self.subtitle_word_count = 0x1e;
-        self.setup_talking_head(6, 0);
+        self.intro_setup_talking_head(6, 0);
     }
 
     // = seg000:0798 intro_talking_head_play — Kynes' voice + lip-sync.
@@ -1136,9 +1137,7 @@ impl GameState {
         // = seg000:07d5 mov word ptr [12h], 0 — reset after the room is drawn.
         self.persons_in_room = 0;
         // = seg000:07db mov al,5 (STIL).
-        // = seg000:09d0 data_0478c = 1eh (loc_009c7) — the intro head's lively idle budget, 4 × 0x1e frames.
-        self.subtitle_word_count = 0x1e;
-        self.setup_talking_head(5, 0);
+        self.intro_setup_talking_head(5, 0);
     }
 
     // = seg000:0798 intro_talking_head_play — Stilgar's voice + lip-sync.
@@ -1178,7 +1177,7 @@ impl GameState {
     //   seg000:089f copy_game_area_rect_to_clip_rect     ; clip the next list
     //   seg000:08a2 draw_sprite_list(155ch)              ; the two guards
     //   seg000:08a8 copy_active_framebuffer_to_framebuffer_2
-    //   seg000:08ab al=0ah (FEYD); dx=3ah; loc_009c7 + loc_0978e
+    //   seg000:08ab al=0ah (FEYD); dx=3ah; intro_setup_talking_head + loc_0978e
     fn stage_25_init(&mut self) {
         // = seg000:0886 open_spritesheet(30h) — BACK.HSQ + palette.
         self.open_sprite_bank(BACK);
@@ -1207,10 +1206,8 @@ impl GameState {
             s.draw_sprite_list_clipped_to_game_area(&GUARDS, sheet);
         });
 
-        // = seg000:08ab mov al,0ah (FEYD); mov dx,3ah; loc_009c7.
-        // = seg000:09d0 data_0478c = 1eh (loc_009c7) — the intro head's lively idle budget, 4 × 0x1e frames.
-        self.subtitle_word_count = 0x1e;
-        self.setup_talking_head(0x0a, 0x3a);
+        // = seg000:08ab mov al,0ah (FEYD); mov dx,3ah; intro_setup_talking_head.
+        self.intro_setup_talking_head(0x0a, 0x3a);
     }
 
     // = seg000:0798 intro_talking_head_play — Feyd's voice + lip-sync.
@@ -1224,7 +1221,7 @@ impl GameState {
     //   seg000:09ad open_spritesheet(30h)      ; BACK.HSQ + palette
     //   seg000:09b3 draw_icons_list_at_si(153ah)     ; mirrored side panels
     //   seg000:09b9 copy_active_framebuffer_to_framebuffer_2
-    //   seg000:09bc al=9 (BARO); dx=52h; loc_009c7 + loc_0978e
+    //   seg000:09bc al=9 (BARO); dx=52h; intro_setup_talking_head + loc_0978e
     pub(crate) fn stage_26_init(&mut self) {
         // = seg000:09ad open_spritesheet(30h) — BACK.HSQ + palette.
         self.open_sprite_bank(BACK);
@@ -1237,9 +1234,7 @@ impl GameState {
         });
 
         // = seg000:09bc mov al,9 (BARO); mov dx,52h.
-        // = seg000:09d0 data_0478c = 1eh (loc_009c7) — the intro head's lively idle budget, 4 × 0x1e frames.
-        self.subtitle_word_count = 0x1e;
-        self.setup_talking_head(9, 0x52);
+        self.intro_setup_talking_head(9, 0x52);
     }
 
     // = seg000:0798 intro_talking_head_play — the Baron's voice + lip-sync.
@@ -1316,32 +1311,19 @@ impl GameState {
         self.sky_fade_active = true;
         // = seg000:06e2 loc_038a2 (bl=0x12): load the fade *target*. It opens
         // open_sky_or_skydn_palette resource 0x28 + [22e3h] sub-palette 0x12 and
-        // copies its colours into palette_to_transition_from (loc_039b9). It does
-        // NOT touch the live palette. [46d7h]=0x30 set here is overwritten by
-        // play's 0x3f.
+        // copies its colours into palette_to_transition_from
+        // (sky_palette_write_fade_target). It does NOT touch the live palette.
+        // [46d7h]=0x30 set here is overwritten by play's 0x3f.
         //
         // play_intro's remove_all_frame_tasks left [22e3h]=1, so this is the
-        // SKYDN.HSQ (0x29, dusk) branch: loc_039b9 writes 0x1c5 bytes (151
-        // colours) at byte offset 0xdb -> entries 73..223, sourced from the
-        // sub-palette's first 151 colours. (With [22e3h]=0 it would be SKY.HSQ
-        // and 0xf0 bytes / 80 colours at 128..207.) Using SKY.HSQ/128..207 here
-        // is wrong: SKY.HSQ sub 0x12 carries green entries at colours 64..66,
-        // which the dune pixels (palette 192..194) then fade to as stray green
-        // specks.
-        let (resource, dest_start, count) = if self.sky_skydn_selector != 0 {
-            ("SKYDN.HSQ", 73, 151)
-        } else {
-            ("SKY.HSQ", 128, 80)
-        };
-        self.load_sky_palette_to_fade_target(resource, 0x12, 0, count, dest_start);
-        // = seg000:39d2 add dx,cx + loc_039e5: when [227dh]==0, loc_039b9 also
-        // writes the next 16 colours into entries 240..255. The intro keeps
-        // [227dh]=1, so this is normally skipped; it is modelled for the
-        // [227dh]=0 (in-game) case and is invisible in the flyover (no pixels
-        // there).
-        if self.data_0227d == 0 {
-            self.load_sky_palette_to_fade_target(resource, 0x12, count, 16, 240);
-        }
+        // SKYDN.HSQ (0x29, dusk) branch: 151 colours at entries 73..223,
+        // sourced from the sub-palette's first 151 colours. (With [22e3h]=0 it
+        // would be SKY.HSQ and 80 colours at 128..207.) Using SKY.HSQ/128..207
+        // here is wrong: SKY.HSQ sub 0x12 carries green entries at colours
+        // 64..66, which the dune pixels (palette 192..194) then fade to as
+        // stray green specks. The 240..255 span is skipped while [227dh]=1.
+        let resource = self.open_sky_or_skydn_palette();
+        self.sky_palette_write_fade_target(resource, 0x12);
         // = seg000:06f3 load_game_area_hnm: add [0dbdah],1e0h (fb base += 24
         // rows = the game area) + hnm_load_first_frame(HNM 0x12 = MTG3.HNM). The first frame sets the live
         // palette; the fade then steps its sky range toward the SKY target.
@@ -1532,12 +1514,8 @@ impl GameState {
             // = seg000:072c hnm_do_frame_and_check_if_frame_advanced — decode the
             // next frame.
             self.spin_until_hnm_advances();
-            // = seg000:0724 call hnm_blit_frame_to_screen (loc_04b16): copy the
-            // decoded fb1 frame to the visible screen. DOS copies fb1 row 0 ->
-            // screen row 24 (vga_copy_partial, es = screen_seg + 0x1e0); the port
-            // decodes into fb1 rows 24..176 and whole-copies, landing on the same
-            // screen rows.
-            self.gfx_copy_whole_framebuf_to_screen();
+            // = seg000:0724 call hnm_blit_frame_to_screen.
+            self.hnm_blit_frame_to_screen();
             self.send_frame_to_display();
             // = seg000:0727 call hnm_end_voc_loop_check_complete (loc_04937): end
             // the SN8.VOC loop at frame 0x0b, then break when the clip is done.

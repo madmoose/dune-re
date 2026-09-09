@@ -28,8 +28,9 @@ pub struct DatEntry {
 type Error = std::io::Error;
 
 impl DatFile {
-    // = seg000:e675 open_dune_dat — open DUNE.DAT and read its table of
-    // contents (read_dune_dat_toc): entry count, then per entry a 16-byte name,
+    // = seg000:e675 open_dune_dat / seg000:e741 read_dune_dat_toc — open
+    // DUNE.DAT and read its table of contents (DOS reads the whole 64K TOC
+    // block after seeking to 0): entry count, then per entry a 16-byte name,
     // u32 size, u32 offset and a flag byte. DOS also folds the entries into
     // its fixed resource index table; the port resolves entries by name.
     pub fn open<P: AsRef<Path>>(path: P) -> Result<DatFile, Error> {

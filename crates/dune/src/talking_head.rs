@@ -688,6 +688,17 @@ impl GameState {
         }
     }
 
+    // = seg000:09c7 intro_setup_talking_head — the intro/ending head raise:
+    // current_lip_sync_resource_id = al, setup_lip_sync_data_from_sprite_sheet,
+    // data_0478c = 1eh (the lively idle budget, 4 × 0x1e frames), then shift
+    // the head rect right by dx when x0 < dx, clamping x1 to 320 (the port
+    // folds the shift into open_talking_head_resource).
+    pub(crate) fn intro_setup_talking_head(&mut self, lip_sync_resource_id: u8, dx: i16) {
+        // = seg000:09d0 mov byte ptr [data_0478c],1eh.
+        self.subtitle_word_count = 0x1e;
+        self.setup_talking_head(lip_sync_resource_id, dx);
+    }
+
     // = the head-raise call chain seg000:93b6..93cc that common_code_for_ui_
     // dialogue_related_functions runs inline (and the other head-raise sites —
     // the intro, the fly-over cabin — repeat): 93b6 setup_lip_sync_data_from_
@@ -844,7 +855,8 @@ impl GameState {
             .expect("portrait sheet has no lip-sync resource");
         let lipsync = Lipsync::from_bytes(lipsync_data);
 
-        // = seg000:09c7 loc_009c7: shift the rect right by `dx`, clamping x1 ≤ 320.
+        // = seg000:09d5..09e9 intro_setup_talking_head: shift the rect right
+        //   by `dx` when x0 < dx, clamping x1 ≤ 320.
         let (mut x0, y0, mut x1, y1) = lipsync.rect;
         if x0 < dx {
             x0 += dx;
@@ -1249,7 +1261,7 @@ impl GameState {
             .start_playback(&self.audio_current_sfx_data, 0);
     }
 
-    // = seg000:a7c2 lip_sync_frame_task (+ advance_lipsync).
+    // = seg000:a7c2 lip_sync_frame_task / seg000:a814 advance_lipsync.
     // Step the mouth value from the .voc stream in lock-step with PCM playback:
     // mouth index = samples_played / SAMPLES_PER_LIP_FRAME (a fixed cadence),
     // holding the last value once the stream ends. When a new value arrives it
@@ -1884,7 +1896,8 @@ fn draw_head_image_group_in_box(
     }
 }
 
-// = seg000:9c54 head_diff_frames — walk the new frame's image list and the
+// = seg000:9c2d head_diff_frames_seed / seg000:9c54 head_diff_frames — seed
+// the box inverted, then walk the new frame's image list and the
 // previous one looking for an exact id+x+y match in the other; an unmatched
 // image is "changed" and expands the box (head_image_bounds). Seeded
 // inverted — x0,y0 at the max corner, x1,y1 at the min — so an x0 still at

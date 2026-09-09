@@ -276,7 +276,11 @@ impl GameState {
         //   cancel (seg001:212e) before the push, like DOS building the buffer
         //   it is about to insert.
         self.menu_cancel.records = records;
-        self.menu_stack_push(MenuRef::MenuCancel, Some(GameState::map_screen_cleanup));
+        self.menu_stack_push(
+            MenuRef::MenuCancel,
+            Some(GameState::map_screen_cleanup),
+            0xff,
+        );
         self.play_pending_panel_fold();
         self.highlight_hovered_text_action_item();
         // = seg000:4311 ax=mouse_handlers_01ac8; call set_active_mouse_handlers.
@@ -2531,8 +2535,8 @@ impl GameState {
     // (from hnm_decode_video_frame, seg000:ccee): restore the minimap rect
     // from the back buffer into fb1, then push fb1 to the visible screen.
     pub(crate) fn hnm_present_flight_frame(&mut self) {
-        // = seg000:4afd cmp [suppress_sky_240_255],0; jnz — suppressed skips
-        //   the minimap restore (hnm_blit_frame_to_screen).
+        // = seg000:4afd cmp [suppress_sky_240_255],0; jnz
+        //   hnm_blit_frame_to_screen — suppressed skips the minimap restore.
         if self.data_0227d == 0 {
             // = seg000:4b04 call travel_restore_minimap_rect.
             self.travel_restore_minimap_rect();

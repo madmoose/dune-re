@@ -731,12 +731,7 @@ impl GameState {
             None
         } else {
             let li = location_index_from_ptr(t.offset_of_location);
-            let Some(m) = self
-                .visible_location_markers
-                .iter()
-                .find(|m| m.location_index as usize == li)
-                .copied()
-            else {
+            let Some(m) = self.location_find_visible_marker(li) else {
                 return;
             };
             Some(m)

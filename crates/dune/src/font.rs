@@ -233,22 +233,10 @@ impl GameState {
     // the glyph width. (DOS picks tall/small via the _off_219C8 pointer; the
     // port reads font_state.size.)
     pub fn font_draw_glyph(&mut self, c: u8) {
-        // = seg000:d0ff font_draw_glyph_func_book — only ever the first glyph
-        // after the book font select (it re-selects the tall font at entry):
-        // a char with a drop cap draws BOOK.HSQ sprite 5..13 raised 19 rows
-        // above the pen and advances by the table width; any other char falls
-        // through to the plain tall glyph (= seg000:d105 jb).
-        if std::mem::take(&mut self.font_state.book_drop_cap)
-            && let Some((sprite, width)) = drop_cap(c)
-        {
-            // = seg000:d112..d11a keep the pen, advance x by the table width.
-            let (x, y) = (self.font_state.x, self.font_state.y);
-            self.font_state.x += width as u16;
-            // = seg000:d120..d125 the sprite row, clamped at the screen top.
-            let sy = (y as i16 - 0x13).max(0);
-            // = seg000:d10c open BOOK.HSQ; d127 draw_sprite_clobbering_bx_dx.
-            self.open_sprite_bank(crate::sprite_bank::BOOK);
-            self.draw_active_bank_sprite(sprite, x as i16, sy);
+        // = _off_219C8 pointing at font_draw_glyph_func_book after the book
+        // font select.
+        if self.font_state.book_drop_cap {
+            self.font_draw_glyph_func_book(c);
             return;
         }
         let st = self.font_state;
@@ -261,6 +249,29 @@ impl GameState {
         };
         let w = self.font.draw_glyph(fb, st.x, st.y, c, st.size, st.color);
         self.font_state.x += w;
+    }
+
+    // = seg000:d0ff font_draw_glyph_func_book — the book glyph func, only
+    // ever in effect for the first glyph after the book font select (it
+    // re-selects the tall font at entry): a char with a drop cap draws
+    // BOOK.HSQ sprite 5..13 raised 19 rows above the pen and advances x by
+    // the table width; any other char defers to font_draw_glyph_func_tall.
+    fn font_draw_glyph_func_book(&mut self, c: u8) {
+        // = seg000:d0ff call font_select_tall_font.
+        self.font_select_tall_font();
+        // = seg000:d102/d105 call loc_0d0e3; jb font_draw_glyph_func_tall.
+        let Some((sprite, width)) = drop_cap(c) else {
+            self.font_draw_glyph(c);
+            return;
+        };
+        // = seg000:d112..d11a keep the pen, advance x by the table width.
+        let (x, y) = (self.font_state.x, self.font_state.y);
+        self.font_state.x += width as u16;
+        // = seg000:d120..d125 the sprite row, clamped at the screen top.
+        let sy = (y as i16 - 0x13).max(0);
+        // = seg000:d10c open BOOK.HSQ; d127 draw_sprite_clobbering_bx_dx.
+        self.open_sprite_bank(crate::sprite_bank::BOOK);
+        self.draw_active_bank_sprite(sprite, x as i16, sy);
     }
 
     // = seg000:d1bb font_draw_string — draw a glyph stream until the 0xff

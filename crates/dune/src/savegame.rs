@@ -900,7 +900,7 @@ impl GameState {
     pub(crate) fn suspend_clock_and_push_menu(&mut self, menu: MenuRef) {
         self.suspend_game_clock();
         self.screen_overlay_request_transition();
-        self.menu_stack_push(menu, Some(GameState::resume_game_clock));
+        self.menu_stack_push(menu, Some(GameState::resume_game_clock), 0xff);
     }
 
     // = seg000:b389 create_save_cl — write slot `slot`'s save file: the u16

@@ -1485,7 +1485,7 @@ impl GameState {
         // = seg000:a252..a258 bp = menu_argue_accept_refuse; bx = nullsub;
         //   call loc_0d323.
         self.screen_overlay_request_transition();
-        self.menu_stack_push(MenuRef::MenuArgueAcceptRefuse, None);
+        self.menu_stack_push(MenuRef::MenuArgueAcceptRefuse, None, 0xff);
         self.play_pending_panel_fold();
         let _ = self.highlight_hovered_text_action_item();
         // = seg000:a25b falls into callback_event_dialogue_line_0a_hold_up_sign.

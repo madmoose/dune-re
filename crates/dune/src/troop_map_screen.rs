@@ -409,11 +409,8 @@ impl GameState {
         self.map_overlay_swap_position();
         let map2 = self.map2.clone();
         let (rows, width, height, top_lat) = self.map_fill_window_rows_from(Some(&map2));
-        // = seg000:549e call loc_058e4 — the landscape render through the
-        //   per-location colour table.
-        let xlat = self.build_spice_density_xlat();
-        let r = self.map_view_rect;
-        crate::gfx::vga_draw_landscape(self, &rows, width, height, r.x0, r.y0, top_lat, &xlat);
+        // = seg000:549e call map_overlay_draw_landscape.
+        self.map_overlay_draw_landscape(&rows, width, height, top_lat);
         // = seg000:54a1 call load_icones_sprites — the windowed-view marker
         //   sprites (base 0x3a) live in ICONES; the legend below reopens
         //   ONMAP for its ramp bars.
@@ -1112,6 +1109,7 @@ impl GameState {
         self.menu_stack_push(
             MenuRef::MenuMoveProspectors,
             Some(GameState::move_troop_cleanup),
+            0xff,
         );
         self.play_pending_panel_fold();
     }
@@ -1259,6 +1257,7 @@ impl GameState {
         self.menu_stack_push(
             MenuRef::MenuMoveProspectors,
             Some(GameState::move_troop_cleanup),
+            0xff,
         );
         // = seg000:828f..829b three destinations proceed to the done path
         //   after a 0x32-tick beat (a busy-wait; no deterministic state
@@ -1348,6 +1347,7 @@ impl GameState {
         self.menu_stack_push(
             MenuRef::MenuMoveProspectors,
             Some(GameState::move_troop_cleanup),
+            0xff,
         );
     }
 
@@ -1498,7 +1498,7 @@ impl GameState {
             };
         }
         // = seg000:8816/8819 bx = nullsub_00f66; call screen_element_stack_push.
-        self.menu_stack_push(MenuRef::MenuMapTroops, None);
+        self.menu_stack_push(MenuRef::MenuMapTroops, None, 0xff);
         // = seg000:881c jmp open_onmap_resource.
         self.open_onmap_spritesheet();
     }
@@ -1743,8 +1743,8 @@ impl GameState {
     }
 
     // = seg000:634d map_draw_vegetation_marks_row — one band's marks: walk the
-    // map row east (loc_0636a) then west (loc_0639a) from the projected centre
-    // column, 4 screen px per map cell, wrapping around the row ends.
+    // map row east (map_draw_vegetation_marks_east) then west
+    // (map_draw_vegetation_marks_west) from the projected centre column.
     fn map_draw_vegetation_marks_row(&mut self, lng: u16, lat: i16, sx: i16, sy: i16) {
         let tablat = self.tablat.as_ref().expect("TABLAT.BIN not loaded");
         let y = (lat + 98) as u16;
@@ -1755,68 +1755,109 @@ impl GameState {
         }
         // = seg000:636e/639e map_func — the centre cell for (lng, lat).
         let cell = ((row_len as u32 * lng as u32) >> 16) as usize;
-        let (wx0, wx1) = (self.map_view_rect.x0, self.map_view_rect.x1);
+        // = seg000:635a call map_draw_vegetation_marks_east; 6363 call
+        //   map_draw_vegetation_marks_west.
+        self.map_draw_vegetation_marks_east(row_off, row_len, cell, sx, sy);
+        self.map_draw_vegetation_marks_west(row_off, row_len, cell, sx, sy);
+    }
 
-        // = seg000:636a map_draw_vegetation_marks_east — from the centre
-        //   column to the window's right edge.
+    // = seg000:636a map_draw_vegetation_marks_east — walk the map row east
+    // from the centre column (4 screen px per map cell, wrapping at the row
+    // end) until the window's right edge, stamping a tuft
+    // (map_draw_vegetation_mark_sprite) on every vegetation cell (map byte &
+    // 0x30 == 0x10).
+    fn map_draw_vegetation_marks_east(
+        &mut self,
+        row_off: usize,
+        row_len: usize,
+        cell: usize,
+        sx: i16,
+        sy: i16,
+    ) {
+        let wx1 = self.map_view_rect.x1;
         let mut x = sx;
         let mut i = cell;
         loop {
-            self.map_draw_vegetation_mark(row_off, row_len, i, x, sy);
+            // = seg000:6375 ax = the cell pair at es:[di]; and ax,3030h;
+            //   cmp al,10h; jz loc_06395 (the stamp).
+            let di = row_off + i;
+            let pair = self.map_cell_pair(di);
+            if pair & 0xff == 0x10 {
+                self.map_draw_vegetation_mark_sprite(pair, di, row_len, x, sy);
+            }
             // = seg000:637f add dx,4; cmp dx,[data_046e3_rect.x1]; jnb ret.
             x += 4;
             if x >= wx1 {
                 break;
             }
-            // = seg000:6388..6390 the cell step, wrapping at the row end.
+            // = seg000:6388..6390 inc di/si; the cell step wraps at the row end.
             i = (i + 1) % row_len;
         }
+    }
 
-        // = seg000:639a map_draw_vegetation_marks_west — from the centre
-        //   column to the window's left edge.
+    // = seg000:639a map_draw_vegetation_marks_west — westward twin of
+    // map_draw_vegetation_marks_east: walk the map row left from the centre
+    // column until the window's left edge.
+    fn map_draw_vegetation_marks_west(
+        &mut self,
+        row_off: usize,
+        row_len: usize,
+        cell: usize,
+        sx: i16,
+        sy: i16,
+    ) {
+        let wx0 = self.map_view_rect.x0;
         let mut x = sx;
         let mut i = cell;
         loop {
-            self.map_draw_vegetation_mark(row_off, row_len, i, x, sy);
-            // = seg000:63af sub dx,4; cmp dx,[data_046e3_rect.x0]; jb ret.
+            // = seg000:63a5 ax = the cell pair; and ax,3030h; cmp al,10h; jz
+            //   loc_063c2 (the stamp).
+            let di = row_off + i;
+            let pair = self.map_cell_pair(di);
+            if pair & 0xff == 0x10 {
+                self.map_draw_vegetation_mark_sprite(pair, di, row_len, x, sy);
+            }
+            // = seg000:63af sub dx,4; cmp dx,[data_046e3_rect]; jb ret.
             x -= 4;
             if x < wx0 {
                 break;
             }
-            // = seg000:63b8..63be the cell step, wrapping at the row start.
+            // = seg000:63b8..63be dec di/si; the cell step wraps at the row start.
             i = (i + row_len - 1) % row_len;
         }
     }
 
-    // = seg000:6375/63a5 the per-cell test + seg000:63c7 map_draw_vegetation_
-    // mark_sprite — on a vegetation cell (map byte & 0x30 == 0x10) stamp a
-    // tuft: ONMAP sprite 0x79 when the next cell east is also vegetation,
-    // else 0x78, jittered 0..3 px in x and y from the cell's map offset so
-    // the tufts do not grid-align.
-    fn map_draw_vegetation_mark(
+    // = the `mov ax, es:[di]; and ax, 3030h` of both walkers: al = the cell,
+    // ah = the byte after it in map memory (the next cell east, or the next
+    // row's first cell at a row end), each masked to the vegetation bits.
+    fn map_cell_pair(&self, di: usize) -> u16 {
+        let lo = self.map.get(di).copied().unwrap_or(0) & 0x30;
+        let hi = self.map.get(di + 1).copied().unwrap_or(0) & 0x30;
+        (hi as u16) << 8 | lo as u16
+    }
+
+    // = seg000:63c7 map_draw_vegetation_mark_sprite — stamp one vegetation
+    // tuft, centred + clipped (draw_sprite_centered_clipped): ONMAP sprite
+    // 0x79 when the next cell east (ah) is also vegetation, else 0x78,
+    // jittered 0..3 px in x and y from the cell's map offset so the tufts do
+    // not grid-align.
+    fn map_draw_vegetation_mark_sprite(
         &mut self,
-        row_off: usize,
+        pair: u16,
+        di: usize,
         row_len: usize,
-        i: usize,
         x: i16,
         y: i16,
     ) {
-        // = seg000:6375 ax = the cell pair; and ax,3030h; cmp al,10h; jnz.
-        let cell = self.map[row_off + i];
-        if cell & 0x30 != 0x10 {
-            return;
-        }
-        let next = self.map[row_off + (i + 1) % row_len];
-        // = seg000:63cd..63d5 sprite 0x79 when the neighbour matches, else 0x78.
-        let sprite = if next & 0x30 == 0x10 { 0x79 } else { 0x78 };
-        // = seg000:63d6..63e4 the jitter: di = the map byte offset, bp = the
-        //   row length; y += di & 3, x += ((bp + di) >> 2) & 3.
-        let di = row_off + i;
+        // = seg000:63cd..63d5 cmp ah,10h; ax = 78h; jnz; inc ax.
+        let sprite = if pair >> 8 == 0x10 { 0x79 } else { 0x78 };
+        // = seg000:63d6..63e4 bp += di; di &= 3; bp = (bp >> 2) & 3;
+        //   bx (y) += di; dx (x) += bp.
         let jy = (di & 3) as i16;
         let jx = (((row_len + di) >> 2) & 3) as i16;
         let clip = self.map_view_clip_rect();
         let yoff = self.y_offset as i16;
-        // = seg000:63e6 call loc_0c343 — centred + clipped.
+        // = seg000:63e6 call draw_sprite_centered_clipped.
         self.with_active_bank_sheet(|s, sheet| {
             s.draw_sprite_centered_clipped(sheet, sprite, x + jx, y + jy + yoff, clip);
         });
@@ -2218,6 +2259,7 @@ impl GameState {
         self.menu_stack_push(
             MenuRef::MenuDone,
             Some(GameState::map_modify_equipment_done),
+            0xff,
         );
         // = seg000:7cc9 call open_onmap_resource.
         self.open_onmap_spritesheet();
@@ -3731,11 +3773,7 @@ impl GameState {
         //   visible marker (location_leaf_fn_05ed0).
         let t = &self.troops[ti];
         let li = location_index_from_ptr(t.offset_of_location);
-        let marker = self
-            .visible_location_markers
-            .iter()
-            .find(|m| m.location_index as usize == li)
-            .copied();
+        let marker = self.location_find_visible_marker(li);
         if t.occupation & 0x40 == 0 && marker.is_none() {
             return;
         }
@@ -4162,7 +4200,7 @@ impl GameState {
                 MoveMenu::Worm => MenuRef::MenuGoThereRidingAWorm,
             };
             self.screen_overlay_request_transition();
-            self.menu_stack_push(menu_ref, Some(GameState::map_close_location_popup));
+            self.menu_stack_push(menu_ref, Some(GameState::map_close_location_popup), 0xff);
             self.play_pending_panel_fold();
         }
     }
@@ -4217,18 +4255,26 @@ impl GameState {
         }
     }
 
+    // = seg000:5ed0 location_find_visible_marker — find the visible-location
+    // marker entry for location `li`: walk visible_location_markers until the
+    // entry's location matches (ZF set + bp = the entry) or the 0 terminator.
+    pub(crate) fn location_find_visible_marker(
+        &self,
+        li: usize,
+    ) -> Option<crate::travel_map_screen::MapLocationMarker> {
+        self.visible_location_markers
+            .iter()
+            .find(|m| m.location_index as usize == li)
+            .copied()
+    }
+
     // = seg000:5ee4 location_05ee4 — place the location panel next to the
     // location's visible marker, its height keyed on the class
     // (troop_icon_panel_heights). Returns false when the location has no
     // visible marker.
     fn map_place_location_panel(&mut self, li: usize) -> bool {
         // = seg000:5ee4 call location_find_visible_marker; jnz ret.
-        let Some(m) = self
-            .visible_location_markers
-            .iter()
-            .find(|m| m.location_index as usize == li)
-            .copied()
-        else {
+        let Some(m) = self.location_find_visible_marker(li) else {
             return false;
         };
         // = seg000:5eec/5ef1 the class + its panel height [class+11d0h].
@@ -4515,6 +4561,56 @@ impl GameState {
         self.night_attack_backdrop_sprite = sprite;
     }
 
+    // = seg000:58e4 map_overlay_draw_landscape — render the overlay window's
+    // landscape rows through the per-location colour table: bp = a 256-byte
+    // stack buffer filled by build_spice_density_xlat, bh = map_overlay_mode,
+    // vga_draw_landscape.
+    fn map_overlay_draw_landscape(
+        &mut self,
+        rows: &[u8],
+        width: usize,
+        height: usize,
+        top_lat: i16,
+    ) {
+        let xlat = self.build_spice_density_xlat();
+        let r = self.map_view_rect;
+        crate::gfx::vga_draw_landscape(self, rows, width, height, r.x0, r.y0, top_lat, &xlat);
+    }
+
+    // = seg000:6155 troop_accumulate_battle_sums — accumulate a troop into
+    // the battle-gauge sums: a Harkonnen troop (bitfield_10 bit 7) adds its
+    // population to data_0d81c (map_disc_centre_x, reused as the Harkonnen
+    // population sum); another occupation-6 troop adds harvest_rate to cx,
+    // harvest_total to bx and (when not away, bit 0x20) its population to dx.
+    fn troop_accumulate_battle_sums(
+        &self,
+        ti: usize,
+        sum_e: &mut u32,
+        sum_c: &mut u32,
+        attacker_pop: &mut u32,
+        hark_pop: &mut u32,
+    ) {
+        let t = &self.troops[ti];
+        // = seg000:6155 ax = population.
+        let pop = t.population as u32;
+        // = seg000:615a test bitfield_10,80h; jz; add [data_0d81c],ax; ret.
+        if t.bitfield_10 & 0x80 != 0 {
+            *hark_pop += pop;
+            return;
+        }
+        // = seg000:6165 cmp occupation,6; jnz ret.
+        if t.occupation != 6 {
+            return;
+        }
+        // = seg000:616b test occupation,20h; jnz; add dx,ax.
+        if t.occupation & 0x20 == 0 {
+            *attacker_pop += pop;
+        }
+        // = seg000:6173 add cx,[si+0ch]; add bx,[si+0eh].
+        *sum_c += t.harvest_rate as u32;
+        *sum_e += t.harvest_total as u32;
+    }
+
     // = seg000:6144 location_seed_battle_gauge — ds:fd = the location's
     // battle gauge | 1, the night attack's CONDIT byte.
     pub(crate) fn location_seed_battle_gauge(&mut self, li: usize) {
@@ -4527,23 +4623,18 @@ impl GameState {
     fn location_battle_gauge(&mut self, li: usize) -> u8 {
         // = seg000:60fe/6118 data_0d81c = the Harkonnen population sum.
         let mut hark_pop = 0u32;
-        // = seg000:6155 bx = Σ harvest_total, cx = Σ harvest_rate, dx = Σ population
-        //   (occupation-6 non-0x20 troops); Harkonnen add to hark_pop.
+        // = seg000:6102 call_callback_on_all_troops_in_location with
+        //   troop_accumulate_battle_sums: bx = Σ harvest_total, cx = Σ
+        //   harvest_rate, dx = Σ population.
         let (mut sum_e, mut sum_c, mut attacker_pop) = (0u32, 0u32, 0u32);
         self.for_each_troop_in_location(li, |s, ti| {
-            let t = &s.troops[ti];
-            let pop = t.population as u32;
-            if t.bitfield_10 & 0x80 != 0 {
-                hark_pop += pop;
-                return;
-            }
-            if t.occupation == 6 {
-                if t.occupation & 0x20 == 0 {
-                    attacker_pop += pop;
-                }
-                sum_c += t.harvest_rate as u32;
-                sum_e += t.harvest_total as u32;
-            }
+            s.troop_accumulate_battle_sums(
+                ti,
+                &mut sum_e,
+                &mut sum_c,
+                &mut attacker_pop,
+                &mut hark_pop,
+            );
         });
         // = seg000:6108..6114 bx = Σfield_e / (Σfield_e's pop? ) — the DOS
         //   `add bx,dx; div bx` averages harvest_total over the attacker pop.

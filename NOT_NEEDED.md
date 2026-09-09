@@ -124,3 +124,6 @@ with it:
 - `seg000:f131 out_of_memory_error` — print the error and exit_to_dos.
 - `seg000:e8d5 uninitialize_memory_driver` — free the XMS block / EMS handle at exit.
 - `seg000:f13f allocator_attempt_to_free_space` — pick the least-recently-used open resource (largest game_time delta in _word_2CF3C_open_res_info) and evict it to make room.
+- `seg000:e8b8 pit_timer_callback` — the boot PIT probe ISR: latch the 8253 counter into pit_timer_value and bump pit_timer_counter; the port's clock is the frame sink's.
+- `seg000:ae3f herad_alloc_buffer` — bump-allocate the 9c40h-byte HERAD music buffer once the driver is present; the port's MIDI driver owns its buffers.
+- `seg000:a9a1 close_pcm_voice_file_handle` — close the streaming voice file's DOS handle (INT 21h/3Eh) unless it is the shared DUNE.DAT handle; the port reads voice clips whole from the DAT.

@@ -25,7 +25,7 @@
 
 use crate::{
     GameState, Rect,
-    menu_defs::{self, CMD_HIGHLIGHT, MenuRef},
+    menu_defs::{self, MenuRef},
     rect::rect,
     sprite_bank,
 };
@@ -158,8 +158,9 @@ impl GameState {
         self.settings_ui_draw_language_buttons();
         // = seg000:a420 call loc_0a44c — the voice/subtitle-mode button.
         self.settings_ui_draw_voice_mode_button();
-        // = seg000:a423 call loc_0ac3a — the music-playlist element flags (deferred).
-        self.settings_ui_update_music_playlist_flags();
+        // = seg000:a423 call loc_0ac3a — the music-playlist element flags and
+        //   the cl pre-highlight slot draw_command_menu applies.
+        let cl = self.settings_ui_update_music_playlist_flags();
         // = seg000:a426 mov bx,0a541h; a429 jmp loc_0d32f — insert the panel as the
         // active menu WITH the command-panel fold transition (bx is the
         // cleanup func loc_0a541, settings_ui_cleanup). loc_0d32f
@@ -183,7 +184,7 @@ impl GameState {
                 Some(GameState::settings_ui_cleanup),
             ));
         }
-        self.redraw_active_command_menu();
+        self.draw_command_menu(cl);
 
         // DOS draws the mixer straight to VGA, so it is visible the instant it is
         // painted. The port renders into `screen`, so flush the MIXR palette and
@@ -416,56 +417,80 @@ impl GameState {
         self.settings_ui_grab_handle(lx, ly);
     }
 
-    // = seg000:a594 loc_0a594 (returning what loc_0a672/loc_0a69f leave in
-    // si/ax/bp) — find the handle under the panel-local pointer and set
-    // settings_drag_target: 1 for a volume slider (records 0..3, 22 x 5 box,
-    // loc_0a672), 2 for a balance knob (records 3..6, 13 x 11 box,
-    // loc_0a69f), 0 for neither. Returns `(group, index, rx, ry)` where rx/ry are
-    // the pointer's offset into the matched handle's box, which the knob drag
-    // (loc_0a5df) uses to pick the rotation direction.
+    // = seg000:a594 loc_0a594 (returning what settings_grab_volume_slider /
+    // settings_grab_balance_knob leave in si/ax/bp) — find the handle under
+    // the panel-local pointer and set settings_drag_target: 1 for a volume
+    // slider (records 0..3, 22 x 5 box), 2 for a balance knob (records 3..6,
+    // 13 x 11 box), 0 for neither. Returns `(group, index, rx, ry)` where
+    // rx/ry are the pointer's offset into the matched handle's box, which the
+    // knob drag (loc_0a5df) uses to pick the rotation direction.
     fn settings_ui_grab_handle(&mut self, lx: i16, ly: i16) -> (u8, usize, i16, i16) {
-        // = seg000:a594 loc_0a672 — the volume slider handles.
-        for i in 0..3 {
-            if let Some((rx, ry)) = self.settings_handle_hit(i, lx, ly, 22, 5) {
-                // = seg000:a599 data_028be = 1.
-                self.settings_drag_target = 1;
-                return (1, i, rx, ry);
-            }
+        // = seg000:a594 call settings_grab_volume_slider; jnb.
+        if let Some((i, rx, ry)) = self.settings_grab_volume_slider(lx, ly) {
+            // = seg000:a599 data_028be = 1.
+            self.settings_drag_target = 1;
+            return (1, i, rx, ry);
         }
-        // = seg000:a59f loc_0a69f — the balance knob handles.
-        for i in 3..6 {
-            if let Some((rx, ry)) = self.settings_handle_hit(i, lx, ly, 13, 11) {
-                // = seg000:a5a4 data_028be = 2.
-                self.settings_drag_target = 2;
-                return (2, i, rx, ry);
-            }
+        // = seg000:a59f call settings_grab_balance_knob; jnb.
+        if let Some((i, rx, ry)) = self.settings_grab_balance_knob(lx, ly) {
+            // = seg000:a5a4 data_028be = 2.
+            self.settings_drag_target = 2;
+            return (2, i, rx, ry);
         }
         // = seg000:a5aa data_028be = 0 — no handle grabbed.
         self.settings_drag_target = 0;
         (0, 0, 0, 0)
     }
 
-    // = seg000:a685 loc_0a685 / a6b2 loc_0a6b2 — slider-handle hit-test: the
-    // record must be drawn (drawn_flag == 1), and the panel-local pointer must
-    // fall in the `w` x `h` box anchored at the record's (x, y).
-    // Returns the pointer's `(rx, ry)` offset into the box on a hit.
-    fn settings_handle_hit(
-        &self,
-        i: usize,
-        lx: i16,
-        ly: i16,
-        w: i16,
-        h: i16,
-    ) -> Option<(i16, i16)> {
+    // = seg000:a672 settings_grab_volume_slider — hit-test the three volume
+    // slider handles (settings_slider_voices, _music, _music_during_voices)
+    // in order; CF set + si = the record on a hit.
+    fn settings_grab_volume_slider(&mut self, lx: i16, ly: i16) -> Option<(usize, i16, i16)> {
+        (0..3).find_map(|i| {
+            self.settings_slider_handle_hit(i, lx, ly)
+                .map(|(rx, ry)| (i, rx, ry))
+        })
+    }
+
+    // = seg000:a69f settings_grab_balance_knob — hit-test the three balance
+    // knob handles (records 3..6) in order; CF set + si = the record on a hit.
+    fn settings_grab_balance_knob(&mut self, lx: i16, ly: i16) -> Option<(usize, i16, i16)> {
+        (3..6).find_map(|i| {
+            self.settings_knob_handle_hit(i, lx, ly)
+                .map(|(rx, ry)| (i, rx, ry))
+        })
+    }
+
+    // = seg000:a685 settings_slider_handle_hit — one volume slider handle:
+    // the record must be drawn (drawn_flag == 1), and the panel-local pointer
+    // must fall in the 22 x 5 box anchored at the record's (x, y). Returns
+    // the pointer's `(rx, ry)` offset into the box on a hit.
+    fn settings_slider_handle_hit(&self, i: usize, lx: i16, ly: i16) -> Option<(i16, i16)> {
         let r = &self.settings_records[i];
-        // = seg000:a685 cmp byte[si+1],1 — require the record drawn.
+        // = seg000:a685 cmp byte[si+1],1; cmc; jnb ret — require the record drawn.
         if r.drawn_flag != 1 {
             return None;
         }
-        // = seg000:a68c ax = lx - dx; a691 bp = ly - y; a696/a69b range checks
-        // (unsigned, so a pointer above/left of the box wraps high and misses).
+        // = seg000:a68c ax = lx - x; a691 bp = ly - y; a696 cmp ax,16h; a69b
+        //   cmp bp,5 (unsigned, so a pointer above/left of the box wraps high
+        //   and misses).
+        if !rect(r.x, r.y, r.x + 22, r.y + 5).in_rect(lx, ly) {
+            return None;
+        }
+        Some((lx - r.x, ly - r.y))
+    }
 
-        if !rect(r.x, r.y, r.x + w, r.y + h).in_rect(lx, ly) {
+    // = seg000:a6b2 settings_knob_handle_hit — one balance knob handle: like
+    // settings_slider_handle_hit with a 13 x 11 box.
+    fn settings_knob_handle_hit(&self, i: usize, lx: i16, ly: i16) -> Option<(i16, i16)> {
+        let r = &self.settings_records[i];
+        // = seg000:a6b2 cmp byte[si+1],1; cmc; jnb ret.
+        if r.drawn_flag != 1 {
+            return None;
+        }
+        // = seg000:a6b9 ax = lx - x; a6be bp = ly - y; a6c3 cmp ax,0dh; a6c8
+        //   cmp bp,0bh.
+        if !rect(r.x, r.y, r.x + 13, r.y + 11).in_rect(lx, ly) {
             return None;
         }
         Some((lx - r.x, ly - r.y))
@@ -818,14 +843,12 @@ impl GameState {
     // menu_mixer_panel.records from the template instead, which the tail's
     // redraw_active_command_menu then paints (staged to fb1 for the panel fold).
     //
-    // It also computes the `cl` pre-highlight DOS passes to draw_command_menu
-    // (loc_0d393): the slot of the menu's currently-selected entry, marked with
-    // CMD_HIGHLIGHT so redraw_active_command_menu draws it inverse. The persistent
-    // bit lives in the record's text_id, so it coexists with the transient hover
-    // highlight (highlight_hovered_text_action_item reads slot_text_id, preserving
-    // it). cl is 0xff (no highlight) when music is disabled.
+    // It also returns the `cl` pre-highlight DOS leaves for draw_command_menu:
+    // the slot of the menu's currently-selected entry, which draw_command_menu
+    // marks with CMD_HIGHLIGHT so redraw_active_command_menu draws it inverse.
+    // cl is 0xff (no highlight) when music is disabled.
     //
-    pub(crate) fn settings_ui_update_music_playlist_flags(&mut self) {
+    pub(crate) fn settings_ui_update_music_playlist_flags(&mut self) -> u8 {
         // = seg000:ac4b call loc_0ae28 — grey all three MUSIC entries (ac3d..ac45 set
         //   the 0x40 bit) unless music is enabled, in which case ac50..ac58 clear
         //   it again.
@@ -833,7 +856,7 @@ impl GameState {
         let disabled = !music_enabled;
         // = seg000:ac3d..ac58 toggle the 0x40 grey bit on the three MUSIC entries of
         //   menu_mixer_panel in place (the static buffer, seg001:201a); the
-        //   highlight bits are re-derived below, so rebuild from the template.
+        //   highlight bit is applied by draw_command_menu, so rebuild from the template.
         let template = menu_defs::MENU_MIXER_PANEL.records;
         self.menu_mixer_panel.records = vec![
             template[0].grayed_if(disabled),
@@ -845,20 +868,18 @@ impl GameState {
 
         // = seg000:ac49 cl = 0xff (no pre-highlight); ac4e jz loc_0ac6d — when music is
         //   disabled the entries stay greyed and none is highlighted.
-        if music_enabled {
-            // = seg000:ac5c xor cx,cx; ac5e test cmd_args_memory,10h.
-            let cl = if self.cmd_args_memory & 0x10 != 0 {
-                // = seg000:ac63 jnz loc_0ac6d with cl = 0 — music is off: highlight MUSIC
-                //   OFF (slot 0).
-                0
-            } else {
-                // = seg000:ac65 cl = (music_playlist_flags & 1) + 1 — the active MUSIC ON
-                //   variant: GAME RELATIVE (slot 1) or CD-STYLE (slot 2).
-                (self.music_playlist_flags & 1) as usize + 1
-            };
-            // = seg000:d393 loc_0d393 or byte ptr [bx+si+3], 80h — set the highlight bit on
-            //   entry `cl`'s text_id (cl is 0..2 here, always < 5).
-            self.menu_mixer_panel.records[cl].text_id |= CMD_HIGHLIGHT;
+        if !music_enabled {
+            return 0xff;
+        }
+        // = seg000:ac5c xor cx,cx; ac5e test cmd_args_memory,10h.
+        if self.cmd_args_memory & 0x10 != 0 {
+            // = seg000:ac63 jnz loc_0ac6d with cl = 0 — music is off: highlight MUSIC
+            //   OFF (slot 0).
+            0
+        } else {
+            // = seg000:ac65 cl = (music_playlist_flags & 1) + 1 — the active MUSIC ON
+            //   variant: GAME RELATIVE (slot 1) or CD-STYLE (slot 2).
+            (self.music_playlist_flags & 1) + 1
         }
     }
 
@@ -910,15 +931,13 @@ impl GameState {
         //   pre-highlight: 0 STANDARD ORDER, 1 SHUFFLE.
         // Stage menu_globe_music from its template with the pre-highlight
         // applied (clearing any highlight a previous open left behind).
-        let mut records = menu_defs::MENU_MUSIC.records.to_vec();
-        let cl = ((self.music_playlist_flags & 2) >> 1) as usize;
-        // = seg000:d393 loc_0d393 or [bx+si+3],80h — the pre-highlight bit on the record.
-        records[cl].text_id |= CMD_HIGHLIGHT;
-        self.menu_music.records = records;
+        self.menu_music.records = menu_defs::MENU_MUSIC.records.to_vec();
+        let cl = (self.music_playlist_flags & 2) >> 1;
         // = seg000:ac8d jmp loc_0d32f — request the panel transition, insert
-        //   the submenu element, and fold it onto the screen.
+        //   the submenu element (draw_command_menu pre-highlights record cl),
+        //   and fold it onto the screen.
         self.screen_overlay_request_transition();
-        self.menu_stack_push(MenuRef::MenuMusic, None);
+        self.menu_stack_push(MenuRef::MenuMusic, None, cl);
         self.play_pending_panel_fold();
     }
 

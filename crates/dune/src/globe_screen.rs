@@ -39,6 +39,21 @@ use crate::{
 // = seg001:2448 _word_218F8_rect — the globe-view navigation mouse hot-zone.
 const GLOBE_NAV_RECT: Rect = rect(96, 25, 224, 134);
 
+// = seg000:b683 globe_shortest_phase_delta — pick the shorter of the two
+// wraps of the signed phase delta `d` around the revolution `modulus`: the
+// candidate with the smaller magnitude wins (unsigned compare of -b to a).
+fn globe_shortest_phase_delta(d: i16, modulus: i16) -> i16 {
+    // = seg000:b683 js loc_0b68b — a negative delta's other wrap is d + bp,
+    //   a positive one's is d - bp.
+    let (a, b) = if d < 0 {
+        (d + modulus, d)
+    } else {
+        (d, d - modulus)
+    };
+    // = seg000:b68f cx = -bp; cmp cx,dx; jnb; dx = bp.
+    if (-b) as u16 >= a as u16 { a } else { b }
+}
+
 impl GameState {
     // = seg000:5b60 set_zoomed_globe_pos — store the zoomed map centre
     // (_word_20E2C_zoomed_globe_longitude / _word_20E2E_zoomed_globe_latitude).
@@ -309,7 +324,7 @@ impl GameState {
         };
         // = seg000:b95b..b95e bx = fn_0d917_noop; jmp screen_element_stack_
         // push.
-        self.menu_stack_push(MenuRef::MenuGlobe, None);
+        self.menu_stack_push(MenuRef::MenuGlobe, None, 0xff);
     }
 
     // = seg000:ba15 globe_increment_tilt_by_ax — step the tilt and clamp its
@@ -377,15 +392,9 @@ impl GameState {
                 .globe_renderer
                 .as_ref()
                 .map_or(199, |g| g.equator_row_len()) as i16;
-            // = seg000:baac..bab0 the shortest signed phase delta
-            // (loc_0b683 picks the smaller-magnitude wrap).
-            let mut d = target - self.globe_rotation as i16;
-            let (a, b) = if d < 0 {
-                (d + modulus, d)
-            } else {
-                (d, d - modulus)
-            };
-            d = if (-b) as u16 >= a as u16 { a } else { b };
+            // = seg000:baac..bab0 dx = target - globe_rotation; call
+            //   globe_shortest_phase_delta.
+            let mut d = globe_shortest_phase_delta(target - self.globe_rotation as i16, modulus);
             // = seg000:bab3..bac8 clamp the phase step to ±0x20, counting
             // each clamp into cx.
             let mut steps = 1;
@@ -518,7 +527,7 @@ impl GameState {
             // = seg000:bc3c..bc4a over the disc: insert the SEE MAP OF THIS
             // AREA element (equal priority replaces the top in place).
             if top != MenuRef::MenuGlobeDefaultClickOnGlobe {
-                self.menu_stack_push(MenuRef::MenuGlobeDefaultClickOnGlobe, None);
+                self.menu_stack_push(MenuRef::MenuGlobeDefaultClickOnGlobe, None, 0xff);
             }
         } else if top != MenuRef::MenuGlobe {
             // = seg000:bc33..bc39 off the disc: restore the globe menu

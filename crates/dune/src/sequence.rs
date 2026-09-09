@@ -178,7 +178,7 @@ impl GameState {
         // = seg000:2ebf/2ec3/2ec6 bp = [menu_ptr_02220]; bx = nullsub_00f66;
         //   jmp screen_element_stack_push.
         let element = self.sequence_menu;
-        self.menu_stack_push(element, None);
+        self.menu_stack_push(element, None, 0xff);
     }
 
     // = seg000:1392 change_menu_to_continue_menu — menu_ptr_02220 =

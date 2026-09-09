@@ -4149,14 +4149,22 @@ impl GameState {
             return;
         }
         if let Some(sd_block) = self.hnm_take_sd_block() {
-            let voc = build_pcm_voc(self.hnm_audio_tc, &sd_block);
-
-            // = seg000:aa91 `mov byte ptr [si+6], 1; mov byte ptr [si+7], 41h` —
-            // every HNM SD buffer is queued with the loop-whole flag (0x40), so
-            // the last chunk loops if nothing replaces it; the play loop stops
-            // the driver explicitly when the clip ends (e.g. seg000:cf3f).
-            self.pcm_player.queue_next(&voc, pcm_player::VOC_LOOP_WHOLE);
+            self.copy_sd_chunk_to_pcm_buf(&sd_block);
         }
+    }
+
+    // = seg000:aa70 copy_sd_chunk_to_pcm_buf — copy the SD chunk body (its
+    // length word minus the 4-byte header) into the next ping-pong PCM buffer
+    // and fill in the buffer record: [si+4] = the length, [si+6] = 1 (type
+    // 1, raw samples) and [si+7] = 41h (play + loop-whole). The port wraps
+    // the samples as a Type-1 VOC reusing the captured time constant.
+    fn copy_sd_chunk_to_pcm_buf(&mut self, sd_block: &[u8]) {
+        let voc = build_pcm_voc(self.hnm_audio_tc, sd_block);
+        // = seg000:aa91 `mov byte ptr [si+6], 1; mov byte ptr [si+7], 41h` —
+        // every HNM SD buffer is queued with the loop-whole flag (0x40), so
+        // the last chunk loops if nothing replaces it; the play loop stops
+        // the driver explicitly when the clip ends (e.g. seg000:cf3f).
+        self.pcm_player.queue_next(&voc, pcm_player::VOC_LOOP_WHOLE);
     }
 
     // = seg000:cc85 check_if_hnm_complete — finished once the clip has played

@@ -477,6 +477,20 @@ impl GameState {
         }
     }
 
+    // = seg000:642e count_stage1_vegetation_cells_near_offset — count the map
+    // cells in stage-1 vegetation ((cell & 0x30) == 0x10) among the 6 cells at
+    // map offset si-1 .. si+4 (three word loads).
+    fn count_stage1_vegetation_cells_near_offset(&self, si: usize) -> u8 {
+        let base = si.wrapping_sub(1);
+        (0..6)
+            .filter(|&k| {
+                self.map
+                    .get(base.wrapping_add(k))
+                    .is_some_and(|&c| c & 0x30 == 0x10)
+            })
+            .count() as u8
+    }
+
     // = seg000:63f0 iterate_over_all_locations_upon_new_day — the per-new-day
     // location/ecology walk: grow each vegetation-program location's water by
     // the nearby stage-1 vegetation, then promote a pseudo-random set of
@@ -494,13 +508,9 @@ impl GameState {
             if loc.status & 0x20 == 0 || loc.water >= 0xfa {
                 continue;
             }
-            // = seg000:640e/6411 si = [di+6]; call count_stage1_vegetation_
-            //   cells_near_offset — the 6 cells at map offset si-1 .. si+4.
-            let base = (loc.map_offset as usize).saturating_sub(1);
-            let nearby = self.map[base..self.map.len().min(base + 6)]
-                .iter()
-                .filter(|&&c| c & 0x30 == 0x10)
-                .count() as u8;
+            // = seg000:640e/6411 si = [di+6]; call
+            //   count_stage1_vegetation_cells_near_offset.
+            let nearby = self.count_stage1_vegetation_cells_near_offset(loc.map_offset as usize);
             // = seg000:6414..641f water += nearby/2 + 1, capped at 0xfa.
             self.locations[li].water = (loc.water + nearby / 2 + 1).min(0xfa);
         }

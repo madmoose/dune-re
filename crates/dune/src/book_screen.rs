@@ -98,7 +98,7 @@ impl GameState {
         // = seg000:af32 book_topic_filter = 0 — all topics.
         self.book_topic_filter = 0;
         // = seg000:af38..af40 push menu_book (bx = fn_0d917_noop, no cleanup).
-        self.menu_stack_push(MenuRef::MenuBook, None);
+        self.menu_stack_push(MenuRef::MenuBook, None, 0xff);
         // = seg000:af43 falls through into the cover draw.
         self.callback_transition_book_cover();
     }

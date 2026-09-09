@@ -1759,20 +1759,14 @@ impl GameState {
         self.sky_fade_active = true;
         // = seg000:3892 call get_sky_palette_id_from_game_time_in_bl (bl).
         let sub = sky_palette_id_from_game_time(self.game_time);
-        // = seg000:38a7/38ad ax = 0x28 + sky_skydn_selector selects the
-        // resource; loc_0398c (live) and loc_039b9 (fade target) share the
-        // byte offsets/counts: sky_skydn=0 → 80 colours @ entry 128, else →
-        // 151 colours @ entry 73. The intro path keeps sky_skydn_selector = 1
-        // (remove_all_frame_tasks default), so intro2 uses SKYDN.HSQ's
-        // 151-colour layout — applying SKY.HSQ's 80@128 layout to a SKYDN
-        // sub-palette would read the wrong 80 of its 151 colours and write
-        // them at the wrong palette indices.
-        let (resource, dest_start, count) = if self.sky_skydn_selector != 0 {
-            // = seg000:3971 ax = 0x28 + sky_skydn_selector → 0x29 SKYDN.HSQ.
-            ("SKYDN.HSQ", 73, 151)
-        } else {
-            ("SKY.HSQ", 128, 80)
-        };
+        // = seg000:38a7/38ad open_sky_or_skydn_palette_al_sub_bl selects the
+        // resource; sky_palette_write_live and sky_palette_write_fade_target
+        // pick the byte offsets/counts from sky_skydn_selector. The intro path
+        // keeps sky_skydn_selector = 1 (remove_all_frame_tasks default), so
+        // intro2 uses SKYDN.HSQ's 151-colour layout — applying SKY.HSQ's 80@128
+        // layout to a SKYDN sub-palette would read the wrong 80 of its 151
+        // colours and write them at the wrong palette indices.
+        let resource = self.open_sky_or_skydn_palette();
         // = seg000:3895 cmp [sky_fade_countdown], 0; jz loc_038ad.
         if self.sky_fade_countdown != 0 {
             // = seg000:389c cmp [current_sky_palette], bl; jz ret — a fade is
@@ -1782,28 +1776,67 @@ impl GameState {
             }
             // = seg000:38a2 loc_038a2: re-aim the in-flight fade. Reset the
             // step counter, then open_sky_or_skydn_palette_al_sub_bl +
-            // loc_039b9 write the new sub-palette into palette_fade_target; the
-            // fade task already installed by the running fade keeps stepping
-            // the live palette toward it.
+            // sky_palette_write_fade_target write the new sub-palette into
+            // palette_fade_target; the fade task already installed by the
+            // running fade keeps stepping the live palette toward it.
             self.sky_fade_countdown = 0x30;
             // = seg000:38a7 open_sky_or_skydn_palette_al_sub_bl + 38aa jmp
-            // loc_039b9 (primary span).
-            self.load_sky_palette_to_fade_target(resource, sub, 0, count, dest_start);
-            // = seg000:39d2/39e5 the secondary 240..255 span when [227dh]==0.
-            if self.data_0227d == 0 {
-                self.load_sky_palette_to_fade_target(resource, sub, count, 16, 240);
-            }
+            // sky_palette_write_fade_target.
+            self.sky_palette_write_fade_target(resource, sub);
             return;
         }
         // = seg000:38ad loc_038ad: no fade in progress, write the sub-palette
         // straight into the LIVE palette (open_sky_or_skydn_palette_al_sub_bl +
-        // loc_0398c).
+        // sky_palette_write_live).
+        self.sky_palette_write_live(resource, sub);
+    }
+
+    // = seg000:3971 open_sky_or_skydn_palette_al_sub_bl — ax = 0x28 +
+    // sky_skydn_selector: SKY.HSQ (0x28) or SKYDN.HSQ (0x29), the sky
+    // sub-palette resource; the port names it and the writers below open it.
+    pub(crate) fn open_sky_or_skydn_palette(&self) -> &'static str {
+        if self.sky_skydn_selector != 0 {
+            "SKYDN.HSQ"
+        } else {
+            "SKY.HSQ"
+        }
+    }
+
+    // = seg000:398c sky_palette_write_live — write sky sub-palette `sub` of
+    // `resource` into the live palette: 80 colours at entry 128 when
+    // sky_skydn_selector == 0, else 151 colours at entry 73; then the next 16
+    // colours at entry 240 unless suppress_sky_240_255 (data_0227d) is set.
+    pub(crate) fn sky_palette_write_live(&mut self, resource: &str, sub: usize) {
+        // = seg000:398c..399f cx = 1c5h, bx = 0dbh; sky_skydn_selector == 0 →
+        //   cx = 0f0h, bx = 180h (byte counts / offsets, 3 per colour).
+        let (dest_start, count) = if self.sky_skydn_selector != 0 {
+            (73, 151)
+        } else {
+            (128, 80)
+        };
+        // = seg000:39a0 vga_set_palette.
         self.open_sky_palette(resource, sub, 0, count, dest_start);
-        // = seg000:39ae loc_039ae — the secondary 240..255 span when [227dh]==0
-        // (in-game). data_0227d == 1 throughout the intro, so this is normally
-        // a no-op there; modelled to match DOS for the in-game path.
+        // = seg000:39a5..39b4 dx += cx; cmp [suppress_sky_240_255],0; jnz ret;
+        //   cx = 30h, bx = 2d0h; vga_set_palette.
         if self.data_0227d == 0 {
             self.open_sky_palette(resource, sub, count, 16, 240);
+        }
+    }
+
+    // = seg000:39b9 sky_palette_write_fade_target — fade-target twin of
+    // sky_palette_write_live: the same spans into the palette fade target.
+    pub(crate) fn sky_palette_write_fade_target(&mut self, resource: &str, sub: usize) {
+        // = seg000:39b9..39cc the byte counts / offsets from sky_skydn_selector.
+        let (dest_start, count) = if self.sky_skydn_selector != 0 {
+            (73, 151)
+        } else {
+            (128, 80)
+        };
+        // = seg000:39cd vga_set_fade_target_data.
+        self.load_sky_palette_to_fade_target(resource, sub, 0, count, dest_start);
+        // = seg000:39d2..39e1 the secondary 240..255 span unless suppressed.
+        if self.data_0227d == 0 {
+            self.load_sky_palette_to_fade_target(resource, sub, count, 16, 240);
         }
     }
 
@@ -1816,26 +1849,16 @@ impl GameState {
         // = seg000:395f call loc_0395f — sub-palette id for al (same hour-of-day
         //   table as sky_palette_id_from_game_time).
         let sub = sky_palette_id_from_game_time(al);
-        // = seg000:3971 open_sky_or_skydn_palette_al_sub_bl — resource + byte range from
-        //   sky_skydn_selector, shared with set_sky_palette.
-        let (resource, dest_start, count) = if self.sky_skydn_selector != 0 {
-            ("SKYDN.HSQ", 73, 151)
-        } else {
-            ("SKY.HSQ", 128, 80)
-        };
+        // = seg000:3971 open_sky_or_skydn_palette_al_sub_bl — the resource
+        //   from sky_skydn_selector, shared with set_sky_palette.
+        let resource = self.open_sky_or_skydn_palette();
         // = seg000:0fb8 cmp [sky_fade_countdown],0; jz loc_00fc2 (write live)
-        //   else jmp loc_039b9 (write the fade target so the running fade re-aims).
+        //   else jmp sky_palette_write_fade_target (so the running fade re-aims).
         if self.sky_fade_countdown != 0 {
-            self.load_sky_palette_to_fade_target(resource, sub, 0, count, dest_start);
-            // = the secondary 240..255 span when [227dh]==0.
-            if self.data_0227d == 0 {
-                self.load_sky_palette_to_fade_target(resource, sub, count, 16, 240);
-            }
+            self.sky_palette_write_fade_target(resource, sub);
         } else {
-            self.open_sky_palette(resource, sub, 0, count, dest_start);
-            if self.data_0227d == 0 {
-                self.open_sky_palette(resource, sub, count, 16, 240);
-            }
+            // = seg000:0fc2 loc_00fc2 jmp sky_palette_write_live.
+            self.sky_palette_write_live(resource, sub);
         }
     }
 
@@ -1907,18 +1930,10 @@ impl GameState {
     // entry, reached by jumping past loc_038e1's gate) and loc_038e1's
     // time-period sky refresh.
     pub(crate) fn arm_sky_palette_fade(&mut self, sub: usize) {
-        // = seg000:39b9 loc_039b9 — fade-target write, mirroring stage_29_init's
-        // load_sky_palette_to_fade_target call.
-        let (resource, dest_start, count) = if self.sky_skydn_selector != 0 {
-            ("SKYDN.HSQ", 73, 151)
-        } else {
-            ("SKY.HSQ", 128, 80)
-        };
-        self.load_sky_palette_to_fade_target(resource, sub, 0, count, dest_start);
-        // = seg000:39d2/39e5 the secondary 240..255 span when [227dh]==0.
-        if self.data_0227d == 0 {
-            self.load_sky_palette_to_fade_target(resource, sub, count, 16, 240);
-        }
+        // = seg000:38f1/38f4 open_sky_or_skydn_palette_al_sub_bl +
+        //   sky_palette_write_fade_target — the fade-target write.
+        let resource = self.open_sky_or_skydn_palette();
+        self.sky_palette_write_fade_target(resource, sub);
         // = seg000:38f7 mov al,0x40; xchg al,[sky_fade_countdown]; or al,al;
         // jnz loc_038e0 — only install the frame task on the first arm; a
         // re-arm just resets the countdown.

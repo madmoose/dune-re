@@ -757,7 +757,7 @@ impl GameState {
         //   MenuBuffers give the same guarantee). With in_transition armed
         //   by the caller, redraw_active_command_menu paints into fb1 for the
         //   fold.
-        self.redraw_active_command_menu();
+        self.draw_command_menu(0xff);
     }
 
     // = seg000:5adf reset_room_scene_state — reset the map/globe-view state

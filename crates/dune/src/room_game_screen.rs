@@ -705,7 +705,7 @@ impl GameState {
         // = seg000:0e32..0e38 bp = menu_restart_load_exit_game; bx =
         //   nullsub_00f66; call loc_0d323 — the RESTART / LOAD / EXIT menu.
         self.screen_overlay_request_transition();
-        self.menu_stack_push(MenuRef::MenuRestartLoadExitGame, None);
+        self.menu_stack_push(MenuRef::MenuRestartLoadExitGame, None, 0xff);
         self.play_pending_panel_fold();
         self.highlight_hovered_text_action_item();
         // = seg000:0e3b jmp draw_mouse.
@@ -723,26 +723,19 @@ impl GameState {
     // is untouched.
     fn game_over_sky_flash(&mut self) {
         // = seg000:0d45/0d48 the sub-palette for game_time, from SKY.HSQ (or
-        //   SKYDN.HSQ, sky_skydn_selector), into the fade target (loc_039b9).
+        //   SKYDN.HSQ, open_sky_or_skydn_palette_al_sub_bl), into the fade
+        //   target (sky_palette_write_fade_target).
         let sub = sky_palette_id_from_game_time(self.game_time);
-        let (resource, dest_start, count) = if self.sky_skydn_selector != 0 {
-            ("SKYDN.HSQ", 73, 151)
-        } else {
-            ("SKY.HSQ", 128, 80)
-        };
-        self.load_sky_palette_to_fade_target(resource, sub, 0, count, dest_start);
-        // = seg000:39d2/39e5 the secondary 240..255 span when [227dh] == 0.
-        if self.data_0227d == 0 {
-            self.load_sky_palette_to_fade_target(resource, sub, count, 16, 240);
-        }
+        let resource = self.open_sky_or_skydn_palette();
+        self.sky_palette_write_fade_target(resource, sub);
         // = seg000:0d4e inc suppress_sky_240_255.
         self.data_0227d = self.data_0227d.wrapping_add(1);
         // = seg000:0d52..0d77 three flashes.
         for _ in 0..3 {
             // = seg000:0d56..0d5e bl = 28h — the flash sub-palette straight
-            //   into the live palette (loc_0398c; the secondary span is
-            //   skipped while suppressed), then flushed.
-            self.open_sky_palette(resource, 0x28, 0, count, dest_start);
+            //   into the live palette (sky_palette_write_live; the secondary
+            //   span is skipped while suppressed), then flushed.
+            self.sky_palette_write_live(resource, 0x28);
             self.update_screen_palette();
             // = seg000:0d61 sky_fade_countdown = 20h.
             self.sky_fade_countdown = 0x20;
@@ -986,7 +979,7 @@ impl GameState {
         // = seg000:d326 call screen_element_stack_push — install the confirmation
         //   submenu (bp = its static buffer) and repaint it (cl = 0xff, no slot
         //   pre-highlighted).
-        self.menu_stack_push(MenuRef::MenuExitGameConfirmation, None);
+        self.menu_stack_push(MenuRef::MenuExitGameConfirmation, None, 0xff);
         // = seg000:d329 call play_pending_panel_fold — fold the submenu onto screen.
         self.play_pending_panel_fold();
         // = seg000:d32c jmp loc_0d410 -> highlight_hovered_text_action_item — light
@@ -1252,7 +1245,7 @@ impl GameState {
         //   replaces without running the cleanup), so no callback is stored.
         //   look_away_from_mirror -> draw_room_game_screen rebuilds the room
         //   verbs when the still is dismissed.
-        self.menu_stack_push(MenuRef::MenuPalaceMirrorRoom, None);
+        self.menu_stack_push(MenuRef::MenuPalaceMirrorRoom, None, 0xff);
     }
 
     // = seg000:941d room_game_area_click — the game-area hotspot (ui_elements[20])
@@ -1590,7 +1583,7 @@ impl GameState {
         // (a repaint); in map/flight mode the insert walk (seg000:d349) first
         // pops any transient overlays still stacked, their cleanups included,
         // making command_menu_buf the active strip.
-        self.menu_stack_push(MenuRef::CommandMenuBuf, None);
+        self.menu_stack_push(MenuRef::CommandMenuBuf, None, 0xff);
     }
 
     // ---- Command-panel callees (linked stubs; see the .chani annotations).
@@ -1808,12 +1801,16 @@ impl GameState {
     // menu stack and repaint the now-active verb menu. DOS chains
     // screen_element_stack_insert (d33a, the priority-sorted insert that pops
     // higher-priority entries and runs their cleanup funcs) -> draw_command_menu
-    // (d36d, set the top slot and clear the records' 0x8000 highlight bits) ->
-    // redraw_active_command_menu (d397). The port keeps the same priority walk
-    // over the (MenuRef, cleanup) slots and repaints. cl=0xff (no slot
-    // pre-highlighted) is implicit in redraw_active_command_menu starting from
-    // "nothing hovered".
-    pub(crate) fn menu_stack_push(&mut self, menu_ref: MenuRef, callback: Option<MenuCleanupFn>) {
+    // (d36d, set the top slot, clear the records' 0x8000 highlight bits and
+    // set it on record `cl`) -> redraw_active_command_menu (d397). The port
+    // keeps the same priority walk over the (MenuRef, cleanup) slots and
+    // repaints; `cl` = 0xff pre-highlights no slot (the loc_0d338 entry).
+    pub(crate) fn menu_stack_push(
+        &mut self,
+        menu_ref: MenuRef,
+        callback: Option<MenuCleanupFn>,
+        cl: u8,
+    ) {
         // The caller has already staged `element`'s record buffer (DOS builds
         // or patches the static buffer, then inserts its pointer). The insert
         // walk compares the incoming buffer's priority byte (`[buf]`, DOS al)
@@ -1828,7 +1825,7 @@ impl GameState {
                 // takes the INCOMING cleanup func — the replaced element's
                 // teardown is dropped, never run, and never inherited.
                 *self.menu_stack.last_mut().unwrap() = (menu_ref, callback);
-                self.redraw_active_command_menu();
+                self.draw_command_menu(cl);
                 return;
             }
             if priority < top_priority {
@@ -1846,6 +1843,26 @@ impl GameState {
             self.menu_stack.pop();
         }
         self.menu_stack.push((menu_ref, callback));
+        self.draw_command_menu(cl);
+    }
+
+    // = seg000:d36d draw_command_menu — paint the top screen-element-stack
+    // slot's menu (DOS first stores bp, the record buffer, into the slot):
+    // clear the 0x8000 highlight bit of every record, set it on record `cl`
+    // when cl < 5, then fall into redraw_active_command_menu.
+    pub(crate) fn draw_command_menu(&mut self, cl: u8) {
+        if let Some((menu_ref, _)) = self.menu_stack.last().copied() {
+            let records = &mut self.menu_buffer_mut(menu_ref).records;
+            // = seg000:d378..d386 and word ptr [bp],7fffh over the records.
+            for rec in records.iter_mut() {
+                rec.text_id &= !menu_defs::CMD_HIGHLIGHT;
+            }
+            // = seg000:d388..d393 cmp cx,5; jnb; or byte ptr [bx+si+3],80h.
+            if let Some(rec) = records.get_mut(cl as usize) {
+                rec.text_id |= menu_defs::CMD_HIGHLIGHT;
+            }
+        }
+        // = seg000:d397 redraw_active_command_menu.
         self.redraw_active_command_menu();
     }
 
@@ -1927,6 +1944,7 @@ impl GameState {
         self.menu_stack_push(
             MenuRef::MenuNpcActions,
             Some(GameState::menu_npc_actions_cleanup),
+            0xff,
         );
     }
 
@@ -2582,7 +2600,7 @@ impl GameState {
         // = seg000:d323 call screen_overlay_request_transition — stage into fb1.
         self.screen_overlay_request_transition();
         // = seg000:d326 call screen_element_stack_push (bp menu, bx cleanup).
-        self.menu_stack_push(menu, Some(cleanup));
+        self.menu_stack_push(menu, Some(cleanup), 0xff);
         // = seg000:d329 call play_pending_panel_fold — reveal with the fold.
         self.play_pending_panel_fold();
         // = seg000:d32c jmp loc_0d410 -> highlight_hovered_text_action_item —
@@ -5195,13 +5213,14 @@ mod tests {
         game.menu_stack_push(
             MenuRef::MenuNpcActions,
             Some(GameState::menu_npc_actions_cleanup),
+            0xff,
         );
         assert_eq!(game.menu_stack.len(), depth + 1, "the stack deepened");
 
         // menu_go_towards_this_place carries the same 0xfc, so this replaces
         // the top in place rather than deepening — and the slot must end up
         // holding this push's cleanup (here, none at all).
-        game.menu_stack_push(MenuRef::MenuGoTowardsThisPlace, None);
+        game.menu_stack_push(MenuRef::MenuGoTowardsThisPlace, None, 0xff);
         let (top, cleanup) = *game.menu_stack.last().expect("the stack is not empty");
         assert_eq!(game.menu_stack.len(), depth + 1, "replaced, did not deepen");
         assert_eq!(top, MenuRef::MenuGoTowardsThisPlace, "the incoming element");

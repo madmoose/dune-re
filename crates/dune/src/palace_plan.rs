@@ -122,7 +122,11 @@ impl GameState {
         //   overlay as the active menu (cleanup = palace_plan_cleanup),
         //   fold the " Done" command strip on, then highlight the cursor's slot.
         self.screen_overlay_request_transition();
-        self.menu_stack_push(MenuRef::MenuDone, Some(GameState::palace_plan_cleanup));
+        self.menu_stack_push(
+            MenuRef::MenuDone,
+            Some(GameState::palace_plan_cleanup),
+            0xff,
+        );
         self.play_pending_panel_fold();
         self.highlight_hovered_text_action_item();
     }

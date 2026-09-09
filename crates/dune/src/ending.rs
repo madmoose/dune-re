@@ -45,7 +45,7 @@ impl GameState {
             return;
         }
         // = seg000:0f10 jmp loc_00960: the backdrop into fb2; al = 2dh; dx =
-        //   0; loc_009c7; data_0478c = 1 (the mirror Paul plays 4 lively
+        //   0; intro_setup_talking_head; data_0478c = 1 (the mirror Paul plays 4 lively
         //   frames, 32..35, before settling); start_room_lip_sync.
         self.copy_active_framebuffer_to_framebuffer_2();
         self.setup_talking_head(0x2d, 0);
@@ -82,7 +82,7 @@ impl GameState {
         //   the port's add_frame_task is idempotent.
         // = seg000:0f3f call copy_active_framebuffer_to_framebuffer_2.
         self.copy_active_framebuffer_to_framebuffer_2();
-        // = seg000:0f42/0f45 dx = 2dh; jmp loc_00965: al = 2dh; loc_009c7;
+        // = seg000:0f42/0f45 dx = 2dh; jmp loc_00965: al = 2dh; intro_setup_talking_head;
         //   data_0478c = 1; start_room_lip_sync.
         self.setup_talking_head(0x2d, 0x2d);
         self.subtitle_word_count = 1;
@@ -277,8 +277,7 @@ impl GameState {
     // with the intro's 0x1e lively budget (seg000:09d0).
     fn ending_room_and_head(&mut self, location_and_room: u16, location_appearance: u16, head: u8) {
         self.draw_room_for_scene(location_and_room, location_appearance);
-        self.subtitle_word_count = 0x1e;
-        self.setup_talking_head(head, 0);
+        self.intro_setup_talking_head(head, 0);
     }
 
     // = seg000:15c9 callback_intro_02_015c9 — palace room 0x200a, Leto (0).
@@ -333,7 +332,7 @@ impl GameState {
     // Feyd (0ah) shifted right by 3ah, and the lip-sync started.
     fn ending_scene_0b_feyd_fortress(&mut self) {
         self.draw_room_for_scene(0x3002, 0x280);
-        // = seg000:160c..1614 al = 0ah; dx = 3ah; loc_009c7; jmp
+        // = seg000:160c..1614 al = 0ah; dx = 3ah; intro_setup_talking_head; jmp
         //   start_room_lip_sync.
         self.setup_talking_head(0x0a, 0x3a);
         self.start_room_lip_sync();

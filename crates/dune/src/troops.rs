@@ -1922,28 +1922,36 @@ impl GameState {
         // = seg000:33cc/33cf call_callback_on_all_troops_in_location with
         //   callback_troop_accumulate_strength (seg000:3406).
         self.for_each_troop_in_location(loc_index, |s, ti| {
-            let t = s.troops[ti];
-            // = seg000:3406 test occupation,20h; jnz ret — a troop that is
-            //   away is skipped.
-            if t.occupation & 0x20 != 0 {
-                return;
-            }
-            // = seg000:340c call troop_battle_strength.
-            let strength = s.troop_battle_strength(ti);
-            let lc = &mut s.location_condit;
-            // = seg000:340f test bitfield_10,80h — a Harkonnen troop adds to
-            //   ds:94 (seg000:3428); a Fremen troop to ds:96 and ORs its two
-            //   bitfields into ds:5c/5e (seg000:3415..3423).
-            if t.bitfield_10 & 0x80 != 0 {
-                lc.harkonnen_strength = lc.harkonnen_strength.wrapping_add(strength);
-            } else {
-                lc.fremen_strength = lc.fremen_strength.wrapping_add(strength);
-                lc.combined_bitfield_10 |= t.bitfield_10;
-                lc.combined_dissatisfaction |= t.dissatisfaction_and_speech;
-            }
+            s.callback_troop_accumulate_strength(ti);
         });
         // = seg000:33d2/33d5 ds:9c = condit_battle_balance.
         self.location_condit.battle_balance = self.condit_battle_balance();
+    }
+
+    // = seg000:3406 callback_troop_accumulate_strength — the per-troop step
+    // of condit_stage_location_strengths: a troop that is away (occupation
+    // bit 5) is skipped; troop_battle_strength adds to ds:94 for a Harkonnen
+    // troop (bitfield_10 bit 7), else to ds:96, and the Fremen troop's
+    // bitfield_10 / dissatisfaction_and_speech are ORed into ds:5c / ds:5e.
+    fn callback_troop_accumulate_strength(&mut self, ti: usize) {
+        let t = self.troops[ti];
+        // = seg000:3406 test occupation,20h; jnz ret.
+        if t.occupation & 0x20 != 0 {
+            return;
+        }
+        // = seg000:340c call troop_battle_strength.
+        let strength = self.troop_battle_strength(ti);
+        let lc = &mut self.location_condit;
+        // = seg000:340f test bitfield_10,80h; jnz loc_03428.
+        if t.bitfield_10 & 0x80 != 0 {
+            // = seg000:3428 add [for_condit_ds_94],ax.
+            lc.harkonnen_strength = lc.harkonnen_strength.wrapping_add(strength);
+        } else {
+            // = seg000:3415..3423.
+            lc.fremen_strength = lc.fremen_strength.wrapping_add(strength);
+            lc.combined_bitfield_10 |= t.bitfield_10;
+            lc.combined_dissatisfaction |= t.dissatisfaction_and_speech;
+        }
     }
 
     // = seg000:33d9 condit_battle_balance — the ratio of the stronger side to
