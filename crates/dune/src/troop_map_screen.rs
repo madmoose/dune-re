@@ -98,10 +98,6 @@ pub(crate) const EQUIPMENT_LOCATION_STRIP: PanelRecord = panel(
 pub(crate) const RALLIED_POPUP_PANEL: PanelRecord =
     panel(MapPanelRef::Rallied, rect(10, 10, 190, 64), 0xf5, 0xfb);
 
-/// = seg001:11c1/11c3 data_011c1/data_011c3 — the spice-density overlay
-/// panel's screen origin (75, 15).
-const SPICE_OVERLAY_PANEL_POS: (i16, i16) = (75, 15);
-
 /// = seg001:2248 — the contact subtitle descriptor's width (the descriptor is
 /// x@+0, y@+2, w@+4, h@+6; 153x63). The origin and height live in GameState
 /// (map_contact_subtitle_pos / map_contact_subtitle_h) — the origin is written
@@ -391,10 +387,9 @@ impl GameState {
     // res_map_seg around the call, seg000:5487), then rendered through the
     // per-field colour table loc_057e5 builds (vga_draw_landscape).
     pub(crate) fn map_enter_spice_density_overlay(&mut self) {
-        // = seg000:5406..5412 the panel origin from data_011c1/011c3. DOS
-        //   persists panel drags back into the home words (seg000:59d1); the
-        //   drag is not ported, so the home stays the static (75, 15).
-        self.map_overlay_panel_pos = SPICE_OVERLAY_PANEL_POS;
+        // = seg000:5406..5412 the panel origin from the data_011c1/011c3 home
+        //   words (which the panel drag moves, seg000:59d1).
+        self.map_overlay_panel_pos = self.map_overlay_home_pos;
         // = seg000:5416..541c close the popups the overlay replaces.
         self.map_close_rallied_troops_popup();
         self.map_close_location_troop_popup();
@@ -966,9 +961,14 @@ impl GameState {
                     self.map_leave_spice_density_overlay();
                 }
             } else {
-                // = seg000:5978..599e the panel drag (map_overlay_drag_armed
-                //   + the XOR home outline). TODO: not ported.
-                println!("map_overlay_panel_hit_test: panel drag (seg000:5978) not ported");
+                // = seg000:5978 loc_05978: call loc_082a0; jz ret — no drag
+                //   while the prospector pick menu owns the view; 597d
+                //   map_overlay_drag_armed = 1, then fall into
+                //   map_overlay_xor_drag_outline.
+                if !self.overlay_pick_menu_active() {
+                    self.map_overlay_drag_armed = true;
+                    self.map_overlay_xor_drag_outline();
+                }
             }
             return true;
         }
@@ -4823,13 +4823,77 @@ impl GameState {
         self.map_confirm_travel_and_close(destination, 0, 0);
     }
 
-    // = seg000:599f map_main_mouse_release — end a popup panel drag
-    // (map_overlay_drag_armed). Panel dragging is not ported yet.
-    pub(crate) fn dune_map_mouse_release(&mut self) {}
+    // = seg000:5982 map_overlay_xor_drag_outline — XOR the overlay panel's
+    // drag outline (0xaa x 0x6c) on the screen at the home origin
+    // data_011c1/011c3 (vga_xor_rect_outline); a second call erases it.
+    fn map_overlay_xor_drag_outline(&mut self) {
+        let (x, y) = self.map_overlay_home_pos;
+        gfx::vga_xor_rect_outline(self, x, y, 0xaa, 0x6c);
+        // DOS XORs the VGA screen directly; publish the port's screen.
+        if !self.front_buffer_is_fb1() {
+            self.send_frame_to_display();
+        }
+    }
 
-    // = seg000:59c1 map_main_mouse_drag — move a dragged popup panel. Panel
-    // dragging is not ported yet.
-    pub(crate) fn dune_map_mouse_drag(&mut self, _dx: i16, _dy: i16) {}
+    // = seg000:599f map_main_mouse_release — the full-map view's LMB release
+    // handler: end a popup panel drag (map_overlay_drag_armed, consumed). A
+    // panel that did not move just gets its outline erased
+    // (map_overlay_xor_drag_outline); otherwise clear map_popup_ptr and
+    // recompose the view with the panel at its new home
+    // (map_refresh_and_restore_overlay_nav).
+    pub(crate) fn dune_map_mouse_release(&mut self) {
+        // = seg000:599f xor al,al; xchg al,[map_overlay_drag_armed]; jz ret.
+        if !std::mem::take(&mut self.map_overlay_drag_armed) {
+            return;
+        }
+        // = seg000:59a9..59b6 get_overlay_panel_origin == data_011c1/011c3
+        //   → jmp map_overlay_xor_drag_outline.
+        if self.get_overlay_panel_origin() == self.map_overlay_home_pos {
+            self.map_overlay_xor_drag_outline();
+            return;
+        }
+        // = seg000:59b8 map_popup_ptr = 0; jmp
+        //   map_refresh_and_restore_overlay_nav.
+        self.map_popup = MapPanelRef::None;
+        self.map_refresh_main_view_restoring_overlay_nav();
+    }
+
+    // = seg000:59c1 map_main_mouse_drag — the full-map view's LMB drag
+    // handler: while a popup panel drag is armed and the cursor is above y
+    // 152, move the drag outline by the mouse delta (di = dx, cx = dy),
+    // clamping the panel origin to x < 140 and y < 24 steps past 5.
+    pub(crate) fn dune_map_mouse_drag(&mut self, dx: i16, dy: i16) {
+        // = seg000:59c1 cmp [map_overlay_drag_armed],0; jz ret.
+        if !self.map_overlay_drag_armed {
+            return;
+        }
+        // = seg000:59c8 cmp bx,98h; jnb map_main_mouse_release.
+        if self.mouse_pos_y >= 0x98 {
+            self.dune_map_mouse_release();
+            return;
+        }
+        // = seg000:59ce erase the outline at the old home.
+        self.map_overlay_xor_drag_outline();
+        // = seg000:59d1..59fd the clamped steps: ax = home + delta - 5; an
+        //   ax outside 0..limit (unsigned) pulls the delta back to 5 when
+        //   negative, else to 5 + limit.
+        let clamp_step = |home: i16, delta: i16, limit: i16| -> i16 {
+            let mut d = delta;
+            let ax = home.wrapping_add(delta).wrapping_sub(5);
+            if (ax as u16) >= limit as u16 {
+                if ax < 0 {
+                    d -= ax;
+                } else {
+                    d -= ax - limit;
+                }
+            }
+            home.wrapping_add(d)
+        };
+        let (x, y) = self.map_overlay_home_pos;
+        self.map_overlay_home_pos = (clamp_step(x, dx, 0x8c), clamp_step(y, dy, 0x18));
+        // = seg000:5a00 jmp map_overlay_xor_drag_outline — draw at the new home.
+        self.map_overlay_xor_drag_outline();
+    }
 
     // = seg000:0f66 nullsub_00f66 — the rmb_release slot.
     pub(crate) fn dune_map_mouse_noop(&mut self) {}

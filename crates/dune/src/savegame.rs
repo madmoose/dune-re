@@ -534,9 +534,9 @@ impl GameState {
         // = seg001:11bf book_bookmark_ptr.
         w16(b, 0x11bf, self.book_bookmark_ptr);
         // = seg001:11c1/11c3 data_011c1/011c3 — the spice-density overlay's
-        //   home panel origin (75, 15), constants in the port.
-        w16(b, 0x11c1, 75);
-        w16(b, 0x11c3, 15);
+        //   home panel origin.
+        w16(b, 0x11c1, self.map_overlay_home_pos.0 as u16);
+        w16(b, 0x11c3, self.map_overlay_home_pos.1 as u16);
         // = seg001:11d0 troop_icon_panel_heights (88, 60, 30), constants in
         //   the port (troop_map_screen HEIGHTS).
         b[0x11d0..0x11d3].copy_from_slice(&[0x58, 0x3c, 0x1e]);
@@ -845,6 +845,8 @@ impl GameState {
             .copy_from_slice(&b[0x116a..0x1170]);
         // = seg001:11bf book_bookmark_ptr.
         self.book_bookmark_ptr = r16(b, 0x11bf);
+        // = seg001:11c1/11c3 the overlay's home panel origin.
+        self.map_overlay_home_pos = (r16(b, 0x11c1) as i16, r16(b, 0x11c3) as i16);
         self.location_visibility_distance = r16(b, 0x1176);
         self.number_of_rallied_troops_for_leto_killed = r8(b, 0x1178);
 

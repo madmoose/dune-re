@@ -1638,6 +1638,13 @@ pub struct GameState {
     // parks it opposite itself (seg000:7a15) for the in-place entry.
     pub(crate) map_overlay_panel_pos: (i16, i16),
     pub(crate) map_overlay_panel_rect: Rect,
+    // = seg001:11c1/11c3 data_011c1/data_011c3 — the spice-density overlay's
+    // home panel origin: (75, 15) at start, moved by the panel drag
+    // (map_main_mouse_drag) and persisted in the save game.
+    pub(crate) map_overlay_home_pos: (i16, i16),
+    // = seg001:4723 map_overlay_drag_armed — nonzero while a click on the
+    // overlay panel title strip is dragging the panel.
+    pub(crate) map_overlay_drag_armed: bool,
 
     // = seg001:4718 data_04718 / seg001:4738 data_04738 — the destination
     // pick's working copy of the prospector queue and its entry count: the
@@ -2873,6 +2880,8 @@ impl GameState {
             map_equipment_column_x_ranges: [(0, 0); 7],
             map_equipment_troop_column_x_ranges: [(0, 0); 7],
             map_overlay_panel_pos: (0, 0),
+            map_overlay_home_pos: (75, 15),
+            map_overlay_drag_armed: false,
             map_overlay_panel_rect: Rect::default(),
             prospector_pick_queue: [0; 4],
             prospector_pick_count: 0,

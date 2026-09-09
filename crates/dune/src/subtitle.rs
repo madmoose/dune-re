@@ -696,10 +696,13 @@ impl GameState {
                 }
             }
             self.set_fb1_as_active_framebuffer();
-            // = the chani_egui trace hook at seg000:9025 (the strip present
-            // blit, logged once per placement): the DOS pen_y at present
-            // time equals the strip height (pad_top + lines*10 = the
-            // relocated rect's height), dest_y = 0x92 - pen_y.
+            // = seg000:9025 subtitle_blit_strip_to_fb [not needed] — DOS
+            // blits the strip buffer into the framebuffer at y = 0x92 -
+            // pen_y at present time (seg000:97c5); the port relocated the
+            // rect there up front and composited the strip into fb1 above.
+            // The chani_egui trace hook logs that blit once per placement:
+            // the DOS pen_y at present time equals the strip height (pad_top
+            // + lines*10 = the relocated rect's height).
             if self.log_subtitle {
                 let pen_y = (rect.y1 - rect.y0) as u16;
                 println!("SUB strip blit pen_y={} -> dest_y={}", pen_y, 0x92 - pen_y);
