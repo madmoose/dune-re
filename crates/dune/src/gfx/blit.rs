@@ -7,6 +7,8 @@
 //! `Sprite`.
 //!
 //! = segvga:0d85 vga_draw_scaled_sprite — the scaled path (`draw_4bpp_scaled`).
+//! = segvga:0de0 vga_draw_scaled_sprite_rows — its row loop, past the
+//! self-modified sprite_src_stride immediate at segvga:0dde.
 //!
 //! The eight row kernels vga_blit_clipped jumps into through `jmp bp`
 //! (segvga:14f3 / 1580), one per source format and flip combination:
