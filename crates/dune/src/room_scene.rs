@@ -1305,6 +1305,9 @@ impl GameState {
     // selected by `location_and_room` from the loaded .SAL (open_sal_resource)
     // into the active framebuffer. The callers pass the current scene words;
     // the intro's draw_room_for_scene opens the SAL first.
+    // = seg000:37b5 draw_room_scene_body — the scene-draw half (the dialogue
+    //   zoom re-enters here): the clear, the backdrop dispatch, draw_SAL and
+    //   the parked-orni pass.
     //
     // The normal draw_SAL path (room byte < 0x80) is modelled, including the
     // clear_game_area it runs first (see draw_sal_room) and the standing-person

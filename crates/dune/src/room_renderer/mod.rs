@@ -157,6 +157,12 @@ impl RoomRenderer {
         // }
     }
 
+    // = seg000:3b80 sal_draw_chunk_loop — draw_SAL's chunk interpreter: the
+    // room's parts in order — sprites, polygons and lines through draw_part,
+    // and each standing-person slot through sal_draw_character_entry, which
+    // pops the next position marker (DOS reads them back-to-front:
+    // sal_position_marker_sp points at the last slot and steps down per
+    // character entry).
     pub fn draw(
         &self,
         options: &DrawOptions,
@@ -169,30 +175,10 @@ impl RoomRenderer {
             return Ok(());
         };
 
-        // = seg000:3b59 draw_SAL: each `Part::Character` entry pops the next
-        // position marker. DOS reads them back-to-front — sal_marker_sp points
-        // at the last slot and is decremented per character entry.
         let mut marker_idx = self.position_markers.len() as isize - 1;
         for part in room.parts() {
             if let Part::Character(character) = part {
-                // = seg000:3d12 sal_draw_character_entry (loc_03d12): `test room_render_flags,
-                // 81h; jnz` — when bit 0 or 7 is set the whole entry is skipped,
-                // not even consuming a position marker (the dialogue-zoom
-                // re-render sets bit 7 so no standing person is drawn).
-                if !options.draw_characters {
-                    continue;
-                }
-                // Consume one marker; an empty slot (0xff) draws nobody.
-                let id = if marker_idx >= 0 {
-                    let id = self.position_markers[marker_idx as usize];
-                    marker_idx -= 1;
-                    id
-                } else {
-                    -1
-                };
-                if id != -1 {
-                    self.draw_character(character, id, frame)?;
-                }
+                self.sal_draw_character_entry(options, character, &mut marker_idx, frame)?;
                 continue;
             }
             if Self::should_draw(options, part) {
@@ -200,6 +186,37 @@ impl RoomRenderer {
             }
         }
 
+        Ok(())
+    }
+
+    // = seg000:3d12 sal_draw_character_entry — the standing-person slot: with
+    // room_render_flags bit 0 or 7 set the entry is skipped without consuming
+    // a marker (the dialogue-zoom re-render sets bit 7 so no standing person
+    // is drawn); otherwise pop the next position marker and, unless the slot
+    // is empty (0xff), draw that person (sal_draw_character).
+    fn sal_draw_character_entry(
+        &self,
+        options: &DrawOptions,
+        character: &Character,
+        marker_idx: &mut isize,
+        frame: &mut FrameBuffer,
+    ) -> Result<(), std::io::Error> {
+        // = seg000:3d12/3d17 test [room_render_flags],81h; jnz.
+        if !options.draw_characters {
+            return Ok(());
+        }
+        // = seg000:3d19..3d24 di = [sal_position_marker_sp]; dec; cmp [di],0ffh.
+        let id = if *marker_idx >= 0 {
+            let id = self.position_markers[*marker_idx as usize];
+            *marker_idx -= 1;
+            id
+        } else {
+            -1
+        };
+        if id != -1 {
+            // = seg000:3d26/3d28 al = [di]; call sal_draw_character.
+            self.draw_character(character, id, frame)?;
+        }
         Ok(())
     }
 
