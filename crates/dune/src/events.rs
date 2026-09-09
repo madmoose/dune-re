@@ -58,15 +58,15 @@ impl GameState {
     }
 
     pub(crate) fn run_events_for_current_time_period(&mut self) {
-        println!(
-            "run_events_for_current_time_period: new_time_period_pending = {}",
-            self.new_time_period_pending
-        );
         // = seg000:1b23 cmp [new_hour_flag],0; jz loc_01b0c — only a newly-
         //   entered time period runs events.
         if self.new_time_period_pending == 0 {
             return;
         }
+        println!(
+            "run_events_for_current_time_period: new_time_period_pending = {}",
+            self.new_time_period_pending
+        );
         // = seg000:1b2a new_hour_flag = 0 — consume the flag.
         self.new_time_period_pending = 0;
         // = seg000:1b2f..1b3d the desert-exhaustion countdown: decrement; a
