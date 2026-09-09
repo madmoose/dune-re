@@ -394,6 +394,11 @@ impl GameState {
         w8(b, 0x00ea, self.data_000ea as u8);
         w8(b, 0x00ed, self.data_000ed);
         w16(b, 0x00ee, self.data_000ee);
+        w16(
+            b,
+            0x00f2,
+            self.for_condit_chani_prisoner_location_area_and_name_ds_f2,
+        );
         w8(b, 0x00f4, self.desert_exhaustion_counter);
         w8(
             b,
@@ -738,6 +743,7 @@ impl GameState {
         self.data_000ea = r8(b, 0x00ea) as i8;
         self.data_000ed = r8(b, 0x00ed);
         self.data_000ee = r16(b, 0x00ee);
+        self.for_condit_chani_prisoner_location_area_and_name_ds_f2 = r16(b, 0x00f2);
         self.desert_exhaustion_counter = r8(b, 0x00f4);
         self.for_condit_jessica_commented_on_exhaustion_ds_f5 = r8(b, 0x00f5);
         self.for_condit_paul_next_to_harvester_ds_f6 = r8(b, 0x00f6);

@@ -4310,18 +4310,34 @@ impl GameState {
         if self.location_is_atreides(li) {
             return false;
         }
-        // = seg000:628c location_do_accumulation_on_troops (05098): dx counts
-        //   the occupation-6 non-Harkonnen troops.
-        let mut dx = 0u16;
+        // = seg000:628c call location_count_harkonnen_and_attacking_troops —
+        //   dx = the attacking troops.
+        let (_, dx) = self.location_count_harkonnen_and_attacking_troops(li);
+        dx != 0
+    }
+
+    // = seg000:5098 location_count_harkonnen_and_attacking_troops / seg000:5082 callback_troop_count_Harkonnen_xor_attacking_troops_05082
+    // — walk the location's troop chain: (cx, dx) = (the Harkonnen troops,
+    // bitfield_10 bit 7; the attacking troops, occupation 6 with bit 5 clear).
+    pub(crate) fn location_count_harkonnen_and_attacking_troops(
+        &mut self,
+        li: usize,
+    ) -> (u16, u16) {
+        let (mut cx, mut dx) = (0u16, 0u16);
         self.for_each_troop_in_location(li, |s, ti| {
             let t = &s.troops[ti];
-            // = seg000:5082 callback: skip occupation bit 5; Harkonnen
-            //   (bitfield_10 bit 7) goes to cx; occupation 6 -> dx.
-            if t.occupation & 0x20 == 0 && t.bitfield_10 & 0x80 == 0 && t.occupation == 6 {
+            // = seg000:5082..5092 test occupation,20h; test bitfield_10,80h;
+            //   cmp occupation,6.
+            if t.occupation & 0x20 != 0 {
+                return;
+            }
+            if t.bitfield_10 & 0x80 != 0 {
+                cx += 1;
+            } else if t.occupation == 6 {
                 dx += 1;
             }
         });
-        dx != 0
+        (cx, dx)
     }
 
     // = seg000:60f8 location_060f8 — the location's battle gauge (0..0xff):

@@ -232,14 +232,7 @@ impl GameState {
             PHASE_58_KYNES_MET => self.phase_callback_58_met_liet_kynes(),
             PHASE_5C_BOTANICAL_STATION => self.phase_callback_5c(),
             PHASE_60_FIND_CHANI => self.phase_callback_60_go_find_chani(),
-            PHASE_64_ENDGAME => {
-                // = seg000:11e6 -> 1f13 callback_game_phase_change_64_main_
-                //   code — scan locations for the best-provisioned Atreides
-                //   sietch (location_do_accumulation_on_troops, troop system)
-                //   and station Chani there, recording it as a COMM sighting
-                //   (0x2b0a). TODO: port with the troop system.
-                println!("phase_callback_64: unported (needs the troop system)");
-            }
+            PHASE_64_ENDGAME => self.phase_callback_64_station_chani_prisoner(),
             p if p > PHASE_6C_FINAL_ATTACK => {}
             // A phase that is not a multiple of 4 would make DOS read a
             // misaligned word out of the callback table and call garbage; no
@@ -538,6 +531,47 @@ impl GameState {
     // stationed in the Arrakeen (Harkonnen) palace, room 2. Also called
     // directly by the cure step (chani_troop_cure_progress_step, seg000:1f0d)
     // once nothing is left ill, hence the redundant phase/counter writes.
+    // = seg000:1f13 callback_game_phase_change_64_main_code (the target of the
+    // seg000:11e6 callback_game_phase_change_64 stub) — ENDGAME: pick the
+    // southernmost Harkonnen-held sietch with no attacking troop, move Chani
+    // (room_persons[7]) into its room 3, record it as the CONDIT prisoner
+    // location and post the COMM sighting that starts the rescue.
+    pub(crate) fn phase_callback_64_station_chani_prisoner(&mut self) {
+        // = seg000:1f13..1f3d di = locations; bx = -100; walk while
+        //   first_name < 8, keeping the largest map_y.
+        let mut best: Option<usize> = None;
+        let mut best_y: i16 = -100;
+        let mut li = 0;
+        while li < self.locations.len() && self.locations[li].first_name < 8 {
+            let map_y = self.locations[li].map_y;
+            // = seg000:1f19 cmp ax,bx; jle — not further south than the best.
+            // = seg000:1f20 location_is_Atreides; jb — carry = friendly: skip.
+            // = seg000:1f25 location_count_harkonnen_and_attacking_troops;
+            //   or dx,dx; jnz — an attacking troop there: skip.
+            if map_y > best_y
+                && !self.location_is_atreides(li)
+                && self.location_count_harkonnen_and_attacking_troops(li).1 == 0
+            {
+                best_y = map_y;
+                best = Some(li);
+            }
+            li += 1;
+        }
+        // = seg000:1f3f..1f44 none found: locations[0].
+        let li = best.unwrap_or(0);
+        // = seg000:1f49..1f52 location_entry_room_dx_bx; dl = 3; Chani's
+        //   room_persons entry gets the codes.
+        let (dx, bx) = self.location_entry_room_codes(li);
+        self.room_persons[7].location_and_room = (dx & 0xff00) | 3;
+        self.room_persons[7].location_appearance = bx;
+        // = seg000:1f56..1f5b ds:f2 = (first_name << 8) | last_name.
+        let loc = self.locations[li];
+        self.for_condit_chani_prisoner_location_area_and_name_ds_f2 =
+            ((loc.first_name as u16) << 8) | loc.last_name as u16;
+        // = seg000:1f5e jmp comm_add_person_sighting(2b0ah).
+        self.comm_add_person_sighting(0x2b0a);
+    }
+
     pub(crate) fn phase_callback_60_go_find_chani(&mut self) {
         // = seg000:11cb/11d0 ds:ff = 0; game_phase = 0x60.
         self.days_since_last_game_phase_change = 0;

@@ -775,6 +775,11 @@ pub struct GameState {
     // dialogue reads it.
     pub(crate) for_condit_jessica_commented_on_exhaustion_ds_f5: u8,
 
+    // = seg001:00f2 for_condit_Chani_prisoner_location_area_and_name_ds_f2 —
+    // (first_name << 8) | last_name of the sietch Chani is held prisoner in,
+    // set by the phase-0x64 callback.
+    pub(crate) for_condit_chani_prisoner_location_area_and_name_ds_f2: u16,
+
     // = seg001:00f6 for_condit_Paul_next_to_harvester_ds_f6 — set by
     // desert_harvester_check while the player stands at a location whose
     // spice-mining troop has a working harvester.
@@ -2569,6 +2574,7 @@ impl GameState {
             desert_exhaustion_counter: 0,
             for_condit_jessica_commented_on_exhaustion_ds_f5: 0,
             for_condit_paul_next_to_harvester_ds_f6: 0,
+            for_condit_chani_prisoner_location_area_and_name_ds_f2: 0,
             number_of_locations_with_illness: 0,
             chani_troop_illness_cure_progress: 0,
             latest_location_with_illness: 0,
