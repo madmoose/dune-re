@@ -349,7 +349,7 @@ impl GameState {
         // func. The DOS loop also handles colour-change opcodes (0x01) and a
         // colour-swap (0x06) we don't see in the WORMSUIT narration entries.
         for line in lines {
-            let w = measure_line(&self.font, &line);
+            let w = measure_word_width(&self.font, &line);
             let x = if w <= RECT_W { (RECT_W - w) / 2 } else { 0 };
             self.font_set_draw_position(x, y);
             for &c in &line {
@@ -682,10 +682,11 @@ impl GameState {
     }
 }
 
-// = seg000:8eda loc_08eda inner glyph-width loop. Sum tall-font glyph widths
-// for one rendered byte sequence; bytes with the high bit set use the @ glyph
-// (= seg000:d1c5 in font_draw_string), and 0xff stops the scan.
-fn measure_line(font: &crate::Font, line: &[u8]) -> u16 {
+// = seg000:8ed3 measure_word_width — sum the tall-font glyph widths of one
+// rendered byte sequence (cx = 0, bx = the width table, then the loop).
+// = seg000:8eda measure_word_width_loop — bytes with the high bit set use
+//   the @ glyph (= seg000:d1c5 in font_draw_string), and 0xff stops the scan.
+fn measure_word_width(font: &crate::Font, line: &[u8]) -> u16 {
     let mut w: u16 = 0;
     for &b in line {
         if b == 0xff {

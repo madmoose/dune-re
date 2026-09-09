@@ -2049,6 +2049,37 @@ impl GameState {
         self.for_condit_gurney_stilgar_chani_at_location_ds_f7 |= 1u8 << (p.person_index & 7);
     }
 
+    // = seg000:32c7 troop_condit_stage_ralliement_clocks — the ralliement
+    // clocks for CONDIT: ds:42 = the periods since ralliement, ds:41 = the
+    // days, and subst_id_05 = the placeholder 0x85 duration phrase: "but our
+    // job is finished" (0x74) for occupation bit 4, else keyed on the periods
+    // — "for a very short time" (< 3), "for a few hours" (< 0x10), "for 1
+    // day" (< 0x20), else "for 12 days" (0x73) with the day count patched
+    // over its digits in the resource.
+    fn troop_condit_stage_ralliement_clocks(&mut self, ti: usize) {
+        let t = self.troops[ti];
+        // = seg000:32c7..32d6 ds:42 = game_time - time_period_of_ralliement;
+        //   ds:41 = ds:42 >> 4.
+        let periods = self.game_time.wrapping_sub(t.time_period_of_ralliement);
+        self.troop_condit.time_periods_since_ralliement = periods;
+        self.troop_condit.game_days_since_ralliement = (periods >> 4) as u8;
+        // = seg000:32d9..330c subst_id_05.
+        self.string_subst_id_table[5] = if t.occupation & 0x10 != 0 {
+            0x74
+        } else if periods < 3 {
+            0x70
+        } else if periods < 0x10 {
+            0x71
+        } else if periods < 0x20 {
+            0x72
+        } else {
+            // = seg000:32f7..330a get_phrase_or_command_string_si + the
+            //   number replacement on the string itself.
+            self.command_string_replace_number(0x73, periods >> 4);
+            0x73
+        };
+    }
+
     // = seg000:34a5 prepare_location_data_for_condit_sub_034a5 — clear the
     // ds:60 tally, run callback_troop_tally_for_condit_ds_60 over every troop
     // in or traveling to the location (call_callback_on_all_troops_in_or_
@@ -2267,32 +2298,8 @@ impl GameState {
         //   Mining", ".."; map_draw_troop_info_panel_content bumps it by 0xc
         //   to the 0x24.. panel wording at seg000:78f7).
         self.string_subst_id_table[4] = (t.occupation & 0x0f) as u16 + 0x18;
-        // = seg000:3217 call sub_032c7 — the ralliement clocks.
-        // = seg000:32c7..32d6 ds:42 = game_time - time_period_of_ralliement;
-        //   ds:41 = ds:42 >> 4.
-        let periods = self.game_time.wrapping_sub(t.time_period_of_ralliement);
-        self.troop_condit.time_periods_since_ralliement = periods;
-        self.troop_condit.game_days_since_ralliement = (periods >> 4) as u8;
-        // = seg000:32d9..330c subst_id_05 — the placeholder 0x85 duration
-        //   phrase: "but our job is finished" (0x74) for occupation bit 4,
-        //   else keyed on the periods since ralliement — "for a very short
-        //   time" (< 3), "for a few hours" (< 0x10), "for 1 day" (< 0x20),
-        //   else "for 12 days" (0x73) with the day count patched over its
-        //   digits in the resource.
-        self.string_subst_id_table[5] = if t.occupation & 0x10 != 0 {
-            0x74
-        } else if periods < 3 {
-            0x70
-        } else if periods < 0x10 {
-            0x71
-        } else if periods < 0x20 {
-            0x72
-        } else {
-            // = seg000:32f7..330a get_phrase_or_command_string_si + the
-            //   number replacement on the string itself.
-            self.command_string_replace_number(0x73, periods >> 4);
-            0x73
-        };
+        // = seg000:3217 call troop_condit_stage_ralliement_clocks.
+        self.troop_condit_stage_ralliement_clocks(ti);
         // = seg000:321a/321d ds:48 = sub_0329d (a mining troop's current
         //   rate; it may clear bitfield_10 bits 2..3 and update harvest_rate).
         self.troop_condit.ds_48 = self.troop_condit_stage_harvest_rates(ti);

@@ -1719,7 +1719,6 @@ impl GameState {
             head.rect.1 - ay + boxr.y0 + yoff,
         );
         let lipsync = &head.lipsync;
-        let sheet = &head.sheet;
         let Some(animation) = lipsync.animations.get(anim) else {
             return;
         };
@@ -1730,15 +1729,7 @@ impl GameState {
             let Some(group) = lipsync.image_groups.get(group_idx as usize) else {
                 continue;
             };
-            for image in group {
-                // = seg000:9dcf: the sprite index is id - 1.
-                if let Some(sprite) = sheet.get_sprite(head.sprite_id(image.id as u16 - 1)) {
-                    let _ = sprite_blitter(sprite, &mut self.screen)
-                        .at(image.x as i16 + dx, image.y as i16 + dy)
-                        .clip_rect(clip)
-                        .draw();
-                }
-            }
+            draw_head_image_group_in_box(head, &mut self.screen, group, dx, dy, clip);
         }
     }
 
@@ -1783,31 +1774,8 @@ impl GameState {
         let cur = flatten_frame(&head.lipsync, anim, frame_idx);
 
         // = seg000:9c2d loc_09c2d: union the bounding boxes of the images in the symmetric
-        // difference of the two frames (loc_09c54 walks each list looking for an
-        // exact id+x+y match in the other; an unmatched image is "changed" and
-        // expands the box via loc_09cc6). Seeded inverted — x0,y0 at the max
-        // corner, x1,y1 at the min — so an x0 still at 319 flags "no change".
-        let mut x0 = 319;
-        let mut y0 = 199;
-        let mut x1 = 0;
-        let mut y1 = 0;
-        for &(id, x, y) in cur
-            .iter()
-            .filter(|i| !head.prev_images.contains(i))
-            .chain(head.prev_images.iter().filter(|i| !cur.contains(i)))
-        {
-            // = seg000:9cc6 loc_09cc6: the image spans [left, left+w) × [top, top+h), with
-            // the sprite header's width (&1ffh) and height (low byte).
-            let Some(sprite) = head.sheet.get_sprite(head.sprite_id(id as u16 - 1)) else {
-                continue;
-            };
-            let left = x as i16 + rx0;
-            let top = y as i16 + ry0 + yoff;
-            x0 = x0.min(left);
-            y0 = y0.min(top);
-            x1 = x1.max(left + sprite.width() as i16);
-            y1 = y1.max(top + sprite.height() as i16);
-        }
+        // difference of the two frames (head_diff_frames).
+        let (mut x0, y0, x1, mut y1) = head_diff_frames(head, &cur, rx0, ry0, yoff);
 
         // = seg000:9c80..9ca4 — while the voice plays (is_voc_pcm_playing),
         // the diff box may not reach into the mouth box: its bottom clamps to
@@ -1894,6 +1862,82 @@ impl GameState {
 // = seg000:9bee setup_non_lip_sync_data_structure: flatten one (anim, frame)
 // pose into the [460ah] image list the incremental redraw diffs — every image
 // of every image group the frame references, as (sprite id, x, y).
+// = seg000:9d94 draw_head_image_group_in_box — draw one image group of a
+// head frame into the screen buffer at the popup box: each image at its
+// offset plus (dx, dy), clipped to the box.
+fn draw_head_image_group_in_box(
+    head: &TalkingHead,
+    screen: &mut crate::FrameBuffer,
+    group: &[crate::lipsync::Image],
+    dx: i16,
+    dy: i16,
+    clip: Rect,
+) {
+    for image in group {
+        // = seg000:9dcf: the sprite index is id - 1.
+        if let Some(sprite) = head.sheet.get_sprite(head.sprite_id(image.id as u16 - 1)) {
+            let _ = sprite_blitter(sprite, screen)
+                .at(image.x as i16 + dx, image.y as i16 + dy)
+                .clip_rect(clip)
+                .draw();
+        }
+    }
+}
+
+// = seg000:9c54 head_diff_frames — walk the new frame's image list and the
+// previous one looking for an exact id+x+y match in the other; an unmatched
+// image is "changed" and expands the box (head_image_bounds). Seeded
+// inverted — x0,y0 at the max corner, x1,y1 at the min — so an x0 still at
+// 319 flags "no change".
+fn head_diff_frames(
+    head: &TalkingHead,
+    cur: &[(u8, u8, u8)],
+    rx0: i16,
+    ry0: i16,
+    yoff: i16,
+) -> (i16, i16, i16, i16) {
+    let mut x0 = 319;
+    let mut y0 = 199;
+    let mut x1 = 0;
+    let mut y1 = 0;
+    for &(id, x, y) in cur
+        .iter()
+        .filter(|i| !head.prev_images.contains(i))
+        .chain(head.prev_images.iter().filter(|i| !cur.contains(i)))
+    {
+        let Some(r) = head_image_bounds(head, id, x, y, rx0, ry0, yoff) else {
+            continue;
+        };
+        x0 = x0.min(r.x0);
+        y0 = y0.min(r.y0);
+        x1 = x1.max(r.x1);
+        y1 = y1.max(r.y1);
+    }
+    (x0, y0, x1, y1)
+}
+
+// = seg000:9cc6 head_image_bounds — the image spans [left, left+w) x [top,
+// top+h), with the sprite header's width (&1ffh) and height (low byte).
+fn head_image_bounds(
+    head: &TalkingHead,
+    id: u8,
+    x: u8,
+    y: u8,
+    rx0: i16,
+    ry0: i16,
+    yoff: i16,
+) -> Option<Rect> {
+    let sprite = head.sheet.get_sprite(head.sprite_id(id as u16 - 1))?;
+    let left = x as i16 + rx0;
+    let top = y as i16 + ry0 + yoff;
+    Some(Rect {
+        x0: left,
+        y0: top,
+        x1: left + sprite.width() as i16,
+        y1: top + sprite.height() as i16,
+    })
+}
+
 fn flatten_frame(lipsync: &Lipsync, anim: usize, frame_idx: usize) -> Vec<(u8, u8, u8)> {
     let mut images = Vec::new();
     let Some(animation) = lipsync.animations.get(anim) else {

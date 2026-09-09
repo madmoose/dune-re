@@ -507,12 +507,13 @@ impl GameState {
         }
     }
 
-    // = the mixer panel's drag handler (cs:[si+0ah] = loc_0a5df), dispatched each
-    // pass the LMB is held without an edge and the pointer moved, with the
-    // (dx, dy) motion delta. It re-grabs the handle at the *previous* frame's
-    // position (current minus the delta) and nudges its value.
+    // = seg000:a5df mixer_panel_drag — the mixer panel's drag handler
+    // (settings_ui_mouse_handlers [si+0ah]), dispatched each pass the LMB is
+    // held without an edge and the pointer moved, with the (dx, dy) motion
+    // delta. It re-grabs the handle at the *previous* frame's position
+    // (current minus the delta) and nudges its value.
     pub(crate) fn mixer_panel_drag(&mut self, dx: i16, dy: i16) {
-        // = seg000:a5df settings_ui_sub_global_offset — current panel-local pointer.
+        // = seg000:a5df call settings_ui_sub_global_offset — current panel-local pointer.
         let lx = self.mouse_pos_x as i16 - SETTINGS_RECT.x0;
         let ly = self.mouse_pos_y as i16 - SETTINGS_RECT.y0;
         // = seg000:a5e2 sub bx,cx — re-base Y to the previous frame's position.

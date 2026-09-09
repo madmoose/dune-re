@@ -1331,11 +1331,9 @@ impl GameState {
                 3 => self.dialogue_event_0f_duncan_idaho(),
                 _ => {}
             },
-            // = seg000:a244/a248 callback_event_dialogue_line_04/05_
-            //   acceptrefuseargue — Duncan's shipment offer (al = 0) / the
-            //   smuggler's bill (al = 1).
-            0x04 => self.dialogue_event_04_05_accept_refuse_argue(0),
-            0x05 => self.dialogue_event_04_05_accept_refuse_argue(1),
+            // = seg000:a244 / a248 the accept/refuse/argue entries.
+            0x04 => self.callback_event_dialogue_line_04_acceptrefuseargue(),
+            0x05 => self.callback_event_dialogue_line_05_acceptrefuseargue(),
             // = seg000:a125 callback_event_dialogue_line_08_speaker_
             //   dependent_effect_1.
             0x08 => self.dialogue_event_08_speaker_dependent(),
@@ -1410,6 +1408,18 @@ impl GameState {
         let yoff = self.y_offset as i16;
         let r = DIALOGUE_MAP_INSET_FRAME_RECT;
         self.gfx_copy_rect_fb1_to_fb2(rect(r.x0, r.y0 + yoff, r.x1, r.y1 + yoff));
+    }
+
+    // = seg000:a244 callback_event_dialogue_line_04_acceptrefuseargue —
+    // Duncan's shipment offer: al = 0 into the common code.
+    fn callback_event_dialogue_line_04_acceptrefuseargue(&mut self) {
+        self.dialogue_event_04_05_accept_refuse_argue(0);
+    }
+
+    // = seg000:a248 callback_event_dialogue_line_05_acceptrefuseargue — the
+    // smuggler's bill: al = 1 into the common code.
+    fn callback_event_dialogue_line_05_acceptrefuseargue(&mut self) {
+        self.dialogue_event_04_05_accept_refuse_argue(1);
     }
 
     // = seg000:a24a callback_event_dialogue_line_04_05_acceptrefuseargue_

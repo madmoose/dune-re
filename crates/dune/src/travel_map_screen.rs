@@ -727,39 +727,54 @@ impl GameState {
         //   a northern walk (negated tablat offsets, sub bp,8) and a southern
         //   walk (add bp,8); the port's Tablat::offset/len handle both sides of
         //   the y = latitude + 98 index.
-        let tablat = self.tablat.as_ref().expect("TABLAT.BIN not loaded");
         let mut rows = vec![0u8; 0xc8 * height];
         for (i, dst_row) in rows.chunks_exact_mut(0xc8).enumerate() {
             let y = (top_lat + i as i16 + 98) as u16;
-            let row_off = tablat.offset(y) as usize;
-            let row_len = tablat.len(y) as usize;
-            // = seg000:b7df..b7e6 map_copy_window_row: the longitude cell =
-            //   high word of longitude * row byte length (truncating — unlike
-            //   map_position_to_offset's rounding). DOS also caches it in the
-            //   tablat entry's +6 scratch word; its sole reader,
-            //   map_screen_to_position (seg000:b62c), recomputes the same
-            //   value in the port, so the cache itself is not modelled.
-            let cell = ((row_len as u32 * lng as u32) >> 16) as usize;
-            // = seg000:b7e8..b7f9 rows shorter than the window are centred.
-            let (dst, eff_w) = if row_len < width {
-                (&mut dst_row[(width - row_len) / 2..], row_len)
-            } else {
-                (&mut dst_row[..], width)
-            };
-            // = seg000:b7fb..b805 the window's left edge cell, wrapped.
-            let left = (cell + row_len - eff_w / 2) % row_len;
-            // = seg000:b807..b81d copy, wrapping around the row end.
-            let avail = row_len - left;
-            let bytes = source.unwrap_or(&self.map);
-            let src = &bytes[row_off..row_off + row_len];
-            if avail >= eff_w {
-                dst[..eff_w].copy_from_slice(&src[left..left + eff_w]);
-            } else {
-                dst[..avail].copy_from_slice(&src[left..]);
-                dst[avail..eff_w].copy_from_slice(&src[..eff_w - avail]);
-            }
+            // = seg000:b7d2 call map_copy_window_row per window row.
+            self.map_copy_window_row(dst_row, y, lng, width, source);
         }
         (rows, width, height, top_lat)
+    }
+
+    // = seg000:b7d2 map_copy_window_row — copy the window's cells of map row
+    // `y` (a tablat latitude) into `dst_row`: the longitude cell is the high
+    // word of longitude * row byte length (truncating — unlike
+    // map_position_to_offset's rounding); rows shorter than the window are
+    // centred; the copy wraps around the row end. DOS also caches the cell
+    // in the tablat entry's +6 scratch word; its sole reader,
+    // map_screen_to_position (seg000:b62c), recomputes the same value in the
+    // port, so the cache itself is not modelled.
+    fn map_copy_window_row(
+        &self,
+        dst_row: &mut [u8],
+        y: u16,
+        lng: u16,
+        width: usize,
+        source: Option<&[u8]>,
+    ) {
+        let tablat = self.tablat.as_ref().expect("TABLAT.BIN not loaded");
+        let row_off = tablat.offset(y) as usize;
+        let row_len = tablat.len(y) as usize;
+        // = seg000:b7df..b7e6 the longitude cell.
+        let cell = ((row_len as u32 * lng as u32) >> 16) as usize;
+        // = seg000:b7e8..b7f9 rows shorter than the window are centred.
+        let (dst, eff_w) = if row_len < width {
+            (&mut dst_row[(width - row_len) / 2..], row_len)
+        } else {
+            (&mut dst_row[..], width)
+        };
+        // = seg000:b7fb..b805 the window's left edge cell, wrapped.
+        let left = (cell + row_len - eff_w / 2) % row_len;
+        // = seg000:b807..b81d copy, wrapping around the row end.
+        let avail = row_len - left;
+        let bytes = source.unwrap_or(&self.map);
+        let src = &bytes[row_off..row_off + row_len];
+        if avail >= eff_w {
+            dst[..eff_w].copy_from_slice(&src[left..left + eff_w]);
+        } else {
+            dst[..avail].copy_from_slice(&src[left..]);
+            dst[avail..eff_w].copy_from_slice(&src[..eff_w - avail]);
+        }
     }
 
     // = seg000:b647 map_position_to_screen — project a map position (x =

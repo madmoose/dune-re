@@ -3265,7 +3265,9 @@ impl GameState {
         self.run_game_phase_triggers();
     }
 
-    // = seg000:d815 game_loop — the in-game per-frame loop.
+    // = seg000:003a exit_to_dos — leave the game: the mouse reset, the memory
+    // driver, the MIDI and PCM resets, the text mode and the DOS return; the
+    // port silences the audio and exits the process.
     pub(crate) fn exit_to_dos(&mut self) -> ! {
         // Finalise any in-progress recording first: `std::process::exit` below
         // skips every destructor, so this is the only chance to mux the clip
@@ -3318,6 +3320,7 @@ impl GameState {
         self.cursor_mode = desired;
     }
 
+    // = seg000:d815 game_loop — the in-game per-frame loop.
     pub fn game_loop(&mut self) {
         // = seg000:d815..d818 frame_tasks_last_tick = pit_timer_callback_counter
         //   — anchor process_frame_tasks's elapsed-since-last delta to "now".
@@ -3564,6 +3567,9 @@ impl GameState {
         self.active_fb = FbId::Back;
     }
 
+    // = seg000:ef6a pit_timer_callback — the PIT ISR: its tick counter is the
+    //   port's game_ticks, its MIDI tick and PIC acknowledge are the host's;
+    //   the game-clock tail below is what the port runs.
     // = seg000:ef84..ef9b the game-clock tail of pit_timer_callback. While the
     // clock runs (game_suspend_count == 0) each PIT tick decrements data_046db;
     // on underflow it reloads from data_0146e (0x2ee0) and bumps game_time. The

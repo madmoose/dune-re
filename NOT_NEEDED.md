@@ -42,6 +42,7 @@ The port reads resources from DUNE.DAT by name and save games through
 `std::fs`; the DOS-side filename buffer, drive selection and heap staging have
 no counterpart.
 
+- `seg000:a93f read_audio_file` — the INT 21h seek + read of the next 2000h-byte chunk of the streaming voice file; the port hands the whole VOC to the player.
 - `seg000:e826 dat_toc_fill_lookup_table` — fill the resource lookup table from DUNE.DAT's table of contents at startup; the port resolves entries by name.
 - `seg000:e75b res_store_in_lookup_table` — store one entry in the resource lookup table.
 - `seg000:f0a0 open_resource_force_hsq` — load DIALOGUE with unpacking disabled into the GLOBDATA scratch area, then unpack from there into the real buffer (a heap-layout trick; the port unpacks straight into a Vec).
@@ -68,6 +69,8 @@ its own framebuffer and paces frames itself.
 
 ## Interrupts and startup checks
 
+- `seg000:f05c reset_keyboard` — the keyboard reset watchdog: once armed (Ctrl+Alt+Del) it pulses the keyboard controller, acknowledges the PIC and exits to DOS through exit_to_dos.
+- `seg000:efe1 clear_and_retry` — the keyboard ISR's retry after an 0ffh from port 60h: clear the key array and return.
 - `seg000:e913 install_interrupt_handlers` — hook the PIT, keyboard and mouse interrupt vectors from _word_21DC3_interrupt_table.
 - `seg000:e85c initialize_pit_timer` — hook INT 8, wait for the first tick and derive the timer calibration byte data_0efd9; the port's clock is the frame sink's.
 - `seg000:e57b load_driver_ax_with_vtable_at_si` — load DNVGA.BIN or DN386.BIN and bind its vtable; the gfx module is that driver compiled in.
