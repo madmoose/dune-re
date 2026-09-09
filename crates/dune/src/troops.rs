@@ -3853,7 +3853,7 @@ impl GameState {
     // arrival notification for the location's hired residents: spice miners
     // stop working, captured troops and those already defending are left
     // alone, everyone else switches to occupation 6 (defending).
-    fn troop_location_notify_residents(&mut self, li: usize) {
+    pub(crate) fn troop_location_notify_residents(&mut self, li: usize) {
         self.for_each_hired_troop_in_location(li, |s, tj| {
             let occ = s.troops[tj].occupation;
             if occ & 0x20 != 0 {

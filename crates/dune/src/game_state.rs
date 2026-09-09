@@ -806,6 +806,10 @@ pub struct GameState {
     // first greeting on it.
     pub(crate) data_000fc: u8,
 
+    // = seg001:00fd for_condit_battle_related_ds_fd — the night attack's
+    // battle gauge byte (location_seed_battle_gauge: the gauge | 1).
+    pub(crate) for_condit_battle_related_ds_fd: u8,
+
     // = seg001:00fe game_phase_copy_ds_fe — the new-day hook's copy of
     // game_phase; a mismatch resets days_since_last_game_phase_change
     // (seg000:1c46).
@@ -2593,6 +2597,7 @@ impl GameState {
             latest_location_with_illness: 0,
             room_view_toggle: 0xff,
             data_000fc: 1,
+            for_condit_battle_related_ds_fd: 0,
             game_phase_copy_ds_fe: 0,
             days_since_last_game_phase_change: 0,
             locations: LOCATIONS,

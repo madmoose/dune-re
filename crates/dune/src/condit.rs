@@ -107,6 +107,7 @@ fn condit_var_name(addr: u16) -> Option<(&'static str, bool)> {
         0xf5 => ("for_condit_desert_walk_ds_f5", false),
         0xf8 => ("number_of_locations_with_illness", false),
         0xf9 => ("chani_troop_illness_cure_progress", false),
+        0xfd => ("for_condit_battle_related_ds_fd", false),
         0xfe => ("game_phase_copy_ds_fe", false),
         0x25 => ("number_of_sietches_visited", false),
         0x26 => ("entering_new_sietch", false),
@@ -301,6 +302,8 @@ impl GameState {
             0xfb => self.room_view_toggle,
             // = seg001:00fc data_000fc.
             0xfc => self.data_000fc,
+            // = seg001:00fd for_condit_battle_related_ds_fd.
+            0xfd => self.for_condit_battle_related_ds_fd,
             // = seg001:00fe game_phase_copy_ds_fe.
             0xfe => self.game_phase_copy_ds_fe,
             // = seg001:00ff number_of_days_since_last_game_phase_change_ds_ff.

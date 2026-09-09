@@ -771,14 +771,145 @@ impl GameState {
         if !self.roll_rand_bit() {
             return;
         }
-        // = seg000:1f92..2016 the raid: pick a target sietch
-        //   (harkonnen_pick_attack_target, seg000:2017), move up to two
-        //   troops from the source area onto it (troop_location_084a6 +
-        //   troop_arrive_at_destination), battle-flag it, queue the "The
-        //   Harkonnens are attacking ...!" message and enter the night
-        //   attack when it is the current location. The target picker and
-        //   the re-home helper (seg000:84a6) are not ported. TODO.
-        println!("actions_time_in_day_4: Harkonnen raid launch (seg000:1f92) not ported");
+        // = seg000:1f8f jb harkonnen_launch_raid.
+        self.harkonnen_launch_raid();
+    }
+
+    // = seg000:1f92 harkonnen_launch_raid — the raid: pick a target sietch,
+    // move up to two Harkonnen troops from the source area onto it and land
+    // them at once, battle-flag it, notify its residents, move its room
+    // persons to the entry room, queue "The Harkonnens are attacking ...!",
+    // and enter the night attack when it is the current location.
+    fn harkonnen_launch_raid(&mut self) {
+        // = seg000:1f92/1f95 call harkonnen_pick_attack_target; jz ret.
+        let Some((target, source)) = self.harkonnen_pick_attack_target() else {
+            return;
+        };
+        // = seg000:1f97 inc [number_of_sietches_attacked_by_Harkonnen_ds_c4].
+        self.number_of_sietches_attacked_by_harkonnen = self
+            .number_of_sietches_attacked_by_harkonnen
+            .wrapping_add(1);
+        // = seg000:1f9b..1fc9 twice: the first Harkonnen troop (bitfield_10
+        //   bit 7) in the source's chain gets occupation 0x8d and a move
+        //   order to the target, has its hidden bit (bitfield_10 bit 4)
+        //   cleared, and arrives at once. (The chain is re-read from the
+        //   source each time; the moved troop has left it.)
+        for _ in 0..2 {
+            let mut id = self.locations[source].troop_id;
+            let mut found = None;
+            while id != 0 {
+                let ti = (id - 1) as usize;
+                if self.troops[ti].bitfield_10 & 0x80 != 0 {
+                    found = Some(ti);
+                    break;
+                }
+                id = self.troops[ti].next_troop_id;
+            }
+            let Some(ti) = found else {
+                break;
+            };
+            self.troops[ti].occupation = 0x8d;
+            self.troop_issue_move_order(ti, target);
+            self.troops[ti].bitfield_10 &= 0xffef;
+            self.troop_arrive_at_destination(ti);
+        }
+        // = seg000:1fcb or status,2 — the target is in battle.
+        self.locations[target].status |= 2;
+        // = seg000:1fcf call troop_location_083fd — the residents defend.
+        self.troop_location_notify_residents(target);
+        // = seg000:1fd2..1fe5 location_entry_room_dx_bx; the nine room
+        //   persons whose location code is the target's move to its entry
+        //   room.
+        let (dx, bx) = self.location_entry_room_codes(target);
+        for person in self.room_persons.iter_mut().take(9) {
+            if person.location_appearance == bx {
+                person.location_and_room = dx;
+            }
+        }
+        // = seg000:1fe7..1ff5 message 0x0c "The Harkonnens are attacking
+        //   ...!", or 0x0d when the prospector troop (troops[2]) is there.
+        let prospector_here =
+            self.troops[2].offset_of_location == crate::locations::location_ptr_from_index(target);
+        self.queue_vision_message_f00(if prospector_here { 0x0d } else { 0x0c }, target);
+        // = seg000:1ffa/1ffe cmp bx,[location_appearance]; jnz -> mark the
+        //   map view dirty: the raid happens off-screen.
+        if bx != self.location_appearance {
+            self.location_mark_map_view_dirty(target);
+            return;
+        }
+        // = seg000:2000..2010 the player is there: the scene moves to the
+        //   entry room, the room redraw is requested, night_attack_stage =
+        //   the room, and the battle gauge byte is seeded.
+        self.location_and_room = dx;
+        let room = dx as u8;
+        self.current_room = room;
+        self.room_redraw_request |= room;
+        self.night_attack_stage = room;
+        self.location_seed_battle_gauge(target);
+    }
+
+    // = seg000:2017 harkonnen_pick_attack_target — pick the sietch the
+    // Harkonnen raid tonight, and the area the raiders come from. Scans the
+    // sietches (appearance < 0x20) that are not hidden or already in battle
+    // (status bits 0x82 clear), house no ill troop, and lie above (lower
+    // map_y than) the best so far, starting from a threshold of 100. Each
+    // candidate is CONDIT-staged: it qualifies when its Fremen troop count
+    // differs from its army-training count, a Harkonnen area lies within 30
+    // (else the nearest Atreides area does), that source is not the
+    // Arrakeen palace, and the source has Harkonnen troops but no attacking
+    // troop. Returns (target, source); the target is also latched into
+    // comm_glow_index.
+    fn harkonnen_pick_attack_target(&mut self) -> Option<(usize, usize)> {
+        // = seg000:201a [_unk_2CCC6_comm_glow_index] = 0; 2020 bx = 100.
+        self.comm_glow_index = 0;
+        let mut best_y = 100i16;
+        let mut result = None;
+        for li in 0..self.locations.len() {
+            let loc = self.locations[li];
+            // = seg000:2023..2032 cmp appearance,20h; test status,82h;
+            //   cmp bx,map_y; jle.
+            if loc.appearance >= 0x20 || loc.status & 0x82 != 0 || best_y <= loc.map_y {
+                continue;
+            }
+            // = seg000:2034 call location_does_location_house_an_ill_troop; jb.
+            if self.location_houses_ill_troop(li) {
+                continue;
+            }
+            // = seg000:203a call prepare_location_data_for_condit.
+            self.prepare_location_data_for_condit(li);
+            // = seg000:203e..2045 ds:60[0] - ds:60[3]; jz.
+            let counts = &self.location_condit.troop_counts;
+            if counts[0] == counts[3] {
+                continue;
+            }
+            // = seg000:2047..2059 bp = the nearest Harkonnen area when it is
+            //   within 30, else the nearest Atreides area when that is.
+            let source_ptr = if self.nearest_harkonnen_area.distance < 0x1e {
+                self.nearest_harkonnen_area.loc_ptr
+            } else if self.nearest_atreides_area.distance < 0x1e {
+                self.nearest_atreides_area.loc_ptr
+            } else {
+                continue;
+            };
+            let source = crate::locations::location_index_from_ptr(source_ptr);
+            // = seg000:205d cmp bp,locations[1]; jz — not the Arrakeen palace.
+            if source == 1 {
+                continue;
+            }
+            // = seg000:2063..2070 the source needs Harkonnen troops (cx) and
+            //   no attacking troop (dx).
+            let (harkonnen, attacking) = self.location_count_harkonnen_and_attacking_troops(source);
+            if harkonnen == 0 || attacking != 0 {
+                continue;
+            }
+            // = seg000:2072..2079 bx = map_y; the target and the source
+            //   (DOS parks the source in map_disc_centre_y).
+            best_y = loc.map_y;
+            self.comm_glow_index = crate::locations::location_ptr_from_index(li);
+            result = Some((li, source));
+        }
+        // = seg000:2085..208f bp = the source; di = the target; or di,di.
+        result
     }
 
     // = seg000:1dda actions_time_in_day_8 — the mid-day shipment reminder:

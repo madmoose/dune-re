@@ -4352,6 +4352,12 @@ impl GameState {
         (cx, dx)
     }
 
+    // = seg000:6144 location_seed_battle_gauge — ds:fd = the location's
+    // battle gauge | 1, the night attack's CONDIT byte.
+    pub(crate) fn location_seed_battle_gauge(&mut self, li: usize) {
+        self.for_condit_battle_related_ds_fd = self.location_battle_gauge(li) | 1;
+    }
+
     // = seg000:60f8 location_060f8 — the location's battle gauge (0..0xff):
     // the population-weighted balance of the two sides' skill, biased toward
     // 0x80 (even). Accumulates over the location's troops (06155).
