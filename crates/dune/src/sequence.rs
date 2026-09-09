@@ -32,6 +32,9 @@ const SCRIPT_TIME_SKIP: u8 = 0x0a; // action 5: run the clock to time of day 13
 const SCRIPT_CHANI_KISS: u8 = 0x0c; // action 6: the Chani kiss close-up
 const SCRIPT_SHOW_SPICE_MAP: u8 = 0x0e; // action 7
 const SCRIPT_HIDE_SPICE_MAP: u8 = 0x10; // action 8
+const SCRIPT_ENDING_ROOM: u8 = 0x12; // action 9: the final room
+const SCRIPT_FINAL_SCENE: u8 = 0x14; // action 10: the FINAL.HSQ scene
+const SCRIPT_ENDING_CREDITS: u8 = 0x16; // action 11: the slideshow, then exit
 const SCRIPT_END: u8 = 0xff; // end of script
 
 // = seg001:2290 icon_list_chani_after_time_skip — CHANKISS.HSQ sprite 0 at
@@ -41,6 +44,16 @@ const ICON_LIST_CHANI_AFTER_TIME_SKIP: [(u16, i16, i16); 1] = [(0, 0x4e, 0x21)];
 // = seg001:2298 _stru_21748_icon_list_chankiss — CHANKISS.HSQ sprite 1 at
 // (26, 4), the kiss close-up.
 const ICON_LIST_CHANKISS: [(u16, i16, i16); 1] = [(1, 0x1a, 4)];
+
+// = seg000:128f cutscene_game_phase_C8_dialogue — the game-won script.
+#[rustfmt::skip]
+pub(crate) static SCRIPT_GAME_WON: [u8; 61] = [
+    0x00, 0x02, 0x10, 0x03, 0x01, 0x07, 0x02, 0x04, 0x05, 0x0f, 0x0f, 0x0f, 0x0f, 0x0f, 0x0f,
+    0x0f, 0x0a, 0x0b, 0x09, 0x08, 0x02, 0x04, 0x04, 0x08, 0x02, 0x0b, 0x02, 0x03, 0x02, 0x02,
+    0x02, 0x0b, 0x02, 0x02, 0x04, 0x08, 0x02, 0x05, 0x02, 0x09, 0x02, 0x07, 0x02, 0x0a, 0x04,
+    0x08, 0x02, 0x05, 0x02, 0x0b, 0x02, 0x02, 0x02, 0x02, 0x01, 0x12, 0x02, 0x10, 0x03, 0x01,
+    0xff,
+];
 
 // = seg000:12f8 cutscene_game_phase_below_14_dialogue.
 #[rustfmt::skip]
@@ -170,7 +183,7 @@ impl GameState {
 
     // = seg000:1392 change_menu_to_continue_menu — menu_ptr_02220 =
     // menu_multiple_provide_continue_option (seg001:1fba).
-    fn change_menu_to_continue_menu(&mut self) {
+    pub(crate) fn change_menu_to_continue_menu(&mut self) {
         self.sequence_menu = MenuRef::MenuContinue;
     }
 
@@ -249,12 +262,14 @@ impl GameState {
             SCRIPT_TIME_SKIP => self.sequence_action_05_time_skip(),
             // = seg000:1442 callback_action_in_continue_sequence_06_chankiss.
             SCRIPT_CHANI_KISS => self.sequence_action_06_chankiss(),
+            // = seg000:148d callback_action_in_continue_sequence_09.
+            SCRIPT_ENDING_ROOM => self.sequence_action_09_ending_room(),
+            // = seg000:14c9 callback_action_in_continue_sequence_0a.
+            SCRIPT_FINAL_SCENE => self.sequence_action_0a_final_scene(),
+            // = seg000:167c callback_action_in_continue_sequence_0b.
+            SCRIPT_ENDING_CREDITS => self.sequence_action_0b_ending_credits(),
             other => {
-                // The remaining cutscene-script actions: the Baron-scene
-                // steps (148d/14c9/167c, 0x12/0x14/0x16).
-                // Their scripts are only reached from the unported phase
-                // callbacks. TODO.
-                println!("continue-sequence: unported action {other} (byte {byte:#04x})");
+                println!("continue-sequence: unknown action {other} (byte {byte:#04x})");
                 self.change_menu_to_continue_menu();
                 self.sequence_push_continue_menu();
             }
@@ -323,7 +338,7 @@ impl GameState {
     // gather shot stands Leto and Jessica in the communication room. The
     // count byte doubles as the cursor skip past the list; falls into
     // action 02 (redraw + step).
-    fn sequence_action_00_set_room(&mut self) {
+    pub(crate) fn sequence_action_00_set_room(&mut self) {
         let Some(script) = self.sequence_script else {
             return;
         };

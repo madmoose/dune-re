@@ -861,7 +861,7 @@ impl GameState {
 
     // = seg000:0981 draw_room_for_scene — the intro's room draw: open the
     // scene's .SAL, draw the room, and keep it as the clean backdrop.
-    fn draw_room_for_scene(&mut self, location_and_room: u16, location_appearance: u16) {
+    pub(crate) fn draw_room_for_scene(&mut self, location_and_room: u16, location_appearance: u16) {
         // = seg000:0981 call set_scene_and_open_sal.
         self.set_scene_and_open_sal(location_and_room, location_appearance);
         // = seg000:0984 call draw_room_scene.
@@ -1225,7 +1225,7 @@ impl GameState {
     //   seg000:09b3 draw_icons_list_at_si(153ah)     ; mirrored side panels
     //   seg000:09b9 copy_active_framebuffer_to_framebuffer_2
     //   seg000:09bc al=9 (BARO); dx=52h; loc_009c7 + loc_0978e
-    fn stage_26_init(&mut self) {
+    pub(crate) fn stage_26_init(&mut self) {
         // = seg000:09ad open_spritesheet(30h) — BACK.HSQ + palette.
         self.open_sprite_bank(BACK);
 

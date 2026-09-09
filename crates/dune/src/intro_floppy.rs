@@ -363,7 +363,7 @@ impl GameState {
 
     // = seg000:094a intro2_scene_sky — scene 3: the desert sky behind a low
     // INTDS.HSQ sprite (the desert/wormsuit horizon strip).
-    fn intro_floppy_scene_sky(&mut self) {
+    pub(crate) fn intro_floppy_scene_sky(&mut self) {
         // = seg000:094a draw_sky.
         self.draw_sky();
         // = seg000:094d ax=0x2d (INTDS); open_spritesheet — also applies

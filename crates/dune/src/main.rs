@@ -12,6 +12,7 @@ mod condit;
 mod container;
 mod dat_file;
 mod dialogue;
+mod ending;
 mod events;
 mod fixed_point;
 mod font;

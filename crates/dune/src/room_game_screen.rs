@@ -1203,15 +1203,9 @@ impl GameState {
         // = seg000:0ed5 ax=1; draw_sprite_clobbering_bx_dx — sprite 1 at (0,0)
         //   from the still-active MIRROR bank.
         self.draw_active_bank_sprite(1, 0, 0);
-        // = seg000:0edb call loc_00f08 — overlay Paul's talking head. The
-        //   player-only path (loc_00960) saves the mirror backdrop into fb2 and
-        //   draws Paul's PAUL.HSQ talking head (character 0x2d) over it, then
-        //   starts its idle/lip-sync animation. The MIRROR sprite 2 drawn next
-        //   frames it. (The persons_travelling_with & 0x80 companion path,
-        //   loc_00f13, runs a second lip-sync resource 7 first — TODO.)
-        // = seg000:09d0 data_0478c = 1eh (loc_009c7), then seg000:096a data_0478c = 1 — the mirror Paul plays 4 lively frames (32..35) before settling.
-        self.subtitle_word_count = 1;
-        self.setup_talking_head(0x2d, 0);
+        // = seg000:0edb call mirror_head_setup — overlay the talking head(s);
+        //   the MIRROR sprite 2 drawn next frames them.
+        self.mirror_head_setup();
         // = seg000:0ede ax=0x3b open MIRROR (already active); 0ee4 ax=2 draw
         //   sprite 2 at (0,0).
         self.open_sprite_bank(sprite_bank::MIRROR);

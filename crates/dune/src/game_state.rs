@@ -1454,6 +1454,10 @@ pub struct GameState {
 
     // = seg001:46d7 — the sky fade countdown paired with current_sky_palette.
     pub(crate) sky_fade_countdown: u8,
+    // = seg001:d81a data_0d81a / map_disc_centre_y as palette_range_set_black
+    // uses them: the (byte offset, byte count) of the palette range the
+    // ending's fades step.
+    pub(crate) ending_fade_range: (u16, u16),
 
     // = seg001:46d9 pending_room_screen_request — pending room-screen request code
     // (e.g. 6, 7). When nonzero, ui_present_room_screen jumps straight to
@@ -2817,6 +2821,7 @@ impl GameState {
             head_popup_anchor: (0, 0),
             head_popup_box: Rect::default(),
             current_sky_palette: 0,
+            ending_fade_range: (0, 0),
             sky_fade_countdown: 0,
             pending_room_screen_request: 0,
             events_pump_active: 0,

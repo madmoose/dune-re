@@ -30,10 +30,7 @@
 
 use crate::{
     DrawOptions, GameState, Rect, RoomRenderer, RoomSheet, SpriteSheet, TaskId,
-    game_phase::{
-        PHASE_10_TUONO_HARG_FOUND, PHASE_24_ARMORY_FOUND, PHASE_54_GREENHOUSE_OPENED,
-        PHASE_C8_GAME_WON,
-    },
+    game_phase::{PHASE_10_TUONO_HARG_FOUND, PHASE_24_ARMORY_FOUND, PHASE_54_GREENHOUSE_OPENED},
     gfx::{self, blit},
     menu_defs::MenuRef,
     rect::rect,
@@ -870,11 +867,9 @@ impl GameState {
         //   arriving in the Harkonnen fortress room 2 ends the game
         //   (seg000:16fc sets game_phase 0xc8 and runs the ending sequence).
         if new_room == 0x3002 {
-            // = seg000:16fc mov [game_phase],0c8h.
-            self.game_phase = PHASE_C8_GAME_WON;
-            // TODO: port the ending sequence game_phase_set_to_c8_game_ending
-            //   falls into (loc_01771 onwards); the room redraw is skipped (DOS
-            //   never returns here).
+            // = seg000:4074 jz game_phase_set_to_c8_game_ending — the room
+            //   redraw is skipped (DOS never returns here).
+            self.game_phase_set_to_c8_game_ending();
             return;
         }
 
