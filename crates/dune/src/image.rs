@@ -34,10 +34,12 @@ where
         self.pixels.fill(T::default());
     }
 
+    // = segvga:0c2d vga_plot_pixel — write one pixel (row bx, col dx).
     pub fn set(&mut self, x: u16, y: u16, c: T) {
         self.pixels[y as usize * self.w as usize + x as usize] = c;
     }
 
+    // = segvga:0c34 vga_get_pixel — read one pixel (row bx, col dx).
     pub fn get(&self, x: u16, y: u16) -> T {
         self.pixels[y as usize * self.w as usize + x as usize]
     }

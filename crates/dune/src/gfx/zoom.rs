@@ -46,6 +46,9 @@ fn zoom_ratio(scale: u8) -> (usize, usize) {
 // `dst`, both anchored at `fb_base_ofs` (= `y_offset` rows down). DOS picks the
 // source (ds) and dest (es) framebuffers; the wrappers below bind them to the
 // screen (the cinematic reveal) or to fb2 (the dialogue backdrop zoom).
+// = segvga:3a25 zoom_kernel_8_7 / segvga:3a69 zoom_kernel_4_3 / segvga:3a9d zoom_kernel_3_2 / segvga:3ad9 zoom_kernel_2x
+// = segvga:3af6 zoom_kernel_3x / segvga:3b46 zoom_kernel_4x / segvga:3b6d zoom_kernel_8x
+//   — the seven unrolled kernels, one ratio each, collapsed into the general form.
 fn zoom_blit(src: &[u8], dst: &mut [u8], y_offset: usize, col: i16, row: i16, scale: u8) {
     let (num, den) = zoom_ratio(scale);
 

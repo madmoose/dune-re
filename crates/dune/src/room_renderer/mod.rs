@@ -335,7 +335,7 @@ impl RoomRenderer {
         });
     }
 
-    // = seg000:3be9 SAL_polygon — scan-fill one SAL polygon part: walk the
+    // = seg000:3be9 SAL_polygon / segvga:39e9 vga_draw_noisy_line — scan-fill one SAL polygon part: walk the
     // right and left vertex chains into per-row edge tables, then fill each
     // row between the two edges with the part's colour and dither.
     fn draw_polygon(&self, polygon: &Polygon, frame: &mut FrameBuffer) {

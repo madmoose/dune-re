@@ -1595,7 +1595,7 @@ impl GameState {
         }
     }
 
-    // = seg000:391d picks the span from [22e3h]: ==0 → bx=0x180/cx=0xf0 (entries
+    // = seg000:391d loc_0391d / segvga:0ad7 vga_fade_step — picks the span from [22e3h]: ==0 → bx=0x180/cx=0xf0 (entries
     // 128..207), else → bx=0xdb/cx=0x1c5 (entries 73..223). When [227dh]==0 it then
     // fades a second span, entries 240..255 (bx=0x2d0/cx=0x30); the intro keeps
     // [227dh]=1 so that span is normally skipped.

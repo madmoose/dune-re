@@ -470,7 +470,7 @@ impl MapRenderer {
         }
     }
 
-    // = segvga:230a loc_segvga_0230a + segvga:2343 — store the band's four
+    // = segvga:230a loc_segvga_0230a / segvga:2343 map_band_store — store the band's four
     // lines into the framebuffer, remapping each interpolated height to the
     // map palette (pixel = (v >> 4) + 0x10, segvga:2353..235d). The DOS
     // destination cursor (data_segvga_01cb2) is absolute, seeded 0x504 =

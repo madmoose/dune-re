@@ -3747,6 +3747,7 @@ impl GameState {
     // loc_segvga_02572's vsync_polarity==0 path (the one taken when not polling
     // CRT retrace) spins until `[bp] - bx >= 3`, i.e. 3 PIT ticks per step. The
     // PIT runs at the same ~200Hz the port models, so this is 3 game ticks.
+    // = segvga:2572 transition_frame_wait — the wait between transition frames.
     pub fn present_transition_frame(&mut self) {
         // = segvga:2572 loc_segvga_02572 `sub ax,bx; cmp ax,3; jb` — 3 ticks (~15ms).
         self.present_transition_frame_ticks(3);
@@ -4608,7 +4609,7 @@ impl GameState {
         }
     }
 
-    // = seg000:c4cd gfx_copy_whole_framebuf_to_screen. Plain memcpy from fb1
+    // = seg000:c4cd gfx_copy_whole_framebuf_to_screen / segvga:1b7c vga_copy_screen. Plain memcpy from fb1
     // to the front buffer (`screen_buffer`) — does NOT apply `fb_base_ofs`
     // (matching the DOS `vga_copy_screen_2` behaviour). The y-offset is applied
     // to incoming draws, not to this outgoing copy.
@@ -4625,7 +4626,7 @@ impl GameState {
         self.screen.copy_from(&self.framebuffer);
     }
 
-    // = seg000:c4dd present_game_area — present the game-area rect (0,0)-
+    // = seg000:c4dd present_game_area / segvga:1be7 vga_copy_partial — present the game-area rect (0,0)-
     // (320,152) from fb1 to the visible screen. Used wherever a screen redraws
     // its game area directly (the talking-head composite, the map screen, the
     // message viewer, ...).

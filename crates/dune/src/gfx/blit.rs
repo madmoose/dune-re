@@ -5,6 +5,19 @@
 //! scale selector, the palette offset and the optional clip rect. sprite.rs
 //! parses the sprite header words and sprite_blitter.rs drives this from a
 //! `Sprite`.
+//!
+//! = segvga:0d85 vga_draw_scaled_sprite — the scaled path (`draw_4bpp_scaled`).
+//!
+//! The eight row kernels vga_blit_clipped jumps into through `jmp bp`
+//! (segvga:14f3 / 1580), one per source format and flip combination:
+//! = segvga:15fb — row kernel of vga_blit_clipped.
+//! = segvga:166e — row kernel of vga_blit_clipped.
+//! = segvga:1684 — row kernel of vga_blit_clipped.
+//! = segvga:1690 — row kernel of vga_blit_clipped.
+//! = segvga:1728 — row kernel of vga_blit_clipped.
+//! = segvga:17a9 — row kernel of vga_blit_clipped.
+//! = segvga:17c1 — row kernel of vga_blit_clipped.
+//! = segvga:17cf — row kernel of vga_blit_clipped.
 #![allow(clippy::too_many_arguments)]
 
 use std::io::Cursor;

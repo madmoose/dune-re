@@ -43,6 +43,23 @@ no counterpart.
 - `seg000:f29b set_default_drive` — int 21h/0e; no callers.
 - `seg000:f2e7 seek_and_read_dune_dat` — seek-then-read entry; no callers.
 
+## VGA hardware
+
+DNVGA.BIN talks to the VGA card and the PIT directly; the port renders into
+its own framebuffer and paces frames itself.
+
+- `segvga:0967 vga_set_mode_13h` — BIOS mode set / query.
+- `segvga:09d9 vga_get_framebuffer_info` — returns the A000h segment.
+- `segvga:09b8 vsync_wait` — poll the CRT status port for a vsync edge.
+- `segvga:261d fade_vsync_wait` — vsync pacing between fade chunks.
+- `segvga:253d vsync_wait_5_ticks` — vsync edge or 5 PIT ticks between synchronous effect frames.
+- `segvga:0b68 dac_write` — write palette entries to the DAC ports 3c8h/3c9h.
+- `segvga:0a21 palette_byte_range_to_entry_range` — DAC bookkeeping for dac_write.
+- `segvga:0975 vga_set_grayscale_mode` — the grayscale DAC patch and CRT port setup; the port has no grayscale mode.
+- `segvga:2588 swap_transition_buffers` — swap the two transition buffer segments; the port addresses its buffers directly.
+- `segvga:0aa4 vga_fade_save_and_black` — no callers (dead code).
+- `segvga:2e2c mosaic_pass_4x4_flush` — no callers (dead code).
+
 ## Memory management
 
 Every resource the port opens is read whole into a `Vec<u8>` from DUNE.DAT

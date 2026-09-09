@@ -1,4 +1,4 @@
-//! = segvga:1cb6 vga_globe_init / segvga:1d07 vga_globe_setup — the globe
+//! = segvga:1cb6 vga_globe_init / segvga:1d07 vga_globe_setup / segvga:1d5a globe_init_seed_cursors — the globe
 //! pixel renderer, together with the seg000 table builders that feed it
 //! (seg000:b9f6 recalculate_globe_rotation_table, seg000:ba2d
 //! build_globe_tilt_window_table).
@@ -197,6 +197,7 @@ impl GlobeRenderer {
     // al = 0x10 | (v & 0x0f); a nonzero vegetation-stage nibble adds 0x10
     // and stage 0x30 (Harkonnen-held) another 0x10, so the disc renders in
     // the 0x10 plain / 0x20 Atreides / 0x30 Harkonnen palette blocks.
+    // = segvga:1ec9 globe_pixel_area_control_colors — the area_control path.
     fn map_color(&self, offset: i16, area_control: bool) -> u8 {
         let map_value = self.map[(0x62fc_i32 + offset as i32) as usize];
         let flags = map_value & 0x30;

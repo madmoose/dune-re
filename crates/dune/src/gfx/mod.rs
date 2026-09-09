@@ -50,6 +50,15 @@ pub fn palette_flush(state: &mut GameState) {
     state.screen_pal = state.palette.clone();
 }
 
+// = segvga:0bdc palette_cycle_water — rotate the 64-entry water palette by one
+// entry and flush DAC entries 128..191. DOS runs it from blit_water_ripple; the
+// port's ripple (blit_fb1_to_screen_effect 0x0a) skips the cycling, so this is
+// not wired in yet.
+#[allow(dead_code)]
+pub fn palette_cycle_water(_state: &mut GameState) {
+    todo!("segvga:0bdc palette_cycle_water")
+}
+
 // = segvga:0c06 vga_set_fb_row — set `fb_base_ofs` (the per-blit destination y
 // offset added by segvga blit primitives). In our model this is
 // `state.y_offset`; the gfx-level blit helpers below read it and apply it
@@ -167,7 +176,7 @@ pub fn vga_clear_screen(state: &mut GameState) {
     state.active_fb_mut().clear();
 }
 
-// = segvga:1a07 vga_draw_line (gfx_vtable_vga_draw_line, seg001:3901) — draw
+// = segvga:1a07 vga_draw_line / segvga:1adc bresenham_line (gfx_vtable_vga_draw_line, seg001:3901) — draw
 // a line from (x0, y0) to (x1, y1) in `color` through the 16-bit `pattern`:
 // the pattern rotates left one bit per step and a pixel plots only on a set
 // bit, each plot clipped to the half-open `clip` rect. `dest` is the DOS
@@ -407,7 +416,8 @@ const MAP_GLOBE_EDGE_INSETS: [u8; 18] = [
     0x41, 0x4b,
 ];
 
-// = segvga:23eb vga_blit_shaded (gfx_vtable_vga_blit_shaded) — blit the map
+// = segvga:23eb vga_blit_shaded / segvga:2413 map_row_blit_shaded / segvga:2396 map_row_edge_inset / segvga:23d7 map_row_shade_right_edge
+// (gfx_vtable_vga_blit_shaded) — blit the map
 // row buffer (`rows`, stride 0xc8, one raw map cell per byte) to the active
 // framebuffer at (x0, y0), remapping every cell from palette bank 0 to bank 1
 // (pixel = (cell & 0x0f) + 0x10). `top_lat` is the top row's latitude: rows at
@@ -481,7 +491,7 @@ pub fn vga_blit_shaded(
     }
 }
 
-// = segvga:2441 vga_draw_landscape (gfx_vtable_vga_draw_landscape, the BH = 0
+// = segvga:2441 vga_draw_landscape / segvga:24ad landscape_row_bh0 (gfx_vtable_vga_draw_landscape, the BH = 0
 // plain-remap path) — render the map row buffer (`rows`, stride 0xc8) to the
 // active framebuffer at (x0, y0) through the 256-entry palette-remap table
 // `xlat`. Interior-only: a pixel is drawn only when it equals BOTH its
@@ -579,6 +589,15 @@ pub fn vga_draw_landscape(
     }
 }
 
+// = segvga:24e9 landscape_row_bh1 — the bh != 0 row body of vga_draw_landscape:
+// each pixel is compared with its right and next-row neighbours before the
+// colour lookup and the 0x70-class edge colour is drawn where they differ.
+// vga_draw_landscape only ports the bh = 0 path; no caller selects this one yet.
+#[allow(dead_code)]
+pub fn landscape_row_bh1(_state: &mut GameState) {
+    todo!("segvga:24e9 landscape_row_bh1")
+}
+
 // = segvga:2596 transition_snapshot_screen_to_fb2 — vga_copy_screen from the
 // transition's es (the visible screen, the OLD image) to its si (fb2): all
 // 64000 bytes. The effects use the snapshot as their scratch source; fb2's
@@ -633,7 +652,12 @@ pub fn vga_transition(state: &mut GameState, code: u16, dx: i16, midpoint: Trans
         0x08 => transition_dissolve_lfsr_fast(state),
         0x0c | 0x0e => transition_page_turn(state, dx),
         0x10 => transition_dotted_columns(state),
+        0x12 => transition_diagonal_wipe(state),
+        0x22 | 0x24 => transition_accelerating_strips(state),
+        0x26 => transition_mosaic_medium(state),
+        0x28 => transition_mosaic_fine(state),
         0x2a => transition_spiral(state),
+        0x2e => transition_mosaic_oneway(state),
         0x34 => transition_dotted_columns_tall(state),
         0x30 => transition_instant_swap(state, midpoint),
         0x36 => transition_fade_in_from_black(state, midpoint),
@@ -961,6 +985,13 @@ pub fn transition_tick(state: &mut GameState) -> u16 {
     cx
 }
 
+// = segvga:279a transition_diagonal_wipe (dispatch entry 9) — code 0x12: the
+// synchronous full-screen diagonal wipe, transition_kernel run in a tight loop
+// over col = 8..0x3c0 with 3 vsync waits per step.
+fn transition_diagonal_wipe(_state: &mut GameState) {
+    todo!("segvga:279a transition_diagonal_wipe")
+}
+
 // Which pixel operation the ellipse kernel applies along the band: DOS selects
 // it by self-modifying the dispatch pointer at data_segvga_027e4 (0x2823 = draw,
 // 0x2887 = erase) before calling transition_kernel.
@@ -1004,7 +1035,7 @@ fn transition_erase_edge(screen: &mut [u8], fb1: &[u8], fb_base: usize, col: u16
     );
 }
 
-// = segvga:2823 (draw) / segvga:2887 (erase) — the per-point pixel operation.
+// = segvga:2823 ripple_draw_op / segvga:2887 ripple_erase_op — the per-point pixel operation.
 // `row` is squashed toward the center line (water seen at an angle) and clipped
 // to [0x47, 0x95); `col` is clipped to [0, 320). The 4x4 block at the
 // resulting framebuffer offset is then drawn or erased.
@@ -1713,6 +1744,13 @@ fn transition_vertical_curtain(state: &mut GameState, dl: u8) {
     }
 }
 
+// = segvga:2d44 transition_accelerating_strips (dispatch entries 17/18) — codes
+// 0x22 / 0x24: strip reveal with shrinking spacing; the phase doubles when bx
+// wraps and the step grows by 6 per pass.
+fn transition_accelerating_strips(_state: &mut GameState) {
+    todo!("segvga:2d44 transition_accelerating_strips")
+}
+
 // = segvga:2dc0 transition_dotted_columns_tall (transition_dispatch_table entry
 // 0x1a) — code 0x34: the dotted-column reveal over the full 200-row screen. It
 // preloads cx = 0xc8 and falls through to the same body as
@@ -1955,11 +1993,29 @@ fn transition_mosaic_full(state: &mut GameState) {
     mosaic_pass(state, MosaicSource::Fb1, 2, &MOSAIC_OFFSETS_2X2);
 }
 
+// = segvga:2f71 transition_mosaic_oneway (dispatch entry 23) — code 0x2e:
+// coarse-to-fine mosaic reveal with no palette swap: 8x8 x3, 4x4 x2, 2x2 x2.
+fn transition_mosaic_oneway(_state: &mut GameState) {
+    todo!("segvga:2f71 transition_mosaic_oneway")
+}
+
+// = segvga:2f87 transition_mosaic_medium (dispatch entry 19) — code 0x26:
+// 2x2 then 4x4 on the old image, palette_flush, 4x4 then 2x2 on the new one.
+fn transition_mosaic_medium(_state: &mut GameState) {
+    todo!("segvga:2f87 transition_mosaic_medium")
+}
+
+// = segvga:2f9f transition_mosaic_fine (dispatch entry 20) — code 0x28: three
+// 2x2 passes on the old image, palette_flush, one 2x2 pass on the new one.
+fn transition_mosaic_fine(_state: &mut GameState) {
+    todo!("segvga:2f9f transition_mosaic_fine")
+}
+
 // = segvga:2fb7 mosaic_offsets_2x2 — the sample position (row * 320 + col
 // within the block) each 2×2 mosaic frame reads, cycled in this order.
 const MOSAIC_OFFSETS_2X2: [usize; 4] = [0x000, 0x141, 0x001, 0x140];
 
-// = segvga:2fc1 / 2ff9 / 3031 mosaic_pass_2x2 / _4x4 / _8x8 — one mosaic
+// = segvga:2fc1 mosaic_pass_2x2 / segvga:2ff9 mosaic_pass_4x4 / segvga:3031 mosaic_pass_8x8 — one mosaic
 // level: bx = [bp] (the PIT counter at entry), then walk the offset table,
 // stamping the whole game area once per entry, restarting the table at its
 // 0xffff sentinel, until the stamp's tick check (segvga:3082, `[bp] - bx <
@@ -2023,7 +2079,7 @@ const MOSAIC_OFFSETS_8X8: [usize; 16] = [
 // = segvga:3087 `cmp ax,24h` — each mosaic pass runs for 0x24 PIT ticks.
 const MOSAIC_PASS_TICKS: u64 = 0x24;
 
-// = segvga:30c5 / 308c / 3047 mosaic_stamp_2x2 / _4x4 / _8x8 — stamp the
+// = segvga:30c5 mosaic_stamp_2x2 / segvga:308c mosaic_stamp_4x4 / segvga:3047 mosaic_stamp_8x8 — stamp the
 // 152-row game area as `size`×`size` blocks: every block takes the single
 // source pixel at `ofs` (row * 320 + col) inside it. 2×2: `lodsb; inc si`
 // then the pair written to di and di+320; 4×4 / 8×8: `lodsb; add si,3/7`
@@ -2201,6 +2257,8 @@ fn transition_vertical_fold(state: &mut GameState, dl: u8) {
     }
 }
 
+// = segvga:316d transition_fold_kernel — one frame of the fold: both halves
+// step toward the centre line together.
 fn transition_vertical_fold_part(
     state: &mut GameState,
     lines: &[(u16, u16); 8],
@@ -2287,6 +2345,8 @@ fn transition_vertical_fold_part(
 
 impl GameState {
     // = segvga:3200 vga_effect_dispatch / seg000:c0d5 blit_fb1_to_screen_effect — present fb1 to the visible screen
+    // = segvga:3500 blit_water_ripple / segvga:356f fb_row_copy_shifted / segvga:3581 blit_zoom_shimmer / segvga:35c8 fb_blit_2x_scaled
+    //   — the four blit-mode effects implemented in the arms below.
     // through the segvga vga_effect_dispatch vtable (effect = `al`). The full
     // dispatcher (vga_effect_dispatch, segvga:3200) reduces `effect` mod 0x1a and
     // jumps through blit_mode_dispatch_table (segvga:31e6) to one of 13 effects;
@@ -2474,6 +2534,15 @@ impl GameState {
     }
 }
 
+// = segvga:3223 panel_anim_play_all — play all 17 panel animation frames in one
+// blocking call (restore DS/ES, copy the backing rect, loop cl = 17..0 over
+// panel_anim_frame). The port plays the fold one frame per pass through
+// panel_anim_play_step, so this is not wired in.
+#[allow(dead_code)]
+pub fn panel_anim_play_all(_state: &mut GameState) {
+    todo!("segvga:3223 panel_anim_play_all")
+}
+
 // = segvga:3280 panel_solid_fill — the fully-collapsed (frame 9) look: 16 rows of
 // 0xfe, an 8-row 0xf2/0x08 checkerboard hinge, then 16 rows of 0xfe.
 fn panel_solid_fill(dst: &mut FrameBuffer) {
@@ -2519,6 +2588,7 @@ fn panel_copy_rect(dst: &mut FrameBuffer, src: &FrameBuffer) {
     }
 }
 
+// = segvga:32c1 panel_anim_frame — one panel animation frame from the fold table.
 // One fold frame: squish `src`'s panel toward the centre — copy `al` rows then
 // skip `ah` source rows, repeating outward from the centre pair (178/179) — and
 // fill the vacated edge rows with the panel-closed colour (0xfe). = segvga:32c1
@@ -2661,7 +2731,7 @@ pub fn scroll_rect_up_pass(
 }
 
 impl GameState {
-    // = segvga:3602 xor_bracket_zoom_to_panel — the troop-contact popup's open
+    // = segvga:3602 xor_bracket_zoom_to_panel / segvga:372d vga_xor_box_20 — the troop-contact popup's open
     // effect (vga_effect_dispatch al=2): a 20x20 XOR box stepping from the
     // troop icon to the panel centre (8 frames), then the corner brackets
     // expanding from a centred 20x20 out to the panel rect (8 frames). Each

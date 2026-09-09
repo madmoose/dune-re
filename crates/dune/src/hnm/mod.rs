@@ -454,6 +454,7 @@ impl GameState {
     }
 
     // = seg000:ccf4 hnm_decode_typed_chunk_video_to_bp / seg000:cc96 hnm_decode_video_frame / seg000:ce3b hnm_handle_pal_chunk
+    // = segvga:1bca vga_blit_checkerboard — the IRULAN 2x checkerboard present, in the block dispatch below.
     // — the deferred two-stage DOS decode, the frame blit and the palette
     // chunk apply collapsed into one pass:
     // hnm_decode_typed_chunk_video_to_bp (seg000:ccf4) scans the frame's blocks

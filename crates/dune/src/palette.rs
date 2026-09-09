@@ -1,3 +1,12 @@
+//! The 256-entry palette store, DOS's segvga palette_cache and its fade target.
+//!
+//! = segvga:09e2 vga_set_palette — write a byte range of palette data into the
+//!   cache (`Palette::set` / `set_all_from_rgb666`).
+//! = segvga:0a40 vga_set_fade_target_data — write a byte range into the fade
+//!   target (`GameState::palette_fade_target`).
+//! = segvga:0a58 vga_copy_palette_to_fade_target — snapshot the whole cache
+//!   into the fade target (`Palette::copy_from`).
+
 use std::io::{Cursor, Seek};
 
 use bytes_ext::ReadBytesExt;
