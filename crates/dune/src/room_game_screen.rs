@@ -141,9 +141,11 @@ const CMD_MASSIVE_ATTACK: MenuItem = item(
 );
 // = seg001:221c "FIGHT FOR A WHOLE DAY" — the second night-attack stage verb,
 // adjacent to CMD_MASSIVE_ATTACK.
-const CMD_FIGHT_FOR_A_WHOLE_DAY: MenuItem = item(cmd::FIGHT_FOR_A_WHOLE_DAY, 0x0fc5, |_, _, _| {
-    println!("menu: FIGHT FOR A WHOLE DAY (seg000:0fc5) not ported")
-});
+const CMD_FIGHT_FOR_A_WHOLE_DAY: MenuItem = item(
+    cmd::FIGHT_FOR_A_WHOLE_DAY,
+    0x0fc5,
+    GameState::menu_callback_choice_fight_for_a_whole_day,
+);
 
 // = the bits of RoomPerson.flags (entry byte +0xf). Bits 0x01 and 0x08 are
 // unused.
@@ -664,7 +666,7 @@ impl GameState {
         // = seg000:0de8/0deb si = data_02254; call loc_07b1b — the face panel.
         self.map_draw_panel_record(GAME_OVER_FACE_PANEL);
         // = seg000:0dee call clear_frame_tasks.
-        self.remove_all_frame_tasks();
+        self.clear_frame_tasks();
         // = seg000:0df1..0df8 xlat data_0225d — the mocking face; negative =
         //   none.
         let face = GAME_OVER_FACE_PERSON
@@ -960,11 +962,53 @@ impl GameState {
         let periods = target.wrapping_sub(self.game_time) as i16;
         // = seg000:0fa4 call run_events_for_n_time_periods.
         self.run_events_for_n_time_periods(periods);
-        // = seg000:0fa7 loc_00fa7: restore the cursor-covered pixels, present the
-        //   room screen (al = 0x2a), then redraw the companion HUD heads.
+        // = seg000:0fa7 wait_verb_present_room.
+        self.wait_verb_present_room();
+    }
+
+    // = seg000:0fa7 wait_verb_present_room — the shared tail of the WAIT
+    // verbs and FIGHT FOR A WHOLE DAY: restore the cursor-covered pixels,
+    // present the room screen (al = 0x2a), then redraw the companion HUD
+    // heads.
+    fn wait_verb_present_room(&mut self) {
         self.call_restore_cursor();
         self.ui_present_room_screen(0x2a);
         self.ui_hud_draw_companions();
+    }
+
+    // = seg000:0fc5 menu_callback_choice_fight_for_a_whole_day — the
+    // night-attack verb: run one time period of events at a time, up to 16,
+    // stopping as soon as the night attack is over (loopnz on
+    // night_attack_stage), then wait_verb_present_room.
+    pub(crate) fn menu_callback_choice_fight_for_a_whole_day(
+        &mut self,
+        _text_id: u16,
+        _index: usize,
+    ) {
+        // = seg000:0fc5 cx = 10h; loc_00fc8: run_events_for_n_time_periods(1);
+        //   cmp [night_attack_stage],0; loopnz.
+        let mut cx = 0x10;
+        loop {
+            self.run_events_for_n_time_periods(1);
+            cx -= 1;
+            if cx == 0 || self.night_attack_stage == 0 {
+                break;
+            }
+        }
+        // = seg000:0fd7 jmp wait_verb_present_room.
+        self.wait_verb_present_room();
+    }
+
+    // = seg000:301a ui_install_blank_nav_panel — si = ui_nav_panel_blank; jmp
+    // loc_0d72b (ui_install_nav_panel).
+    fn ui_install_blank_nav_panel(&mut self) {
+        self.ui_install_nav_panel(self.nav_panel_blank);
+    }
+
+    // = seg000:37ad draw_sun_flash — SUN.HSQ (al = 22h) sprite 0 through
+    // open_resource_and_draw_sprite0.
+    fn draw_sun_flash(&mut self) {
+        self.open_resource_and_draw_sprite0(sprite_bank::SUN);
     }
 
     // = seg000:0e3e menu_callback_choice_exit_game — the EXIT GAME verb (shared by
@@ -2023,6 +2067,19 @@ impl GameState {
         self.highlight_hovered_text_action_item();
     }
 
+    // = seg000:d64e clear_hovered_text_action_item_highlight —
+    // highlight_hovered_text_action_item with the pointer at (0, 0) (bx = dx =
+    // 0): nothing is hovered there, so the last hovered slot is repainted
+    // un-highlighted. The port's routine reads the mouse position, so it is
+    // parked at the origin for the call.
+    pub(crate) fn clear_hovered_text_action_item_highlight(&mut self) {
+        let saved = (self.mouse_pos_x, self.mouse_pos_y);
+        self.mouse_pos_x = 0;
+        self.mouse_pos_y = 0;
+        self.highlight_hovered_text_action_item();
+        (self.mouse_pos_x, self.mouse_pos_y) = saved;
+    }
+
     // = seg000:d50f highlight_hovered_text_action_item — repaint at most two
     // verb slots so the one under the pointer shows the 0x8000 inverse
     // highlight. Two hover sources feed the same highlight:
@@ -2784,8 +2841,8 @@ impl GameState {
             if steerable {
                 self.ui_install_nav_panel(self.nav_panel_flight);
             } else {
-                // = seg000:301a si = ui_nav_panel_blank.
-                self.ui_install_nav_panel(self.nav_panel_blank);
+                // = seg000:301a ui_install_blank_nav_panel.
+                self.ui_install_blank_nav_panel();
             }
             return;
         }
@@ -3250,11 +3307,11 @@ impl GameState {
         if past % SUN_FLASH_STEP_INTERVAL != 0 {
             return;
         }
-        // = seg000:3731..373a the sun flash: draw_sun_flash (seg000:37ad,
-        //   SUN.HSQ sprite 0) into fb1, presented over the game area.
+        // = seg000:3731..373a the sun flash: draw_sun_flash into fb1,
+        //   presented over the game area.
         self.call_restore_cursor();
         self.set_fb1_as_active_framebuffer();
-        self.open_resource_and_draw_sprite0(sprite_bank::SUN);
+        self.draw_sun_flash();
         self.present_game_area();
         // = seg000:373d..374d wait_a_bit((steps-20)/16 + 1 units, at most 10)
         //   — the flash holds 1.28 s at step 20, growing to 5.12 s at the

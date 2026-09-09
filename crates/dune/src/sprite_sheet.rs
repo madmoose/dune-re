@@ -109,6 +109,8 @@ impl SpriteSheet {
         }
     }
 
+    // = seg000:c1f4 get_subresource_ax_pointer_to_dssi — ds:si = the current
+    // resource + its offset-table entry ax (the sub-resource's bytes).
     pub fn get_resource(&self, id: u16) -> Option<&[u8]> {
         match self.sprites.get(id as usize) {
             Some(SpriteOrData::Data(data)) => Some(data),

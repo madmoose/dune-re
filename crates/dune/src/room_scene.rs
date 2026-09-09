@@ -345,6 +345,32 @@ fn compass_move_target(location_and_room: u16, exits: [u8; 4], direction: usize)
 // the last two entries reproduce.
 const NPC_PALACE_HOME_ROOMS: [u8; 9] = [0x0a, 9, 8, 4, 6, 5, 5, 0x09, 0x02];
 
+// = seg000:40c9 NPC_move_if_flag_bit_6_set_040c9 — a room-person entry with
+// flags bit 6 (NPC_COMPANION) moves to (location_and_room, location_slot).
+fn npc_move_if_flag_bit_6_set(
+    entry: &mut crate::room_game_screen::RoomPerson,
+    location_and_room: u16,
+    location_slot: u16,
+) {
+    if entry.flags & NPC_COMPANION != 0 {
+        entry.location_and_room = location_and_room;
+        entry.location_appearance = location_slot;
+    }
+}
+
+// = seg000:3efe scene_record_lookup — si = data_013c4[dh] (the scene table
+// for the location byte) + 5 * (dl - 1): the scene record for
+// location_and_room. `None` for combinations outside the table (only during
+// startup before location_and_room is valid).
+pub(crate) fn scene_record_lookup(location_and_room: u16) -> Option<usize> {
+    let dh = (location_and_room >> 8) as usize;
+    let dl = (location_and_room & 0xff) as usize;
+    if dl == 0 || dh >= SCENE_DISPATCH.len() {
+        return None;
+    }
+    Some(SCENE_DISPATCH[dh] as usize + (dl - 1))
+}
+
 impl GameState {
     // = the four direction-exit bytes of the scene record selected by the
     // current (location_and_room, location_appearance). Returns `None` for
@@ -352,14 +378,8 @@ impl GameState {
     // bite is during startup before location_and_room/location_appearance are
     // valid).
     pub(crate) fn current_scene_exits(&self) -> Option<[u8; 4]> {
-        // = seg000:3efe loc_03efe: index SCENE_DISPATCH by dh then offset by (dl - 1).
-        let dh = (self.location_and_room >> 8) as usize;
-        let dl = (self.location_and_room & 0xff) as usize;
-        if dl == 0 || dh >= SCENE_DISPATCH.len() {
-            return None;
-        }
-        let base = SCENE_DISPATCH[dh] as usize;
-        let idx = base + (dl - 1);
+        // = seg000:3efe scene_record_lookup.
+        let idx = scene_record_lookup(self.location_and_room)?;
         if idx >= self.scene_records.len() {
             return None;
         }
@@ -1227,14 +1247,8 @@ impl GameState {
     ) {
         let (cur_room, cur_appearance) = (self.location_and_room, self.location_appearance);
         for entry in self.room_persons.iter_mut() {
-            if entry.location_and_room == cur_room
-                && entry.location_appearance == cur_appearance
-                // = seg000:40c9 test byte [si+0eh],40h.
-                && entry.flags & NPC_COMPANION != 0
-            {
-                // = seg000:40cf/40d1 — move the entry to the destination.
-                entry.location_and_room = location_and_room;
-                entry.location_appearance = location_appearance;
+            if entry.location_and_room == cur_room && entry.location_appearance == cur_appearance {
+                npc_move_if_flag_bit_6_set(entry, location_and_room, location_appearance);
             }
         }
     }
@@ -1325,13 +1339,14 @@ impl GameState {
         // so the orni is not clickable behind a talking head.
         self.orni_hotspot_x = 0;
 
-        let dh = (location_and_room >> 8) as usize;
         let dl = (location_and_room & 0xff) as usize;
         let _ = location_appearance;
 
-        // = seg000:3efe loc_03efe: pick scene record (dl-1) in the table starting at
-        //   SCENE_DISPATCH[dh]. The record's `background` byte drives draw_SAL.
-        let record = &self.scene_records[SCENE_DISPATCH[dh] as usize + (dl - 1)];
+        // = seg000:3efe scene_record_lookup: pick scene record (dl-1) in the
+        //   table starting at SCENE_DISPATCH[dh]. The record's `background`
+        //   byte drives draw_SAL.
+        let record = &self.scene_records[scene_record_lookup(location_and_room)
+            .expect("scene record outside the dispatch table")];
         let background = record.background;
 
         // = seg000:3b59 draw_SAL: split the background byte into a SAL room
@@ -1693,7 +1708,7 @@ impl GameState {
         // draw when suppressed, so the anchors recorded by the prior normal draw
         // (which the zoom already read) survive the re-render untouched.
         if draw_characters {
-            self.character_screen_pos = [(0xffff, 0xffff); 0x17];
+            self.clear_character_screen_pos_table();
             for (id, x, y) in renderer.character_screen_positions() {
                 if (0..0x17).contains(&id) {
                     self.character_screen_pos[id as usize] = (x as u16, y as u16);
@@ -1774,21 +1789,26 @@ impl GameState {
             if self.current_sky_palette as usize == sub {
                 return;
             }
-            // = seg000:38a2 loc_038a2: re-aim the in-flight fade. Reset the
-            // step counter, then open_sky_or_skydn_palette_al_sub_bl +
-            // sky_palette_write_fade_target write the new sub-palette into
-            // palette_fade_target; the fade task already installed by the
-            // running fade keeps stepping the live palette toward it.
-            self.sky_fade_countdown = 0x30;
-            // = seg000:38a7 open_sky_or_skydn_palette_al_sub_bl + 38aa jmp
-            // sky_palette_write_fade_target.
-            self.sky_palette_write_fade_target(resource, sub);
+            // = seg000:38a2 sky_palette_reaim_fade: the fade task already
+            // installed by the running fade keeps stepping the live palette
+            // toward the new target.
+            self.sky_palette_reaim_fade(sub);
             return;
         }
         // = seg000:38ad loc_038ad: no fade in progress, write the sub-palette
         // straight into the LIVE palette (open_sky_or_skydn_palette_al_sub_bl +
         // sky_palette_write_live).
         self.sky_palette_write_live(resource, sub);
+    }
+
+    // = seg000:38a2 sky_palette_reaim_fade — re-aim the in-flight sky fade at
+    // sub-palette bl: sky_fade_countdown = 30h, then
+    // open_sky_or_skydn_palette_al_sub_bl + sky_palette_write_fade_target
+    // write the sub-palette into palette_fade_target.
+    pub(crate) fn sky_palette_reaim_fade(&mut self, sub: usize) {
+        self.sky_fade_countdown = 0x30;
+        let resource = self.open_sky_or_skydn_palette();
+        self.sky_palette_write_fade_target(resource, sub);
     }
 
     // = seg000:3971 open_sky_or_skydn_palette_al_sub_bl — ax = 0x28 +
@@ -1860,6 +1880,13 @@ impl GameState {
             // = seg000:0fc2 loc_00fc2 jmp sky_palette_write_live.
             self.sky_palette_write_live(resource, sub);
         }
+    }
+
+    // = seg000:3ae9 clear_character_screen_pos_table — fill
+    // character_x_table/character_y_table (seg001:47f8, 0x2e words) with
+    // 0xffff (absent).
+    pub(crate) fn clear_character_screen_pos_table(&mut self) {
+        self.character_screen_pos = [(0xffff, 0xffff); 0x17];
     }
 
     // = seg000:38b4 draw_sky — tile SKY.HSQ as a 4-row × 8-column grid, one
@@ -1940,10 +1967,15 @@ impl GameState {
         let prev = self.sky_fade_countdown;
         self.sky_fade_countdown = 0x40;
         if prev == 0 {
-            // = seg000:3901 loc_03901: si = loc_03916; bp = 0x10; jmp
-            // add_frame_task — one fade step every 0x10 ticks.
-            self.add_frame_task(0x10, crate::TaskId::SkyFade);
+            // = seg000:3901 jmp sky_fade_add_task.
+            self.sky_fade_add_task();
         }
+    }
+
+    // = seg000:3901 sky_fade_add_task — si = frame_task_callback_03916; bp =
+    // 10h; jmp add_frame_task: one fade step every 0x10 ticks.
+    fn sky_fade_add_task(&mut self) {
+        self.add_frame_task(0x10, crate::TaskId::SkyFade);
     }
 
     // = seg000:3916 loc_03916 — one tick of the sky palette fade task. Steps the
@@ -1997,7 +2029,8 @@ impl GameState {
     }
 }
 
-// = seg000:395c get_sky_palette_id_from_game_time_in_bl. The DOS routine
+// = seg000:395c get_sky_palette_id_from_game_time_in_bl / seg000:395f sky_palette_id_for_time_al
+// (the body, for an explicit time in al). The DOS routine
 // indexes a 16-byte hour-of-day table at byte_21730 (seg001:2280) by the low
 // nibble of `game_time` and adds the (low-byte >> 2) & 0x1c "stride" so each
 // 16-tick day spans the table once and each whole-day rollover shifts the

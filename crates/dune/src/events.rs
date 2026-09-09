@@ -205,7 +205,13 @@ impl GameState {
             self.draw_room_game_screen();
             return;
         }
-        // = seg000:1bb2 loc_01bb2 (the request == 0 fall-through).
+        // = seg000:1bb2 clear_room_redraw_request (the request == 0 fall-through).
+        self.clear_room_redraw_request();
+    }
+
+    // = seg000:1bb2 clear_room_redraw_request — room_redraw_request
+    // (data_0473b) = 0.
+    fn clear_room_redraw_request(&mut self) {
         self.room_redraw_request = 0;
     }
 

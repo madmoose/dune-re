@@ -316,12 +316,15 @@ impl GameState {
     // `seg000:025c jz loc_00292` reads to abort the whole act. A non-ESC key, a
     // mouse/joystick button, or a full timeout returns false.
     //
-    // Note: when _byte_227D_suppress_sky_240_255 == 0 DOS also writes the
-    // secondary sky-colour span here (= seg000:ddc0 loc_0d64e); that sky-palette
-    // step is not ported yet.
     pub(crate) fn wait_interruptable(&mut self, ticks: u64) -> bool {
         // = seg000:ddb4 [key_hit_scancode] = 0.
         self.kb_clear_scancode();
+        // = seg000:ddb9/ddc0 cmp [suppress_sky_240_255],0; jnz; call
+        //   clear_hovered_text_action_item_highlight — in-game (the byte is
+        //   0) the hovered verb loses its highlight for the wait.
+        if self.data_0227d == 0 {
+            self.clear_hovered_text_action_item_highlight();
+        }
         // = seg000:ddca loop for `ticks` PIT ticks, polling any_key_pressed.
         let deadline = self.game_ticks() + ticks;
         while self.game_ticks() < deadline {

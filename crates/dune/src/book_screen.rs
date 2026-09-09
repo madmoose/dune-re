@@ -539,8 +539,8 @@ impl GameState {
     // CREDITS.HNM frame into fb1, start the WORMSUIT score unless the CD
     // playlist owns the music, and install the per-tick scroll task.
     fn book_play_credits_scroll(&mut self) {
-        // = seg000:09ef play_CREDITS_HNM2 — hnm_load_first_frame(0x14).
-        self.hnm_load_first_frame("CREDITS.HNM", 0);
+        // = seg000:09f5 call play_CREDITS_HNM2.
+        self.play_credits_hnm2();
         // = seg000:09f8 call update_screen_palette.
         self.update_screen_palette();
         // = seg000:09fb..0a09 WORMSUIT unless the day sky is up and the CD
@@ -558,24 +558,38 @@ impl GameState {
     pub(crate) fn credits_scroll_frame_task(&mut self) {
         // = seg000:0a16 push [framebuffer_active_seg].
         let saved = self.active_fb();
-        // = seg000:0a23 loc_00a23.
+        // = seg000:0a1a call credits_scroll_decode_frame.
+        self.credits_scroll_decode_frame();
+        // = seg000:0a1d pop [framebuffer_active_seg].
+        self.active_fb = saved;
+    }
+
+    // = seg000:09ef play_CREDITS_HNM2 — hnm_load_first_frame(14h, CREDITS.HNM).
+    fn play_credits_hnm2(&mut self) {
+        self.hnm_load_first_frame("CREDITS.HNM", 0);
+    }
+
+    // = seg000:0a23 credits_scroll_decode_frame — one credits frame: with
+    // suppress_sky_240_255 set (the intro path) decode straight onto the
+    // screen; otherwise (in the book) decode into fb1 and, on an advanced
+    // frame, present the game area and the mouse.
+    fn credits_scroll_decode_frame(&mut self) {
         if self.data_0227d != 0 {
-            // = seg000:0a2a the intro path: decode straight onto the screen.
+            // = seg000:0a2a set_screen_as_active_framebuffer; jmp hnm_do_frame.
             self.set_screen_as_active_framebuffer();
             if self.hnm_do_frame() {
                 self.send_frame_to_display();
             }
         } else {
-            // = seg000:0a30..0a3b the in-book path: decode into fb1, and on
-            // an advanced frame present the game area and the mouse.
+            // = seg000:0a30..0a3b set_fb1_as_active_framebuffer;
+            //   hnm_do_frame_and_check_if_frame_advanced; jz ret;
+            //   present_game_area; jmp draw_mouse.
             self.set_fb1_as_active_framebuffer();
             if self.hnm_do_frame() {
                 self.present_game_area();
                 self.draw_mouse();
             }
         }
-        // = seg000:0a1d pop [framebuffer_active_seg].
-        self.active_fb = saved;
     }
 
     // = seg000:b1ee callback_main_ui_element_23 — the SEE-verb on a video

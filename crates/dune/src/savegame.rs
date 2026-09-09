@@ -962,6 +962,13 @@ impl GameState {
         Some(u16::from_le_bytes([*data.first()?, *data.get(1)?]))
     }
 
+    // = seg000:b2c4 patch_save_slot_label_gated — cmp byte [ds:38af],32h; ja
+    // ret (a data-image constant no code writes, so the gate passes), then ax
+    // = the slot's game_time word (ds:0d816h) and loc_0b2cd patches the label.
+    fn patch_save_slot_label_gated(&mut self, text_id: u16, time: u16) {
+        self.patch_save_slot_label(text_id, time);
+    }
+
     // = seg000:b2cd loc_0b2cd — patch a save-slot label ("Log N: DAY  d /
     // hh.mm x.m.") in the COMMAND.BIN buffer in place: the day into the 3-wide
     // field ending at the label's second digit run, then the 10-char
@@ -1033,7 +1040,8 @@ impl GameState {
             let slot = (id - 0x10f) as u8;
             match Self::save_game_timestamp(slot) {
                 Some(time) => {
-                    self.patch_save_slot_label(rec.text_id, time);
+                    // = seg000:b338 call patch_save_slot_label_gated.
+                    self.patch_save_slot_label_gated(rec.text_id, time);
                     if flag_mask == CMD_HIGHLIGHT {
                         rec.text_id |= flag_mask;
                     }
@@ -1134,10 +1142,10 @@ impl GameState {
     // active screen.
     pub(crate) fn post_load_fixups(&mut self, toggle: u8) {
         self.room_view_toggle = toggle;
-        // = seg000:b3f1 call loc_03ae9 — clear the person screen-pos markers.
-        self.character_screen_pos = [(0xffff, 0xffff); 0x17];
+        // = seg000:b3f1 call clear_character_screen_pos_table.
+        self.clear_character_screen_pos_table();
         // = seg000:b3f4 call clear_frame_tasks.
-        self.remove_all_frame_tasks();
+        self.clear_frame_tasks();
         // = seg000:b3f7 talking_head_id = 0xffff — drop any active head.
         self.talking_head = None;
         // = seg000:b3fd call reset_game_suspend (also releases the save

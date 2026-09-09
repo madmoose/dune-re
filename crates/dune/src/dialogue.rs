@@ -1444,6 +1444,13 @@ impl GameState {
         }
     }
 
+    // = seg000:2524 spice_spend — spice_in_stock -= ax; spice_spent_today +=
+    // ax.
+    pub(crate) fn spice_spend(&mut self, ax: u16) {
+        self.spice_in_stock = self.spice_in_stock.wrapping_sub(ax);
+        self.spice_spent_today = self.spice_spent_today.wrapping_add(ax);
+    }
+
     // = seg000:a28e callback_event_dialogue_line_0d_show_location_on_map —
     // the line names a location (staged_name_location): with no named head
     // speaking, queue the location's narration clip to follow the line; and
@@ -1601,8 +1608,7 @@ impl GameState {
                     let bill = std::mem::take(&mut self.smugglers[i].bill_value);
                     self.smuggler_bills_count_ds_22 =
                         self.smuggler_bills_count_ds_22.wrapping_sub(1);
-                    self.spice_in_stock = self.spice_in_stock.wrapping_sub(bill);
-                    self.spice_spent_today = self.spice_spent_today.wrapping_add(bill);
+                    self.spice_spend(bill);
                 }
             }
         }

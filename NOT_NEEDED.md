@@ -131,3 +131,10 @@ with it:
 - `seg000:667d callback_troop_sum_harvest_total_if_same_occupation` — the per-troop step of that unreachable sum.
 - `seg000:8454 troop_settle_into_location_unreachable` — unreachable: no caller settles a troop into its location this way (clear occupation bits 0-1, link, clear bit 6, register its equipment).
 - `seg000:a1ca clear_dialogue_interrupt_gate_unreferenced` — an unreferenced twin of callback_event_dialogue_line_02_stay_here.
+- `seg000:ac35 pcm_break_loop_unreferenced` — an unreferenced call of the PCM driver's break-loop entry.
+- `seg000:ae54 pcm_alloc_voc_buffer` — bump-allocate the 4e20h-byte voice clip buffer at start-up when a PCM card is present; the port reads clips into Vecs.
+- `seg000:c422 copy_fb2_to_active_framebuffer_unreferenced` — an unreferenced fb2 -> active framebuffer copy through vga_copy_screen_1.
+- `seg000:c64c troop_icon_spawn_and_dirty_unreferenced` — unreferenced: spawn a troop icon record and repaint its rect.
+- `seg000:e270 save_regs` — push bx/cx/dx/si/di/bp under the caller's return address; a register-preservation helper.
+- `seg000:e283 restore_regs` — the matching pop; a register-preservation helper.
+- `seg000:e2ca font_draw_two_digits_unreferenced` — an unreferenced two-digit drawer (aam, two glyph calls) after font_draw_number_byte.

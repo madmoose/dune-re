@@ -1281,6 +1281,16 @@ impl GameState {
             .start_playback(&self.audio_current_sfx_data, 0);
     }
 
+    // = seg000:a9e7 pcm_test_audio_done — ZF set when either ping-pong
+    // buffer's callback flag reads 3 (the driver finished it). The port
+    // compares the samples played against the clip length: no audio, or the
+    // clip has drained → done.
+    fn pcm_test_audio_done(&self, played: u64) -> bool {
+        self.talking_head
+            .as_ref()
+            .is_none_or(|h| h.voc_total_samples == 0 || played >= h.voc_total_samples)
+    }
+
     // = seg000:a7c2 lip_sync_frame_task / seg000:a814 advance_lipsync.
     // Step the mouth value from the .voc stream in lock-step with PCM playback:
     // mouth index = samples_played / SAMPLES_PER_LIP_FRAME (a fixed cadence),
@@ -1322,9 +1332,8 @@ impl GameState {
                 return;
             };
             let played = played.saturating_sub(head.voc_baseline);
-            // = seg000:abcc is_voc_pcm_playing / pcm_test_audio_done: no audio, or the
-            // clip has drained → over.
-            if head.voc_total_samples == 0 || played >= head.voc_total_samples {
+            // = seg000:a7ce call pcm_test_audio_done — the clip has drained.
+            if self.pcm_test_audio_done(played) {
                 (0u8, true)
             } else if head.voc_lipsync.is_empty() {
                 // = seg000:a7c7 cmp pcm_voc_lipsync_data,0 — a voice without

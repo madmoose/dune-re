@@ -103,15 +103,20 @@ impl GameState {
         }
         // = seg000:1811 mov _byte_2C316_ui_hud_head_animating_down,1.
         self.ui_hud_head_animating_down = true;
-        // = seg000:181e..1832 ui_hud_head_animate_down_loop lower
-        //   ui_hud_head_index toward 0, redrawing and waiting 8 ticks per step.
+        // = seg000:1816 call ui_hud_head_animate_down_loop.
+        self.ui_hud_head_animate_down_loop();
+        // = seg000:1819 dec _byte_2C316_ui_hud_head_animating_down.
+        self.ui_hud_head_animating_down = false;
+    }
+
+    // = seg000:181e ui_hud_head_animate_down_loop — while ui_hud_head_index >
+    // 0: decrement it, redraw the head (ui_hud_head_redraw) and wait 8 ticks.
+    fn ui_hud_head_animate_down_loop(&mut self) {
         while self.ui_hud_head_index != 0 {
             self.ui_hud_head_index -= 1;
             self.ui_hud_head_redraw();
             self.wait_a_bit_for_head_fold();
         }
-        // = seg000:1819 dec _byte_2C316_ui_hud_head_animating_down.
-        self.ui_hud_head_animating_down = false;
     }
 
     // = seg000:1834 ui_hud_head_save_rect — grab the ui_hud_head_rect_game_area_strip

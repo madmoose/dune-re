@@ -727,12 +727,17 @@ impl GameState {
         }
     }
 
+    // = seg000:b93b remove_results_gauge_task — remove results_gauge_task.
+    pub(crate) fn remove_results_gauge_task(&mut self) {
+        self.remove_frame_task(crate::TaskId::ResultsGauges);
+    }
+
     // = seg000:b915 globe_slide_decorations_close — remove the gauge task
     // and slide the side panels back in, drawing straight to the screen,
     // then redraw them into fb1 at the closed position.
     fn globe_slide_decorations_close(&mut self) {
-        // = seg000:b915 call loc_0b93b — remove results_gauge_task.
-        self.remove_frame_task(crate::TaskId::ResultsGauges);
+        // = seg000:b915 call remove_results_gauge_task.
+        self.remove_results_gauge_task();
         // = seg000:b918 call set_screen_as_active_framebuffer.
         self.set_screen_as_active_framebuffer();
         // = seg000:b91b..b928 the slide-in loop (the panels only ever move

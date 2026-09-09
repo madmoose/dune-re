@@ -137,6 +137,13 @@ fn popup_preserve_over_repaint(panel: Rect, clipped: Rect, yoff: i16) -> Option<
     Some(pr)
 }
 
+// = seg000:c827 troop_icons_pick_next_fifo — draw-order pick, insertion
+// order: return the first non-zero entry of the collected icon-ptr list (bx =
+// its slot); SF set when the list is empty.
+fn troop_icons_pick_next_fifo(list: &[usize]) -> Option<usize> {
+    (!list.is_empty()).then_some(0)
+}
+
 impl GameState {
     // = seg000:c60b troop_icon_spawn — append a troop icon: centre the ONMAP
     // sprite on (cx, cy), fill a new record and bump troop_icon_count.
@@ -429,13 +436,19 @@ impl GameState {
         // = seg000:c763..c77d draw them in troop_icon_draw_order_func order:
         //   fifo keeps the list order; the map's by-depth policy (0xc835)
         //   layers back-to-front by ascending x1 + y1, flag-0x40 icons last.
-        if self.troop_icon_draw_by_depth {
-            // = the repeated pick: each pass takes the next icon out of the
-            //   list (the DOS xchg zeroes its slot) until none is left.
-            let mut remaining = std::mem::take(&mut order);
-            while let Some(k) = self.troop_icons_pick_next_by_depth(&remaining) {
-                order.push(remaining.remove(k));
-            }
+        // = the repeated pick: each pass takes the next icon out of the list
+        //   (the DOS xchg zeroes its slot) until none is left.
+        let mut remaining = std::mem::take(&mut order);
+        loop {
+            let pick = if self.troop_icon_draw_by_depth {
+                self.troop_icons_pick_next_by_depth(&remaining)
+            } else {
+                troop_icons_pick_next_fifo(&remaining)
+            };
+            let Some(k) = pick else {
+                break;
+            };
+            order.push(remaining.remove(k));
         }
         // The icon draws land on the front buffer, like the restore above.
         let saved = self.active_fb();

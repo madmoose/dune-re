@@ -3252,6 +3252,8 @@ impl GameState {
 
         self.build_voc_base_table();
 
+        // = seg000:00b6 call clear_frame_tasks.
+        self.clear_frame_tasks();
         // = seg000:00b9/00bc — after initialize_resources2 returns, run the
         // game-phase trigger record twice. Each walk presents the first
         // condition-matching unspoken entry of DIALOGUE slot 135 (records
@@ -3759,6 +3761,13 @@ impl GameState {
     // = seg000:39e6 remove_room_frame_task.
     pub fn remove_room_frame_task(&mut self) {
         self.remove_frame_task(TaskId::Room);
+    }
+
+    // = seg000:da53 clear_frame_tasks — frame_tasks_count = 0 and
+    // sky_fade_countdown = 0 (without remove_all_frame_tasks' sky_skydn reset).
+    pub(crate) fn clear_frame_tasks(&mut self) {
+        self.frame_tasks.clear();
+        self.sky_fade_countdown = 0;
     }
 
     // = seg000:0911 remove_all_frame_tasks.
@@ -4967,8 +4976,10 @@ impl GameState {
         );
     }
 
-    // = seg000:c560 draw_rect_outline — outline the rectangle (x0, y0)-(x1, y1)
-    // in `color` as four vga_draw_line edges (top, bottom, left, right). The
+    // = seg000:c560 draw_rect_outline / seg000:c53e draw_line — outline the
+    // rectangle (x0, y0)-(x1, y1) in `color` as four draw_line edges (top,
+    // bottom, left, right; each a vga_draw_line with the clip rect data_0276a,
+    // the pattern data_02772 and font_draw_fg_color). The
     // bevel is axis-aligned, so the port fills the four edge runs directly into
     // the active framebuffer (applying fb_base_ofs / y_offset like every segvga
     // blit) rather than routing through the generic Bresenham vga_draw_line.

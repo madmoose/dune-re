@@ -885,9 +885,15 @@ impl GameState {
     // rect (screen rows 24..175) at fb_base_ofs = 24, set by play_intro.
     fn stage_13_init(&mut self) {
         self.gfx_clear_active_framebuffer();
-        // = seg000:0978 persons_in_room = 0: the equipment room has no person.
+        // = seg000:0975 dx = 2002h; call intro_draw_room_without_persons.
+        self.intro_draw_room_without_persons(0x2002);
+    }
+
+    // = seg000:0978 intro_draw_room_without_persons — persons_in_room = 0,
+    // then loc_0097e: bx = 180h; draw_room_for_scene(dx).
+    fn intro_draw_room_without_persons(&mut self, dx: u16) {
         self.persons_in_room = 0;
-        self.draw_room_for_scene(0x2002, 0x180);
+        self.draw_room_for_scene(dx, 0x180);
     }
 
     fn stage_13_play(&mut self) {}
@@ -907,8 +913,8 @@ impl GameState {
     // draws the room, al=0 selects LETO.HSQ, and loc_0099d (dx=0) sets up the
     // lip-sync data and renders the first frame via loc_0978e.
     fn stage_15_init(&mut self) {
-        self.persons_in_room = 0;
-        self.draw_room_for_scene(0x200a, 0x180);
+        // = seg000:0995 dx = 200ah; call intro_draw_room_without_persons.
+        self.intro_draw_room_without_persons(0x200a);
         // = seg000:099b xor al,al (LETO); seg000:099d loc_0099d xor dx,dx.
         self.intro_setup_talking_head(0, 0);
     }
@@ -1322,8 +1328,7 @@ impl GameState {
         // here is wrong: SKY.HSQ sub 0x12 carries green entries at colours
         // 64..66, which the dune pixels (palette 192..194) then fade to as
         // stray green specks. The 240..255 span is skipped while [227dh]=1.
-        let resource = self.open_sky_or_skydn_palette();
-        self.sky_palette_write_fade_target(resource, 0x12);
+        self.sky_palette_reaim_fade(0x12);
         // = seg000:06f3 load_game_area_hnm: add [0dbdah],1e0h (fb base += 24
         // rows = the game area) + hnm_load_first_frame(HNM 0x12 = MTG3.HNM). The first frame sets the live
         // palette; the fade then steps its sky range toward the SKY target.
