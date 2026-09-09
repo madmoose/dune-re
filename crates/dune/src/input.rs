@@ -393,7 +393,7 @@ impl GameState {
     // has drained (is_voc_pcm_playing clear). DOS busy-spins; the port yields
     // one PIT tick between calls.
     pub(crate) fn wait_for_voc_pcm_to_drain(&mut self) {
-        while self.voc_pcm_playing {
+        while self.is_voc_pcm_playing() {
             // = seg000:abd2 call lip_sync_frame_task.
             self.tick_talking_head_voc();
             let now = self.game_ticks();

@@ -478,11 +478,15 @@ impl GameState {
             _ => None,
         };
         if let Some(al) = al {
-            // = seg000:8ac3 subtitle_set_voice_variant: data_047e0 = al; and
-            //   dialogue_line_word0, 0efh (consume the voiced-variant flag).
-            self.data_047e0 = al;
-            self.dialogue_line_word0 &= 0xef;
+            self.subtitle_set_voice_variant(al);
         }
+    }
+
+    // = seg000:8ac3 subtitle_set_voice_variant — data_047e0 = al; clear
+    // dialogue_line_word0 bit 4 (consume the voiced-variant flag).
+    fn subtitle_set_voice_variant(&mut self, al: u8) {
+        self.data_047e0 = al;
+        self.dialogue_line_word0 &= 0xef;
     }
 
     // = seg000:8c8a subtitle_restore_prior — take down the previously drawn

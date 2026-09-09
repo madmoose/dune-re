@@ -138,3 +138,8 @@ with it:
 - `seg000:e270 save_regs` — push bx/cx/dx/si/di/bp under the caller's return address; a register-preservation helper.
 - `seg000:e283 restore_regs` — the matching pop; a register-preservation helper.
 - `seg000:e2ca font_draw_two_digits_unreferenced` — an unreferenced two-digit drawer (aam, two glyph calls) after font_draw_number_byte.
+- `seg000:50a2 menu_callback_choice_back_to_starting_point_unreferenced` — an unreferenced entry that pops the menu before menu_callback_choice_back_to_starting_point.
+- `seg000:e56b parse_cmd_is_end_of_arg` — the PSP command-tail tokenizer's end-of-argument test (parse_command_line).
+- `seg000:e851 alloc_check_ram_available` — allocator_next_free_seg + 2f13h paragraphs against allocator_last_free_seg: the start-up RAM check.
+- `seg000:e8a8 set_pit_timer_frequency` — program 8253 channel 0 (mode 3) with the divisor in ax; the port's clock is the frame sink's.
+- `seg000:e94a int_skip_2_bytes_iret` — an interrupt stub that returns past a 2-byte instruction after the int.

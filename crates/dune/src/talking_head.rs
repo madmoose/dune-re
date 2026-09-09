@@ -307,6 +307,13 @@ fn split_decimal_digits(value: u16) -> [u8; 5] {
     ]
 }
 
+// = seg000:a8b1 nibble_to_hex_digit — al & 0fh + 30h, plus 7 past '9': one
+// uppercase hex digit from the low nibble.
+fn nibble_to_hex_digit(v: u8) -> u8 {
+    let d = (v & 0x0f) + b'0';
+    if d > b'9' { d + 7 } else { d }
+}
+
 impl GameState {
     // = seg000:994f idle animation selector. With facing == 0 (the named heads)
     // it returns a random idle animation: rand_masked(6) ∈ {0,2,4,6} indexes the
@@ -1100,12 +1107,10 @@ impl GameState {
         let letter = b'A' + dir_id;
         self.voc_filename[1] = letter;
         self.voc_filename[4] = letter;
-        // = seg000:a8b1 loc_0a8b1 — one uppercase hex digit from the low nibble.
-        let hex_digit = |v: u16| b"0123456789ABCDEF"[(v & 0xf) as usize];
         // = seg000:a8cb..a8e0 — bits 8..11, 4..7, 0..3 of the voc index.
-        self.voc_filename[5] = hex_digit(voc_index >> 8);
-        self.voc_filename[6] = hex_digit(voc_index >> 4);
-        self.voc_filename[7] = hex_digit(voc_index);
+        self.voc_filename[5] = nibble_to_hex_digit((voc_index >> 8) as u8);
+        self.voc_filename[6] = nibble_to_hex_digit((voc_index >> 4) as u8);
+        self.voc_filename[7] = nibble_to_hex_digit(voc_index as u8);
         // = seg000:a8e1..a8fa — the room-acoustics suffix.
         self.voc_filename[8] = if self.data_000ea <= 0
             && (self.location_appearance & 0xff) == 0x80
@@ -1279,6 +1284,14 @@ impl GameState {
         // = seg000:ab3c call [pcm_vtable_start_playback].
         self.pcm_player
             .start_playback(&self.audio_current_sfx_data, 0);
+    }
+
+    // = seg000:abcc is_voc_pcm_playing — ZF-returning test of
+    // _byte_2D0DB_is_voc_pcm_playing: true = a voice or sound effect is still
+    // playing. The audio starters gate on it so a new clip cannot cut off
+    // one in progress.
+    pub(crate) fn is_voc_pcm_playing(&self) -> bool {
+        self.voc_pcm_playing
     }
 
     // = seg000:a9e7 pcm_test_audio_done — ZF set when either ping-pong

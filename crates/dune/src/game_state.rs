@@ -4514,8 +4514,9 @@ impl GameState {
         gfx::vga_clear_screen(self);
     }
 
-    // = seg000:c305 draw_sprite_clipped — blit sprite `id` from `sheet` top-left
-    // at (x, y), clipped to `clip`.
+    // = seg000:c305 draw_sprite_clipped / seg000:c30d draw_sprite_clipped_clobbering_bx_dx
+    // — blit sprite `id` from `sheet` top-left at (x, y), clipped to `clip`
+    // (the c30d entry skips the bx/dx save).
     pub(crate) fn draw_sprite_from_sheet_clipped(
         &mut self,
         sheet: &SpriteSheet,
@@ -4816,7 +4817,8 @@ impl GameState {
         });
     }
 
-    // = seg000:c4f0 present_screen_rect — the tail of the presentation chain
+    // = seg000:c4f0 present_screen_rect / seg000:c4fb present_screen_rect_regs
+    // — the tail of the presentation chain
     // (present_game_area jumps here, as does the settings-panel repaint).
     // Redraw the HUD head into fb1 when `rect` overlaps the head box (c4fb),
     // then push `rect` from fb1 to the visible screen (copy_rect_fb1_to_screen).

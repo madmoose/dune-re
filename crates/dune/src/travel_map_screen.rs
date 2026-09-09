@@ -873,6 +873,12 @@ impl GameState {
         )
     }
 
+    // = seg000:5d1d map_window_contains_point — half-open point-in-map-window
+    // test against data_046e3_rect: CF set when x0 <= x < x1 && y0 <= y < y1.
+    pub(crate) fn map_window_contains_point(&self, x: i16, y: i16) -> bool {
+        self.map_view_rect.in_rect(x, y)
+    }
+
     // = seg000:5b93 loc_05b93 — the sprite clip rect while the map view is up:
     // the map window (data_046e3_rect). The port passes it per draw call
     // instead of storing the segvga clip rect; like the segvga clip, it lives
@@ -1190,11 +1196,10 @@ impl GameState {
     pub(crate) fn map_mouse_hover_tracker(&mut self) {
         let x = self.mouse_pos_x as i16;
         let y = self.mouse_pos_y as i16;
-        // = seg000:4586 call map_window_contains_point (seg000:5d1d, the
-        //   half-open data_046e3_rect test); 4589 di = 0; jnb loc_045d3 —
-        //   outside the map window the state is 0.
+        // = seg000:4586 call map_window_contains_point; 4589 di = 0; jnb
+        //   loc_045d3 — outside the map window the state is 0.
         let mut hover: u16 = 0;
-        if self.map_view_rect.in_rect(x, y) {
+        if self.map_window_contains_point(x, y) {
             // = seg000:458e al = 0xff (no appearance cap); call
             //   find_nearest_location_marker.
             let (marker, dist) = self.find_nearest_location_marker(0xff, x, y);
@@ -1903,11 +1908,17 @@ impl GameState {
         self.travel_aim_at_location(self.last_location_index);
         // = seg000:50b5 call clear_room_swap_pending.
         self.clear_room_swap_pending();
-        // = seg000:50b8 call loc_050be — travel_no_location_dest = 0 (back to the homing
-        //   verb pair).
-        self.travel_no_location_dest = 0;
+        // = seg000:50b8 call travel_clear_no_location_dest (back to the
+        //   homing verb pair).
+        self.travel_clear_no_location_dest();
         // = seg000:50bb jmp ui_draw_room_command_panel.
         self.ui_draw_room_command_panel();
+    }
+
+    // = seg000:50be travel_clear_no_location_dest — travel_no_location_dest
+    // = 0.
+    fn travel_clear_no_location_dest(&mut self) {
+        self.travel_no_location_dest = 0;
     }
 
     // = seg000:50c4 menu_callback_choice_towards_nearest_place — the TOWARDS

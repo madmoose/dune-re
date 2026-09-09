@@ -834,20 +834,18 @@ impl GameState {
         // dead row does nothing (bx = 0).
         if slot as u8 == self.command_menu_more_slot {
             let more = self.command_menu_more_state;
-            let menu_ref = self.get_active_menu_ref();
             if more & 0x80 != 0 {
-                self.menu_buffer_mut(menu_ref).skip += 4;
+                self.command_menu_others_next_page();
             } else if more > 0 {
-                self.menu_buffer_mut(menu_ref).skip = 0;
+                self.command_menu_others_rewind();
             } else {
                 return;
             }
-            // = seg000:d426/d42c jmp redraw_active_command_menu — the new page
-            // of rows goes straight to VGA (draw_command_menu_item targets the
-            // screen). The port draws into `screen` and publishes only on a
-            // cursor or hover change, so present the repainted strip here
-            // (unless composing offscreen, where the caller presents).
-            self.redraw_active_command_menu();
+            // The new page of rows goes straight to VGA in DOS
+            // (draw_command_menu_item targets the screen). The port draws
+            // into `screen` and publishes only on a cursor or hover change,
+            // so present the repainted strip here (unless composing
+            // offscreen, where the caller presents).
             if !self.front_buffer_is_fb1() {
                 self.send_frame_to_display();
             }
@@ -1886,6 +1884,24 @@ impl GameState {
         }
         self.menu_stack.push((menu_ref, callback));
         self.draw_command_menu(cl);
+    }
+
+    // = seg000:d423 command_menu_others_next_page — the " Others..." row with
+    // more records ahead (data_0dce4 sign set): advance the active menu's
+    // skip byte by 10h (4 records) and repaint via redraw_active_command_menu.
+    fn command_menu_others_next_page(&mut self) {
+        let menu_ref = self.get_active_menu_ref();
+        self.menu_buffer_mut(menu_ref).skip += 4;
+        self.redraw_active_command_menu();
+    }
+
+    // = seg000:d429 command_menu_others_rewind — the " Others..." row on the
+    // last page of a scrolled menu (data_0dce4 > 0, no records ahead): reset
+    // the skip byte to 0 and repaint via redraw_active_command_menu.
+    fn command_menu_others_rewind(&mut self) {
+        let menu_ref = self.get_active_menu_ref();
+        self.menu_buffer_mut(menu_ref).skip = 0;
+        self.redraw_active_command_menu();
     }
 
     // = seg000:d36d draw_command_menu — paint the top screen-element-stack

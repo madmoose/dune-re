@@ -146,6 +146,58 @@ pub(crate) static MOVE_TROOP_MOUSE_HANDLERS: MouseHandlers = MouseHandlers {
     rmb_drag: GameState::dune_map_mouse_drag_noop,
 };
 
+// = seg000:589b troop_class_color_none — bh = 0: no troops.
+fn troop_class_color_none() -> u8 {
+    0x00
+}
+
+// = seg000:58a4 troop_class_color_spice_military — bh = 66h when spice ==
+// military, 9ah when spice < military, else its complement 65h.
+fn troop_class_color_spice_military(spice: u8, military: u8) -> u8 {
+    match spice.cmp(&military) {
+        std::cmp::Ordering::Equal => 0x66,
+        std::cmp::Ordering::Less => 0x9a,
+        std::cmp::Ordering::Greater => 0x65,
+    }
+}
+
+// = seg000:58b1 troop_class_color_ecology — bh = 0ffh: ecology only.
+fn troop_class_color_ecology() -> u8 {
+    0xff
+}
+
+// = seg000:58b4 troop_class_color_spice_ecology — bh = 77h when equal, 0dfh
+// when spice < ecology, else 75h.
+fn troop_class_color_spice_ecology(spice: u8, ecology: u8) -> u8 {
+    match spice.cmp(&ecology) {
+        std::cmp::Ordering::Equal => 0x77,
+        std::cmp::Ordering::Less => 0xdf,
+        std::cmp::Ordering::Greater => 0x75,
+    }
+}
+
+// = seg000:58c1 troop_class_color_military_ecology — bh = 0bbh when equal,
+// 0efh when military < ecology, else 0bah.
+fn troop_class_color_military_ecology(military: u8, ecology: u8) -> u8 {
+    match military.cmp(&ecology) {
+        std::cmp::Ordering::Equal => 0xbb,
+        std::cmp::Ordering::Less => 0xef,
+        std::cmp::Ordering::Greater => 0xba,
+    }
+}
+
+// = seg000:58ce troop_class_color_all_three — spice < military: 0deh when
+// military < ecology else 9bh; otherwise 7bh when spice < ecology else 67h.
+fn troop_class_color_all_three(spice: u8, military: u8, ecology: u8) -> u8 {
+    if spice < military {
+        if military < ecology { 0xde } else { 0x9b }
+    } else if spice < ecology {
+        0x7b
+    } else {
+        0x67
+    }
+}
+
 // = seg000:586e troop_occupation_class_color / seg000:589e troop_class_color_spice / seg000:58a1 troop_class_color_military
 // — pick the troop-occupation
 // overlay colour from the class counts, via the data_0588b jump table on the
@@ -155,39 +207,15 @@ fn troop_occupation_class_color(spice: u8, military: u8, ecology: u8) -> u8 {
     // = seg000:586e..5884 the presence bits.
     let bits = (spice != 0) as u8 | (((military != 0) as u8) << 1) | (((ecology != 0) as u8) << 2);
     match bits {
-        // = seg000:589b..58b3 the pure cases.
-        0 => 0x00,
+        // = seg000:589b/589e/58a1/58b1 the pure cases.
+        0 => troop_class_color_none(),
         1 => 0x55,
         2 => 0xaa,
-        4 => 0xff,
-        // = seg000:58a4..58b0 spice + military (the `not bh` = 0x65).
-        3 => match spice.cmp(&military) {
-            std::cmp::Ordering::Equal => 0x66,
-            std::cmp::Ordering::Less => 0x9a,
-            std::cmp::Ordering::Greater => 0x65,
-        },
-        // = seg000:58b4..58c0 spice + ecology.
-        5 => match spice.cmp(&ecology) {
-            std::cmp::Ordering::Equal => 0x77,
-            std::cmp::Ordering::Less => 0xdf,
-            std::cmp::Ordering::Greater => 0x75,
-        },
-        // = seg000:58c1..58cd military + ecology.
-        6 => match military.cmp(&ecology) {
-            std::cmp::Ordering::Equal => 0xbb,
-            std::cmp::Ordering::Less => 0xef,
-            std::cmp::Ordering::Greater => 0xba,
-        },
-        // = seg000:58ce..58e3 all three.
-        _ => {
-            if spice < military {
-                if military < ecology { 0xde } else { 0x9b }
-            } else if spice < ecology {
-                0x7b
-            } else {
-                0x67
-            }
-        }
+        4 => troop_class_color_ecology(),
+        3 => troop_class_color_spice_military(spice, military),
+        5 => troop_class_color_spice_ecology(spice, ecology),
+        6 => troop_class_color_military_ecology(military, ecology),
+        _ => troop_class_color_all_three(spice, military, ecology),
     }
 }
 
@@ -309,9 +337,20 @@ impl GameState {
         if self.data_046eb & 0x40 != 0 {
             self.map_enter_spice_density_overlay();
         }
-        // = seg000:5ad3 install mouse_handlers_01a9e.
+        // = seg000:5ad3 map_install_mouse_handlers.
+        self.map_install_mouse_handlers();
+    }
+
+    // = seg000:5ad3 map_install_mouse_handlers — install mouse_handlers_01a9e
+    // (the full-map view's handlers), then fall into map_set_mouse_nav_rect.
+    fn map_install_mouse_handlers(&mut self) {
         self.set_active_mouse_handlers(&DUNE_MAP_MOUSE_HANDLERS);
-        // = seg000:5ad9 nav rect = the map window.
+        self.map_set_mouse_nav_rect();
+    }
+
+    // = seg000:5ad9 map_set_mouse_nav_rect — si = data_046e3_rect (the map
+    // window); jmp set_mouse_nav_rect.
+    fn map_set_mouse_nav_rect(&mut self) {
         self.set_mouse_nav_rect(self.map_view_rect);
     }
 
@@ -1660,12 +1699,9 @@ impl GameState {
         let Some(ti) = self.contact_verb_troop() else {
             return;
         };
-        // = seg000:81d7 map_overlay_route_append_point — the raw longitude
-        //   plus the projected screen position.
         let mut points: Vec<(i16, i16, i16)> = Vec::new();
         let append = |s: &mut Self, points: &mut Vec<(i16, i16, i16)>, lon: u16, lat: i16| {
-            let (sx, sy) = s.map_position_to_screen(lon, lat);
-            points.push((sx, sy, lon as i16));
+            s.map_overlay_route_append_point(points, lon, lat);
         };
         // = seg000:8146..814c the troop's own position first.
         let t = self.troops[ti];
@@ -3106,14 +3142,10 @@ impl GameState {
             //   classification fills, troops.rs).
             return self.fremen2_troops[(self.selected_fremen2 & 7) as usize];
         }
-        // = seg000:6906 get_address_of_troop_by_ID: troops + (id - 1) * 0x1b.
-        let id = self.map_selected_troop_id;
-        if id == 0 {
-            return None;
-        }
-        self.troops
-            .get((id - 1) as usize)
-            .map(|_| (id - 1) as usize)
+
+        // = seg000:6906 get_address_of_troop_by_ID.
+        self.get_address_of_troop_by_id(self.map_selected_troop_id)
+            .map(|(ti, _)| ti)
     }
 
     // = seg000:7ba3 map_setup_troop_contact_popup — put the contact popup up
@@ -4604,6 +4636,29 @@ impl GameState {
         let xlat = self.build_spice_density_xlat();
         let r = self.map_view_rect;
         crate::gfx::vga_draw_landscape(self, rows, width, height, r.x0, r.y0, top_lat, &xlat);
+    }
+
+    // = seg000:81d7 map_overlay_route_append_point — append one route point
+    // at di: [di+4] = the raw map longitude (dx), then map_position_to_screen
+    // projects dx/bx and [di]/[di+2] take the screen position; di += 6 and
+    // the next x slot gets the 0x8000 end sentinel (the Vec's end here).
+    fn map_overlay_route_append_point(
+        &mut self,
+        points: &mut Vec<(i16, i16, i16)>,
+        lon: u16,
+        lat: i16,
+    ) {
+        let (sx, sy) = self.map_position_to_screen(lon, lat);
+        points.push((sx, sy, lon as i16));
+    }
+
+    // = seg000:6906 get_address_of_troop_by_ID — si = troops + (id - 1) *
+    // 0x1b; CF set (occupation < 0x80) = the troop is hired. `None` for the
+    // null id 0.
+    pub(crate) fn get_address_of_troop_by_id(&self, id: u8) -> Option<(usize, bool)> {
+        let ti = (id as usize).checked_sub(1)?;
+        let t = self.troops.get(ti)?;
+        Some((ti, t.occupation < 0x80))
     }
 
     // = seg000:6155 troop_accumulate_battle_sums — accumulate a troop into

@@ -210,12 +210,11 @@ impl GameState {
             PHASE_0C_COMM_ROOM_FOUND => self.phase_callback_0c(),
             PHASE_10_TUONO_HARG_FOUND => self.phase_callback_10(),
             PHASE_14_AWAITING_VISION => self.phase_callback_14(),
-            // = seg000:10b7 callback_game_phase_change_18_24_3c_68_6c: ret.
             PHASE_18_GURNEY_SEARCH
             | PHASE_24_ARMORY_FOUND
             | PHASE_3C_SMUGGLERS_DEALT
             | PHASE_68_CHANI_RESCUED
-            | PHASE_6C_FINAL_ATTACK => {}
+            | PHASE_6C_FINAL_ATTACK => self.callback_game_phase_change_18_24_3c_68_6c(),
             PHASE_1C_GURNEY_FOUND => self.phase_callback_1c(),
             PHASE_20_THUFIR_FOUND => self.phase_callback_20_make_thufir_hawat_visible(),
             PHASE_28_STILGAR_SIETCH_KNOWN => self.phase_callback_28_mark_sihaya_clam_on_map(),
@@ -257,6 +256,10 @@ impl GameState {
         let rp = &mut self.room_persons[1];
         rp.location_and_room = (rp.location_and_room & 0xff00) | 9;
     }
+
+    // = seg000:10b7 callback_game_phase_change_18_24_3c_68_6c — ret: these
+    // phases have no entry action.
+    fn callback_game_phase_change_18_24_3c_68_6c(&mut self) {}
 
     // = seg000:1011 callback_game_phase_change_04_Tuono_Tabr_1 — the
     // stillsuit-maker stage: palace_rooms[1].background steps back one

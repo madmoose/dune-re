@@ -45,7 +45,7 @@ impl GameState {
     // run the idle-room message check, then fall into the per-period events.
     pub(crate) fn game_loop_sub_01b0d(&mut self) {
         // = seg000:1b0d..1b1e the three gates.
-        if self.voc_pcm_playing
+        if self.is_voc_pcm_playing()
             || self.game_suspend_count != 0
             || self.game_phase >= crate::game_phase::PHASE_C8_GAME_WON
         {

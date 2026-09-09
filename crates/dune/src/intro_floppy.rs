@@ -589,7 +589,7 @@ impl GameState {
         //   audio_start_voc, the gate is the declared flag rather than real
         //   playback. Note ab4f does NOT set the flag itself: a narration clip
         //   started here never blocks the next one.
-        if self.voc_pcm_playing {
+        if self.is_voc_pcm_playing() {
             return;
         }
         // Port-only override; see GameState::let_voices_finish.

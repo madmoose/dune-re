@@ -16,7 +16,7 @@
 use crate::GameState;
 
 impl GameState {
-    // = seg000:b58b map_func (+ tablat_lookup_from_bx_to_ax_bp, seg000:b5a0) —
+    // = seg000:b58b map_func / seg000:b5a0 tablat_lookup_from_bx_to_ax_bp —
     // the MAP.HSQ byte offset for (x = longitude, lat = latitude row). The
     // tablat entry for |lat| gives the row's start (offset from the map
     // centre, negated for southern rows) and its byte length bp = 2 * len;

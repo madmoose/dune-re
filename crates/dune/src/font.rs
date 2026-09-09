@@ -35,10 +35,11 @@ impl Font {
     }
 }
 
-/// = the seg000:d0d1 cs table loc_0d0e3 scans (the listing renders its
-/// address as `DNCHARx_BIN[485]` only because the values coincide): the nine
-/// characters with an illuminated drop cap, and their advance widths. A hit
-/// at index i pairs with BOOK.HSQ sprite 5+i (= seg000:d0f8 `ah = 0dh - cl`).
+// = seg000:d0d1 book_drop_cap_table — the cs table loc_0d0e3 scans (the
+// listing renders its address as `DNCHARx_BIN[485]` only because the values
+// coincide): the nine characters with an illuminated drop cap, and their
+// advance widths. A hit at index i pairs with BOOK.HSQ sprite 5+i (=
+// seg000:d0f8 `ah = 0dh - cl`).
 const DROP_CAP_CHARS: &[u8; 9] = b"ADELOPSTU";
 const DROP_CAP_WIDTHS: [u8; 9] = [33, 30, 28, 33, 25, 24, 24, 23, 31];
 

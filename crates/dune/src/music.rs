@@ -39,6 +39,27 @@ const SITUATION_SONG_TABLE: [u8; 14] = [
 pub(crate) const MUSIC_CD_STANDARD_ORDER: [u8; 10] = [9, 6, 8, 1, 4, 3, 7, 5, 2, 0xff];
 
 impl GameState {
+    // = seg000:adbe midi_begin_song_fade_out — begin the switch to the queued
+    // song: unless music is disabled, the CD playlist owns the driver, or a
+    // dynamics ramp is already running (status bit 0x40), MIDI_SetDynamics(ax
+    // = 0x12c ticks, bx = volume 0) fades the current song out.
+    pub(crate) fn midi_begin_song_fade_out(&mut self) {
+        // = seg000:adbe call check_music_enabled; jb ret.
+        if !self.settings_music_enabled() {
+            return;
+        }
+        // = seg000:adc3 test [music_playlist_flags],1; jnz ret.
+        if self.music_playlist_flags & 1 != 0 {
+            return;
+        }
+        // = seg000:adca test [midi_status],40h; jnz ret.
+        if self.midi.is_fading() {
+            return;
+        }
+        // = seg000:add2..addb MIDI_SetDynamics(12ch, 0).
+        self.midi.set_ducking(0x12c, 0, 0);
+    }
+
     // = seg000:aec6 check_music_enabled — gate the music service: disabled when
     // cmd_args_memory bit 4 (the MUSIC OFF menu toggle) is set or the MIDI
     // settings flag (loc_0ae28 = settings_flags bit 0x100) is clear. DOS
@@ -158,19 +179,14 @@ impl GameState {
             // = seg000:ad8e cmp al,current_song_index; jnz loc_0adbe — a song other
             // than the one playing begins the switch.
             if Some(song) != self.midi.current_song() {
-                // = seg000:adbe loc_0adbe — fade the current song out rather than cutting
-                // over: music-enabled and playlist-off are already established
-                // on this path (= adbe/adc3); a ramp already in progress is
-                // left running (= adca test midi_status,40h; jnz ret); else
-                // MIDI_SetDynamics(0x12c ticks -> volume 0) (= add2..addb).
-                // The driver raises status bit 0x40 for the ramp, so the next
+                // = seg000:ad92 jmp midi_begin_song_fade_out — fade the
+                // current song out rather than cutting over. The driver
+                // raises status bit 0x40 for the ramp, so the next
                 // service_midi_music call switches into the desired song
                 // (seg000:ae17) — in DOS that is the first takeoff frame after
                 // the travel confirm's disk-bound departure setup, giving the
                 // audible music stop before the flight theme starts.
-                if !self.midi.is_fading() {
-                    self.midi.set_ducking(0x12c, 0, 0);
-                }
+                self.midi_begin_song_fade_out();
             }
         }
     }

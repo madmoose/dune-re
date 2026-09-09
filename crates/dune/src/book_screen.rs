@@ -509,11 +509,8 @@ impl GameState {
     // frieze hotspot, the close-button sprite and the " Close book" verb all
     // land here) and return to the room view.
     pub(crate) fn callback_ui_element_book_close(&mut self) {
-        // = seg000:b18b call midi_begin_song_fade_out (seg000:adbe): start a
-        // 300-tick fade to silence unless a ramp is already running.
-        if !self.midi.is_fading() {
-            self.midi.set_ducking(0x12c, 0, 0);
-        }
+        // = seg000:b18b call midi_begin_song_fade_out.
+        self.midi_begin_song_fade_out();
         // = seg000:b18e game_suspend_count = 0 — dropped wholesale, not
         // decremented.
         self.game_suspend_count = 0;

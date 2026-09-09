@@ -251,9 +251,7 @@ impl GameState {
             SCRIPT_REDRAW => self.sequence_action_02_redraw_and_step(),
             // = seg000:140b callback_action_in_continue_sequence_03.
             SCRIPT_SET_SPEAKER => self.sequence_action_03_set_speaker(),
-            // = seg000:1474 callback_action_in_continue_sequence_04: ret —
-            //   pause the scene until the next " Continue…" click.
-            SCRIPT_WAIT => {}
+            SCRIPT_WAIT => self.callback_action_in_continue_sequence_04(),
             // = seg000:13a0 callback_action_in_continue_sequence_07.
             SCRIPT_SHOW_SPICE_MAP => self.sequence_action_07_show_spice_map(),
             // = seg000:13aa callback_action_in_continue_sequence_08.
@@ -385,6 +383,10 @@ impl GameState {
         // = seg000:13e1 jmp menu_callback_choice_continue_for_sequence.
         self.menu_callback_choice_continue_for_sequence(0, 0);
     }
+
+    // = seg000:1474 callback_action_in_continue_sequence_04 — ret: pause the
+    // scene until the next " Continue…" click.
+    fn callback_action_in_continue_sequence_04(&mut self) {}
 
     // = seg000:13e4 callback_action_in_continue_sequence_01 — present the arg
     // speaker's next unspoken topic-7 line. The presentation's fire tail plays

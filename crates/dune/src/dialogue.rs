@@ -367,7 +367,13 @@ impl GameState {
             self.subtitle_pad_top = 0x10;
             self.subtitle_pad_bottom = 0x10;
         }
-        // = seg000:9f82 loc_09f82 the subtitle font setup.
+        // = seg000:9f82 call subtitle_select_font.
+        self.subtitle_select_font();
+    }
+
+    // = seg000:9f82 subtitle_select_font — font_draw_fg_color = 0f0h (fg 0xf0,
+    // bg 0); jmp font_select_tall_font.
+    fn subtitle_select_font(&mut self) {
         self.font_state.color = 0x00f0;
         self.font_select_tall_font();
     }
@@ -921,8 +927,14 @@ impl GameState {
         //   data_04756 troop — is not modelled.)
         self.current_lip_sync_resource_id = person_index as u16;
 
-        // = seg000:9702 ax = person*8 | 4; falls into present_dialogue_block.
-        self.present_dialogue_block(((person_index as u16) << 3) + 4)
+        // = seg000:9702 present_dialogue_block_for_person.
+        self.present_dialogue_block_for_person(person_index)
+    }
+
+    // = seg000:9702 present_dialogue_block_for_person — ax = person * 8 | 4;
+    // falls into present_dialogue_block.
+    fn present_dialogue_block_for_person(&mut self, person_index: u8) -> bool {
+        self.present_dialogue_block(((person_index as u16) << 3) | 4)
     }
 
     // = seg000:970b present_dialogue_block — present dialogue block `ax`:
@@ -1783,7 +1795,7 @@ impl GameState {
         self.call_restore_cursor();
         // = seg000:2cde..2ceb a live voice drains (loc_0abd5); otherwise
         //   wait_interruptable(0x258).
-        if self.voc_pcm_playing {
+        if self.is_voc_pcm_playing() {
             self.wait_for_voc_pcm_to_drain();
         } else {
             self.wait_interruptable(0x258);

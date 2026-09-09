@@ -726,7 +726,7 @@ impl GameState {
 
     // = seg000:ae28 loc_0ae28 — music (MIDI) present. Stubbed to its steady
     // state via settings_flags bit 0x100.
-    fn settings_music_enabled(&self) -> bool {
+    pub(crate) fn settings_music_enabled(&self) -> bool {
         self.settings_flags & 0x100 != 0
     }
 

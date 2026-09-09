@@ -137,6 +137,21 @@ fn popup_preserve_over_repaint(panel: Rect, clipped: Rect, yoff: i16) -> Option<
     Some(pr)
 }
 
+impl GameState {
+    // = seg000:c443 copy_clip_rect_to_screen_from_fb2 — si = the sprite clip
+    // rect (the caller's clipped rect); falls into copy_rect_fb2_to_fb1:
+    // restore the rect from the fb2 snapshot. The front buffer honours the
+    // fb1 redirection like every screen push.
+    fn copy_clip_rect_to_screen_from_fb2(&mut self, clipped: Rect) {
+        match self.screen_buffer {
+            crate::FbId::Fb1 => {
+                crate::gfx::vga_copy_rect(&mut self.framebuffer, &self.framebuffer_saved, clipped)
+            }
+            _ => crate::gfx::vga_copy_rect(&mut self.screen, &self.framebuffer_saved, clipped),
+        }
+    }
+}
+
 // = seg000:c827 troop_icons_pick_next_fifo — draw-order pick, insertion
 // order: return the first non-zero entry of the collected icon-ptr list (bx =
 // its slot); SF set when the list is empty.
@@ -412,15 +427,8 @@ impl GameState {
                 Some((pr, crate::gfx::vga_grab_rect(src, pr)))
             })
             .collect();
-        // = seg000:c718 call copy_clip_rect_to_screen_from_fb2 — restore the
-        //   clipped rect from the fb2 snapshot; the front buffer honours the
-        //   fb1 redirection like every screen push.
-        match self.screen_buffer {
-            crate::FbId::Fb1 => {
-                crate::gfx::vga_copy_rect(&mut self.framebuffer, &self.framebuffer_saved, clipped)
-            }
-            _ => crate::gfx::vga_copy_rect(&mut self.screen, &self.framebuffer_saved, clipped),
-        }
+        // = seg000:c718 call copy_clip_rect_to_screen_from_fb2.
+        self.copy_clip_rect_to_screen_from_fb2(clipped);
         // = seg000:c721..c759 collect the visible icons intersecting the
         //   clipped rect.
         let mut order: Vec<usize> = (0..self.troop_icons.len())
