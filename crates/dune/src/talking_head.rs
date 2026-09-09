@@ -753,7 +753,8 @@ impl GameState {
         self.add_frame_task(0x10, crate::TaskId::TalkingHeadIdle);
     }
 
-    /// = seg000:91a0 setup_lip_sync_data_from_sprite_sheet on its own — open
+    /// = seg000:91a0 setup_lip_sync_data_from_sprite_sheet / seg000:9197 setup_lip_sync_data_from_current
+    /// (the guard that only runs it while a lip-sync resource id is current) — open
     /// the portrait sheet for `lip_sync_resource_id`, apply its palette and
     /// parse its lip-sync resource into the live head, touching no
     /// framebuffer. Returns false when the same head is already up and nothing
@@ -1138,6 +1139,24 @@ impl GameState {
         // = seg000:a75c loc_0a75c add_frame_task(bp=0, lip_sync_frame_task). Polls the PCM
         // sample clock every tick and advances the mouth.
         self.add_frame_task(0, crate::TaskId::TalkingHeadVoc);
+    }
+
+    // = seg000:ac30 call_pcm_vtable_end_loop — end the driver's VOC loop
+    // (dnsdb_end_loop).
+    pub(crate) fn call_pcm_vtable_end_loop(&mut self) {
+        self.pcm_player.end_loop();
+    }
+
+    // = seg000:aba3 check_pcm_voice_file_open — DOS tests the voice file
+    // handle; the port's driver reports whether a clip is still playing.
+    pub(crate) fn check_pcm_voice_file_open(&self) -> bool {
+        self.pcm_player.is_playing()
+    }
+
+    // = seg000:abc6 set_voc_pcm_is_not_playing — clear the declared-playing
+    // flag; bookkeeping only, the driver keeps playing what it holds.
+    pub(crate) fn set_voc_pcm_is_not_playing(&mut self) {
+        self.voc_pcm_playing = false;
     }
 
     // = seg000:ab15 audio_start_voc / seg000:abe9 open_voc_resource — play a .voc sound effect by name (e.g.

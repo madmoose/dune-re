@@ -602,7 +602,8 @@ impl GameState {
     }
 }
 
-// = seg000:a334 evaluate_operator_bx_on_dx_and_ax.
+// = seg000:a334 evaluate_operator_bx_on_dx_and_ax / seg000:a372 condit_operator_return_ffff / seg000:a36f condit_operator_return_0
+// — the operator body and its two shared exits (TRUE / FALSE).
 fn apply_operator(op: u16, a: u16, b: u16) -> u16 {
     const TRUE: u16 = 0xffff;
     const FALSE: u16 = 0;

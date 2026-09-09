@@ -278,6 +278,8 @@ impl GameState {
         (INTRO_SCRIPT[idx].play)(self);
     }
 
+    // = seg000:0945 intro_script_set_offset / seg000:093f intro_script_load_word — the DOS
+    // script cursor and its reader are the loop index over INTRO_SCRIPT below.
     // = seg000:0580 play_intro. Iterates the intro_script (seg000:0337) and
     // drives each stage in sequence: pre-load midi sync, init, post-load
     // midi sync, transition, play, then the wait-for-pcm-voice gate.
@@ -1576,7 +1578,7 @@ impl GameState {
         if frame & 0xff == 0x0b {
             // = seg000:493e call_pcm_vtable_end_loop -> dnsdb_end_loop: zero the
             // innermost VOC repeat count so SN8.VOC exits at its next repeat-end.
-            self.pcm_player.end_loop();
+            self.call_pcm_vtable_end_loop();
         }
         // = seg000:4941 jmp check_if_hnm_complete.
         self.hnm_is_complete()

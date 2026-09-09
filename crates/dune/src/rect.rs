@@ -1,3 +1,5 @@
+//! = seg000:5b99 copy_rect_at_si_to_di — the 8-byte rect copy is a `Rect` assignment (`Rect: Copy`).
+
 #[derive(Copy, Clone, Debug, Default, PartialEq, Eq)]
 pub struct Rect {
     pub x0: i16,

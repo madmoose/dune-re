@@ -888,6 +888,15 @@ impl GameState {
         }
     }
 
+    // = seg000:b2aa suspend_clock_and_push_menu — suspend_game_clock, then
+    // loc_0d323: push `menu` with resume_game_clock as its cleanup and request
+    // the overlay transition.
+    pub(crate) fn suspend_clock_and_push_menu(&mut self, menu: MenuRef) {
+        self.suspend_game_clock();
+        self.screen_overlay_request_transition();
+        self.menu_stack_push(menu, Some(GameState::resume_game_clock));
+    }
+
     // = seg000:b389 create_save_cl — write slot `slot`'s save file: the u16
     // game_time header, then the RLE-compressed image.
     pub(crate) fn save_game(&self, slot: u8) -> io::Result<()> {
@@ -1045,12 +1054,9 @@ impl GameState {
         let mut records = menu_defs::MENU_SAVE_GAME.records.to_vec();
         self.refresh_save_slot_rows(&mut records, CMD_HIGHLIGHT);
         self.menu_save_game.records = records;
-        // = seg000:b28f call loc_0b2aa — suspend_game_clock, then push the
-        //   menu with cleanup func resume_game_clock (loc_0d323) and fold it
-        //   onto the screen (the b29b redraw_active_command_menu tail).
-        self.suspend_game_clock();
-        self.screen_overlay_request_transition();
-        self.menu_stack_push(MenuRef::MenuSaveGame, Some(GameState::resume_game_clock));
+        // = seg000:b28f call suspend_clock_and_push_menu, then fold it onto
+        //   the screen (the b29b redraw_active_command_menu tail).
+        self.suspend_clock_and_push_menu(MenuRef::MenuSaveGame);
         self.play_pending_panel_fold();
     }
 
@@ -1066,10 +1072,8 @@ impl GameState {
         let mut records = menu_defs::MENU_LOAD_GAME.records.to_vec();
         self.refresh_save_slot_rows(&mut records, CMD_GREY);
         self.menu_load_game.records = records;
-        // = seg000:b2a7 bp = menu_globe_load_game; falls into loc_0b2aa.
-        self.suspend_game_clock();
-        self.screen_overlay_request_transition();
-        self.menu_stack_push(MenuRef::MenuLoadGame, Some(GameState::resume_game_clock));
+        // = seg000:b2a7 bp = menu_globe_load_game; falls into suspend_clock_and_push_menu.
+        self.suspend_clock_and_push_menu(MenuRef::MenuLoadGame);
         self.play_pending_panel_fold();
     }
 

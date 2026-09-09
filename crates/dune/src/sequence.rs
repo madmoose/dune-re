@@ -415,8 +415,8 @@ impl GameState {
         self.sequence_present_topic7_line(0x0f);
         // = seg000:13bf call loc_09efd — the voice.
         self.play_dialogue_voc();
-        // = seg000:13c2 call loc_09901 — drop the bubble pointer.
-        self.subtitle_bubble = None;
+        // = seg000:13c2 call clear_bubble_layout_ptr — drop the bubble pointer.
+        self.clear_bubble_layout_ptr();
         // = seg000:13c5 jmp set_fb1_as_active_framebuffer.
         self.set_fb1_as_active_framebuffer();
         // The panel the action installed becomes the active element again so

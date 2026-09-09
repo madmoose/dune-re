@@ -406,7 +406,7 @@ impl GameState {
         self.dismiss_stacked_menus();
 
         // = seg000:3f2b
-        self.pcm_player.end_loop();
+        self.call_pcm_vtable_end_loop();
 
         // = seg000:3f2e call lip_sync_stop — stop any voice lip-sync before the
         // move (a speaker may still be mid-line when a compass button is hit).
@@ -544,7 +544,7 @@ impl GameState {
         // = seg000:3fae mov byte [pending_room_action], 1 — request the room-leave scan.
         self.pending_room_action = 1;
         // = seg000:3fb3 call arm_dialogue_interrupt_gate — arm the interrupt gate to 0xff.
-        self.dialogue_interrupt_gate = 0xff;
+        self.arm_dialogue_interrupt_gate();
         // = seg000:3fb8 call run_room_leave_dialogue_scan — run the pending_room_action-gated room-person
         //   dialogue scan. A standing person whose auto-dialogue condition matches
         //   speaks a line; if that line carries the stay_here event (0x02) it
@@ -552,7 +552,7 @@ impl GameState {
         self.run_room_leave_dialogue_scan();
         // = seg000:3fbd call test_dialogue_interrupt_gate; jz loc_03fc3 — the gate still 0xff means no
         //   person interrupted, so commit the move; otherwise abort it.
-        if self.dialogue_interrupt_gate != 0xff {
+        if !self.test_dialogue_interrupt_gate() {
             // = seg000:3fc2 ret — a person's auto-dialogue interrupted the move.
             return;
         }

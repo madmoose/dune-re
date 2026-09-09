@@ -395,7 +395,7 @@ pub(crate) const MENU_OCCUPATION_FOR_ARMY_TROOP: MenuDef = menu(0xf8, &[
 /// = seg001:219a menu_map_troop_change_troop_occupation_for_army_troop_doing_espionage_at_harkonnen_fortress
 #[rustfmt::skip]
 pub(crate) const MENU_OCCUPATION_FOR_ESPIONAGE_TROOP: MenuDef = menu(0xf8, &[
-    item(cmd::ATTACK, 0x6a2f, |_, _, _| println!("menu: ATTACK (seg000:6a2f) not ported")),
+    item(cmd::ATTACK, 0x6a2f, GameState::menu_callback_choice_troop_occupation_army_troop_doing_espionage_attack),
     item(cmd::CANCEL, 0xd2e2, GameState::menu_callback_choice_exit_menu),
 ]);
 

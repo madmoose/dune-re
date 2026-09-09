@@ -40,6 +40,20 @@ use crate::{
 const GLOBE_NAV_RECT: Rect = rect(96, 25, 224, 134);
 
 impl GameState {
+    // = seg000:5b60 set_zoomed_globe_pos — store the zoomed map centre
+    // (_word_20E2C_zoomed_globe_longitude / _word_20E2E_zoomed_globe_latitude).
+    pub(crate) fn set_zoomed_globe_pos(&mut self, lng: u16, lat: i16) {
+        self.zoomed_globe_longitude = lng;
+        self.zoomed_globe_latitude = lat;
+    }
+
+    // = seg000:5b55 set_zoomed_globe_pos_from_location — centre the zoomed map
+    // on a location's (map_x, map_y).
+    pub(crate) fn set_zoomed_globe_pos_from_location(&mut self, li: usize) {
+        let loc = self.locations[li];
+        self.set_zoomed_globe_pos(loc.map_x as u16, loc.map_y);
+    }
+
     // = seg000:b8a7 setup_globe_draw — load GLOBDATA and seed the globe
     // orientation from the zoomed-globe centre, then open FRESK (whose
     // palette the globe colours live in) and flush the palette.
@@ -199,7 +213,7 @@ impl GameState {
         // = seg000:b8de call service_midi_music.
         self.service_midi_music();
         // = seg000:b8e1..b8e4 ax = data_02562; call set_active_mouse_handlers.
-        self.active_mouse_handlers = &GLOBE_MOUSE_HANDLERS;
+        self.set_active_mouse_handlers(&GLOBE_MOUSE_HANDLERS);
         // = seg000:b8e7 call ui_hud_head_animate_up.
         self.ui_hud_head_animate_up();
         // = seg000:b8ea fall through into add_globe_rotation_frame_task.
@@ -250,6 +264,7 @@ impl GameState {
     // slides them apart for the SEE RESULTS reveal (0 = closed).
     pub(crate) fn draw_globe_side_decorations(&mut self) {
         // = seg000:b87e call copy_game_area_rect_to_clip_rect.
+        self.copy_game_area_rect_to_clip_rect();
         let yoff = self.y_offset as i16;
         let clip = Rect {
             x0: 0,
@@ -531,8 +546,7 @@ impl GameState {
             return;
         };
         // = seg000:bc70..bc73 the picked cell becomes the map centre.
-        self.zoomed_globe_longitude = lon;
-        self.zoomed_globe_latitude = lat;
+        self.set_zoomed_globe_pos(lon, lat);
         // = seg000:bc77 call globe_redraw_and_present — one redraw at the picked spot.
         self.globe_redraw_and_present();
         // = seg000:bc7a..bc7c pop the click position; jmp globe_zoom_out_to_map.

@@ -41,6 +41,18 @@ use crate::{
 };
 
 impl GameState {
+    // = seg000:a1c4 arm_dialogue_interrupt_gate — dialogue_interrupt_gate =
+    // 0xff before a room-person dialogue scan.
+    pub(crate) fn arm_dialogue_interrupt_gate(&mut self) {
+        self.dialogue_interrupt_gate = 0xff;
+    }
+
+    // = seg000:a1e2 test_dialogue_interrupt_gate — true while the gate is
+    // still 0xff (no spoken-line event changed it).
+    pub(crate) fn test_dialogue_interrupt_gate(&self) -> bool {
+        self.dialogue_interrupt_gate == 0xff
+    }
+
     // = seg000:cfb9 build_per_person_voc_base_table .
     pub(crate) fn build_voc_base_table(&mut self) {
         let count = container::entry_count(&self.dialogue);
@@ -457,7 +469,7 @@ impl GameState {
     // dropped the interrupt gate — clear their travelling state.
     pub(crate) fn menu_callback_choice_stay_here(&mut self, _text_id: u16, _index: usize) {
         // = seg000:9533 call arm_dialogue_interrupt_gate — gate = 0xff.
-        self.dialogue_interrupt_gate = 0xff;
+        self.arm_dialogue_interrupt_gate();
         // = seg000:9536 ax = 6; call get_dialogue_topic_record.
         let ofs = self.get_dialogue_topic_record(6);
         // = seg000:953c call present_dialogue_line_with_auto_mask. An empty
@@ -471,7 +483,7 @@ impl GameState {
         self.data_0001b = self.data_0001b.wrapping_add(1);
         // = seg000:9543 call test_dialogue_interrupt_gate; jnz ret — a spoken-
         //   line event changed the gate: leave the travelling state alone.
-        if self.dialogue_interrupt_gate != 0xff {
+        if !self.test_dialogue_interrupt_gate() {
             return;
         }
         // = seg000:9548 si = [data_047a2] — the active speaker's room_persons
@@ -557,7 +569,7 @@ impl GameState {
         // = seg000:95e2 call arm_dialogue_interrupt_gate — gate = 0xff; the
         //   presented line's event callback may change it (event 2 -> 0,
         //   event 7 -> 0x80).
-        self.dialogue_interrupt_gate = 0xff;
+        self.arm_dialogue_interrupt_gate();
         // = seg000:95e5 ax = 5; call get_dialogue_topic_record.
         let ofs = self.get_dialogue_topic_record(5);
         // = seg000:95eb call present_dialogue_line_with_auto_mask (empty-slot
@@ -572,7 +584,7 @@ impl GameState {
         self.pending_room_action = 0;
         // = seg000:95f7 call test_dialogue_interrupt_gate; jnz ret — a spoken-
         //   line event changed the gate (the speaker refused): do not join.
-        if self.dialogue_interrupt_gate != 0xff {
+        if !self.test_dialogue_interrupt_gate() {
             return;
         }
         // = seg000:95fc si = [data_047a2]; 9600 cl = [si+0eh] (person_index).

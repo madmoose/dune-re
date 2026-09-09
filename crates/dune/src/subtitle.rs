@@ -50,6 +50,12 @@ const BALLOONS: [[i16; 4]; 3] = [
 ];
 
 impl GameState {
+    // = seg000:9901 clear_bubble_layout_ptr — current_bubble_layout_ptr = 0:
+    // drop the subtitle bubble so the next draw does not restore its pixels.
+    pub(crate) fn clear_bubble_layout_ptr(&mut self) {
+        self.subtitle_bubble = None;
+    }
+
     /// The live (x, y, w, h) words of a seg001 layout descriptor, keyed by
     /// its DOS address — the balloon x0 words carry the per-head patch
     /// (`balloon_x`, seg000:91d4). Used by the --log-subtitle trace, which

@@ -44,6 +44,12 @@ const COMM_FACE_POS: [(i16, i16); 12] = [
 fn menu_cleanup_noop(_: &mut GameState) {}
 
 impl GameState {
+    // = seg000:2c92 vision_dream_transition — transition 6 into the vision
+    // backdrop, presenting the line inside the transition render.
+    pub(crate) fn vision_dream_transition(&mut self) {
+        self.transition(6, 0, |s| s.vision_dream_backdrop());
+    }
+
     // = the DOS current_location_ptr word (seg001:114e) as the vision-message
     // location words store it: the location's seg001 record pointer, 0 when
     // the player is not inside a location.
@@ -457,7 +463,7 @@ impl GameState {
             });
             if i == Self::SHIPMENT_SN1_LOOP_END_FRAME {
                 // = seg000:2653 call_pcm_vtable_end_loop.
-                self.pcm_player.end_loop();
+                self.call_pcm_vtable_end_loop();
             }
         }
         // = seg000:2661 the terminator pass: restore the area, no ship.
@@ -578,9 +584,8 @@ impl GameState {
                 }
             }
         }
-        // = seg000:2c47 call loc_02c92 — transition 6 into the vision
-        // backdrop, presenting the line inside the transition render.
-        self.transition(6, 0, |s| s.vision_dream_backdrop());
+        // = seg000:2c47 call vision_dream_transition.
+        self.vision_dream_transition();
         // = seg000:2c4a/2c4c al = 1; call play_dialogue_voc_with_bank_flag —
         // the voice from the shared fixed voc bank (the in-line start at
         // seg000:a0c9 skipped it: ds:ea > 0). ds:ea still holds the message

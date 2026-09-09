@@ -334,6 +334,12 @@ pub(crate) static MIXER_MOUSE_HANDLERS: MouseHandlers = MouseHandlers {
 };
 
 impl GameState {
+    // = seg000:d95e set_active_mouse_handlers — install the screen's
+    // MouseHandlers record (DOS ax = the seg001 record pointer).
+    pub(crate) fn set_active_mouse_handlers(&mut self, handlers: &'static MouseHandlers) {
+        self.active_mouse_handlers = handlers;
+    }
+
     // = seg000:0083 init_game_ui — configure the voice/subtitle language, then
     // draw the in-game HUD (falls through into draw_game_ui at seg000:0086).
     // Called once from start (seg000:0024) before the game loop.
@@ -1026,13 +1032,13 @@ impl GameState {
         // = seg000:18cc call remove_room_frame_task.
         self.remove_room_frame_task();
         // = seg000:18cf call_pcm_vtable_end_loop — end a looping VOC.
-        self.pcm_player.end_loop();
+        self.call_pcm_vtable_end_loop();
         // = seg000:18d2 call desert_harvester_remove_task.
         self.desert_harvester_remove_task();
         // = seg000:18d5 call dismiss_stacked_overlays.
         self.dismiss_stacked_menus();
-        // = seg000:18d8 call loc_04aca — data_011ca = 1.
-        self.data_011ca = 1;
+        // = seg000:18d8 call mark_room_swap_pending.
+        self.mark_room_swap_pending();
         // = seg000:18db call reset_scene_lip_sync_state.
         self.reset_scene_lip_sync_state();
         // = seg000:18de sky_fade_active = 0.

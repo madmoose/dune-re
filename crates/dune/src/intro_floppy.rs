@@ -219,18 +219,12 @@ impl GameState {
         // = seg000:02cf add ax,0x117; seg000:02d2 font_select_tall_font.
         self.font_select_tall_font();
 
-        // = seg000:02d5 loc_09901 — clears data_0479e (the "subtitle changed"
-        // flag the room-screen path uses to repaint the bubble). Port has no
-        // equivalent yet because the room-screen subtitle restore path isn't
-        // wired up; intro2 redraws the scene every frame anyway.
-
-        // self.loc_09901();
-
+        // = seg000:02d5 call clear_bubble_layout_ptr.
+        self.clear_bubble_layout_ptr();
         // = seg000:02d8
         self.intro_floppy_draw_subtitle(scene + 0x117);
-
-        // = seg000:02db loc_09901 (same as above).
-        // self.loc_09901();
+        // = seg000:02db call clear_bubble_layout_ptr.
+        self.clear_bubble_layout_ptr();
     }
 
     // = seg000:02de intro2_scene_stars — scene 1: the plain starfield (cx = 0).
@@ -574,7 +568,7 @@ impl GameState {
         // chunk while the clip streams.
         self.pcm_voice_stream_refill();
         // = seg000:ab95 check_pcm_voice_file_open; jnz loc_0ab44 — still playing, wait.
-        if self.pcm_player.is_playing() {
+        if self.check_pcm_voice_file_open() {
             return;
         }
         // = seg000:ab9a midi_restore_music_volume; ab9d remove_frame_task.
@@ -670,7 +664,7 @@ impl GameState {
         // = seg000:abae bx = the PIT counter at entry.
         let start = self.game_ticks();
         // = seg000:abb6 call check_pcm_voice_file_open; jz — the clip drained.
-        while self.pcm_player.is_playing() {
+        while self.check_pcm_voice_file_open() {
             // = seg000:abbc..abc4 the 0x3e8-tick timeout falls through into
             //   set_voc_pcm_is_not_playing, force-stopping the clip.
             if self.game_ticks() - start >= 0x3e8 {
@@ -687,7 +681,7 @@ impl GameState {
         // = seg000:abba jz set_voc_pcm_is_not_playing / seg000:abc4 fall
         //   through — both exits of the wait clear the declared-playing flag,
         //   which is what re-arms audio_start_voc after a narration clip.
-        self.voc_pcm_playing = false;
+        self.set_voc_pcm_is_not_playing();
         // = seg000:abb3 call frame_task_callback_0ab92 — on the pass after
         //   playback ends the monitor swells the score back up. The port runs
         //   that restore half here (cf. tick_pcm_voice_music_restore).

@@ -95,7 +95,7 @@ impl GameState {
         }
         // = seg000:1906 ax=mouse_handlers_01aba; set_active_mouse_handlers — a
         //   click anywhere over the plan now closes it.
-        self.active_mouse_handlers = &PALACE_PLAN_MOUSE_HANDLERS;
+        self.set_active_mouse_handlers(&PALACE_PLAN_MOUSE_HANDLERS);
         // = seg000:190c call dismiss_stacked_overlays.
         self.dismiss_stacked_menus();
         // = seg000:190f call set_fb1_as_active_framebuffer — compose offscreen.

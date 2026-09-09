@@ -169,6 +169,12 @@ pub(crate) struct MapLocationMarker {
 }
 
 impl GameState {
+    // = seg000:4aca mark_room_swap_pending — data_011ca = 1: a room-screen
+    // swap is pending, so travel_pump stands down until loc_00d8e finishes.
+    pub(crate) fn mark_room_swap_pending(&mut self) {
+        self.data_011ca = 1;
+    }
+
     // = seg000:42d9 menu_callback_choice_map_main_take_an_ornithopter — the map
     // main menu's (MENU_MAP_TROOPS) TAKE AN ORNITHOPTER slot, reached from the SEE
     // DUNE MAP view: board from the current location's outdoor room 1, leave the
@@ -246,10 +252,10 @@ impl GameState {
         self.play_pending_panel_fold();
         self.highlight_hovered_text_action_item();
         // = seg000:4311 ax=mouse_handlers_01ac8; call set_active_mouse_handlers.
-        self.active_mouse_handlers = &MAP_MOUSE_HANDLERS;
-        // = seg000:4317 call loc_04aca — data_011ca = 1 (suspends the pending
+        self.set_active_mouse_handlers(&MAP_MOUSE_HANDLERS);
+        // = seg000:4317 call mark_room_swap_pending (suspends the pending
         //   room-swap machinery while the map owns the screen).
-        self.data_011ca = 1;
+        self.mark_room_swap_pending();
         // = seg000:431a data_046fc = 0 — clear the hover tracker state.
         self.data_046fc = 0;
         // = seg000:4320 call set_zoomed_globe_pos_from_map_position — centre the
@@ -2028,9 +2034,9 @@ impl GameState {
         // = seg000:3656/3659 flush the palette and present the game area.
         self.update_screen_palette();
         self.present_game_area();
-        // = seg000:365c call loc_04aca — data_011ca = 1: the pump is
+        // = seg000:365c call mark_room_swap_pending: the pump is
         //   suspended while the warning is up.
-        self.data_011ca = 1;
+        self.mark_room_swap_pending();
         // = seg000:365f/3662 bp = menu_change_destination_ignore_warning;
         //   or byte [bp+0bh], 40h — grey the WHAT? entry (no one is speaking).
         self.menu_destination_warning.records[2].text_id |= CMD_GREY;
@@ -2191,7 +2197,7 @@ impl GameState {
                     //   travel_resume_flight_view (loc_04abe) clears it when the
                     //   menu is dismissed. The rest of start_room_lip_sync (the
                     //   lip-sync data setup + head render) is setup_talking_head.
-                    self.data_011ca = 1;
+                    self.mark_room_swap_pending();
                     self.setup_talking_head(companion, 0);
                 }
                 // = seg000:36c4 push the composed cabin to the screen.
@@ -2757,7 +2763,7 @@ impl GameState {
             // = seg000:4808..4813 an upward pass through frame 0x1a releases
             //   the SN6 engine loop.
             if self.orni_anim_frame == 0x1a && step >= 0 {
-                self.pcm_player.end_loop();
+                self.call_pcm_vtable_end_loop();
             }
             // = seg000:4816 call service_midi_music.
             self.service_midi_music();
@@ -2785,7 +2791,7 @@ impl GameState {
         // = seg000:4834..483c frame 0xd (rotors up) also releases the
         //   engine-sound loop.
         if self.orni_anim_frame == 0x0d {
-            self.pcm_player.end_loop();
+            self.call_pcm_vtable_end_loop();
         }
         // = seg000:4840..485b past frame 0xe the orni climbs away: x steps 5
         //   per frame against the direction sign, y drops (frame-0xe)^2 / 2.

@@ -35,6 +35,12 @@ const BOOK_VIDEO_PAGE_WORDS: [u16; 12] = [
 ];
 
 impl GameState {
+    // = seg000:0a3e remove_credits_scroll_task — drop the rolling-credits
+    // scroll task (frame_task_callback_00a16).
+    pub(crate) fn remove_credits_scroll_task(&mut self) {
+        self.remove_frame_task(TaskId::CreditsScroll);
+    }
+
     // = seg000:b270 handle_ctrl_v_once — the Ctrl+V debug cheat: append the
     // ten pre-canned video-page words at data_0242a (= BOOK_VIDEO_PAGE_WORDS
     // [2..]) to the dialogue-played log and re-terminate it, completing THE
@@ -146,7 +152,7 @@ impl GameState {
         // cover; otherwise flip the shown page back to the cover first.
         if self.data_000c6 & 2 == 0 {
             // = seg000:af7f loc_00a3e — remove the credits scroll task.
-            self.remove_frame_task(TaskId::CreditsScroll);
+            self.remove_credits_scroll_task();
             // = seg000:af82 call book_turn_back_to_cover.
             self.book_turn_back_to_cover();
         }
@@ -194,7 +200,7 @@ impl GameState {
             // -2 before reading) lands back on the last page.
             self.book_bookmark_ptr += 2;
             // = seg000:afda loc_00a3e — remove the credits scroll task.
-            self.remove_frame_task(TaskId::CreditsScroll);
+            self.remove_credits_scroll_task();
             // = seg000:afdd call loc_0ad5e — normal music service.
             self.update_room_music();
         }
@@ -216,9 +222,9 @@ impl GameState {
                 // = seg000:affa..affd bp = book_draw_current_page; the ruffle
                 // + transition 0x0e, folding in the search direction `dx`.
                 self.book_page_turn_present(dx, |s| s.book_draw_current_page());
-                // = seg000:b000 call loc_09901 — drop the bubble pointer (no
+                // = seg000:b000 call clear_bubble_layout_ptr — drop the bubble pointer (no
                 // restore; the next page draw must not put old pixels back).
-                self.subtitle_bubble = None;
+                self.clear_bubble_layout_ptr();
                 // = seg000:b003 jmp redraw_active_command_menu.
                 self.redraw_active_command_menu();
             }
@@ -500,9 +506,9 @@ impl GameState {
         // = seg000:b19d call hnm_close_resource — a rolling credits clip.
         self.hnm_close();
         // = seg000:b1a0 loc_00a3e — remove the credits scroll task.
-        self.remove_frame_task(TaskId::CreditsScroll);
-        // = seg000:b1a3 loc_09901 — drop the bubble pointer.
-        self.subtitle_bubble = None;
+        self.remove_credits_scroll_task();
+        // = seg000:b1a3 clear_bubble_layout_ptr — drop the bubble pointer.
+        self.clear_bubble_layout_ptr();
         // = seg000:b1a6..b1a9 reopen PERS.HSQ (the room portrait bank).
         self.open_sprite_bank(sprite_bank::PERS);
         // = seg000:b1ac jmp loc_01877 — the shared enter-room tail, entered
@@ -625,8 +631,8 @@ impl GameState {
         self.redraw_active_command_menu();
         // = seg000:b24e call book_draw_current_page.
         self.book_draw_current_page();
-        // = seg000:b251 jmp loc_09901.
-        self.subtitle_bubble = None;
+        // = seg000:b251 jmp clear_bubble_layout_ptr.
+        self.clear_bubble_layout_ptr();
     }
 }
 

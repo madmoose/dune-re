@@ -31,6 +31,8 @@ impl GameState {
     // ending at the COMMAND string's first run of digits, in place in the
     // resource buffer, so every later expansion of that id reads the new
     // number.
+    // = seg000:e2db find_string_and_replace_digits — the COMMAND string's
+    // trailing number replaced in place.
     pub(crate) fn command_string_replace_number(&mut self, id: u16, value: u16) {
         let (ofs, end) = container::entry_byte_range(&self.command_bin, id - 1);
         let s = &mut self.command_bin[ofs as usize..end as usize];

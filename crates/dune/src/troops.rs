@@ -3301,6 +3301,14 @@ impl GameState {
     // destination / troop_settle_into_location), and
     // troop_clear_occupation_bits_0_and_1 (seg000:6ac5) passes occupation &
     // 0xfc through it to drop an espionage/attack mission's low bits.
+    // = seg000:6ac5 troop_clear_occupation_bits_0_and_1 — occupation & 0xfc
+    // through the set-occupation reinit: an espionage/attack mission drops
+    // its low bits.
+    pub(crate) fn troop_clear_occupation_bits_0_and_1(&mut self, ti: usize) {
+        let new = self.troops[ti].occupation & 0xfc;
+        self.troop_reinit_occupation(ti, new);
+    }
+
     pub(crate) fn troop_reinit_occupation(&mut self, ti: usize, new: u8) {
         let mut new = new;
         // = seg000:6ad4..6ae8 assigning ecology (8) at the one location whose
@@ -3641,8 +3649,7 @@ impl GameState {
             // = seg000:83af..83b4 espionage/attack drop the mission's low
             //   bits (troop_clear_occupation_bits_0_and_1: occupation & 0xfc
             //   through the set-occupation reinit).
-            let new = self.troops[ti].occupation & 0xfc;
-            self.troop_reinit_occupation(ti, new);
+            self.troop_clear_occupation_bits_0_and_1(ti);
             class = 0;
         }
         // = seg000:83b6..83ba occupation low bits 11b turn around for home;

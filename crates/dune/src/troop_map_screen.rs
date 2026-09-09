@@ -146,7 +146,8 @@ pub(crate) static MOVE_TROOP_MOUSE_HANDLERS: MouseHandlers = MouseHandlers {
     rmb_drag: GameState::dune_map_mouse_drag_noop,
 };
 
-// = seg000:586e troop_occupation_class_color — pick the troop-occupation
+// = seg000:586e troop_occupation_class_color / seg000:589e troop_class_color_spice / seg000:58a1 troop_class_color_military
+// — pick the troop-occupation
 // overlay colour from the class counts, via the data_0588b jump table on the
 // presence bits (spice = 1, military = 2, ecology = 4); the mixed cases
 // shade by which class dominates.
@@ -191,6 +192,12 @@ fn troop_occupation_class_color(spice: u8, military: u8, ecology: u8) -> u8 {
 }
 
 impl GameState {
+    // = seg000:557b get_overlay_panel_origin — dx/bx = data_04710/data_04712,
+    // the shared popup-panel origin.
+    pub(crate) fn get_overlay_panel_origin(&self) -> (i16, i16) {
+        self.map_overlay_panel_pos
+    }
+
     // = seg000:5a1a ui_show_globe_map_view — leave the room view and bring up
     // the full DUNE MAP view (the else-branch of ui_toggle_room_view).
     pub(crate) fn ui_show_globe_map_view(&mut self) {
@@ -303,7 +310,7 @@ impl GameState {
             self.map_enter_spice_density_overlay();
         }
         // = seg000:5ad3 install mouse_handlers_01a9e.
-        self.active_mouse_handlers = &DUNE_MAP_MOUSE_HANDLERS;
+        self.set_active_mouse_handlers(&DUNE_MAP_MOUSE_HANDLERS);
         // = seg000:5ad9 nav rect = the map window.
         self.set_mouse_nav_rect(self.map_view_rect);
     }
@@ -373,7 +380,7 @@ impl GameState {
 
     // = seg000:542f loc_0542f — draw (or redraw) the overlay.
     pub(crate) fn map_draw_spice_density_overlay(&mut self) {
-        let (px, py) = self.map_overlay_panel_pos;
+        let (px, py) = self.get_overlay_panel_origin();
         // = seg000:542f/5435 data_046fc = 0; current_bubble_layout_ptr = 0.
         self.subtitle_bubble = None;
         // = seg000:543e..5456 the map window: the panel origin + (5, 7),
@@ -484,7 +491,7 @@ impl GameState {
     // ((px+6, py+0x62)-(x1-6, y1-2)) with 0xf5 and select the small font for
     // the label.
     fn map_overlay_draw_legend_strip(&mut self) {
-        let (px, py) = self.map_overlay_panel_pos;
+        let (px, py) = self.get_overlay_panel_origin();
         let r = self.map_overlay_panel_rect;
         // = seg000:5605..562c the 0xf5 fill of the strip rect, into the
         //   active framebuffer.
@@ -512,7 +519,7 @@ impl GameState {
     // map_overlay_mode != 0 layer titles the strip "  TROOP OCCUPATION  "
     // (phrase 0x68, seg000:568c) with no ramp.
     fn map_overlay_draw_legend(&mut self) {
-        let (px, py) = self.map_overlay_panel_pos;
+        let (px, py) = self.get_overlay_panel_origin();
         // = seg000:5644/5647 the label colour word 0xf5fe; its fg byte seeds
         //   the footer hover cache.
         self.map_overlay_footer_label_color = 0xfe;
@@ -688,7 +695,7 @@ impl GameState {
             return;
         }
         let li = location_index_from_ptr(marker_ptr);
-        let (px, py) = self.map_overlay_panel_pos;
+        let (px, py) = self.get_overlay_panel_origin();
         // = seg000:569b..56ad the location type then its name at the pen the
         //   type draw left, colour word 0xf5fe.
         self.draw_string_location_type(li, 0xf5fe, (px + 6) as u16, (py + 0x62) as u16);
@@ -814,7 +821,7 @@ impl GameState {
         if tick & 0x80 != 0 {
             return;
         }
-        let (px, py) = self.map_overlay_panel_pos;
+        let (px, py) = self.get_overlay_panel_origin();
         // = seg000:5790..57a7 the outline: si = 5 wide, cx = 7 tall, through
         //   the far entry (its dec si makes 5 the visible width).
         gfx::vga_xor_rect_outline(self, px + 0x5e + 4 * tick as i16, py + 0x62, 5, 7);
@@ -835,7 +842,7 @@ impl GameState {
         }
         // = seg000:57c1 the redraw lands on the front buffer.
         self.set_screen_as_active_framebuffer();
-        let (px, py) = self.map_overlay_panel_pos;
+        let (px, py) = self.get_overlay_panel_origin();
         // = seg000:57cd..57d7 the phrase by layer.
         let phrase = if self.map_overlay_mode == 0 {
             0x65
@@ -889,11 +896,10 @@ impl GameState {
         // = seg000:5933..5938 drop the overlay sub-mode bit and the popup.
         self.data_046eb &= 0xbf;
         self.map_popup = MapPanelRef::None;
-        // = seg000:593e call set_zoomed_globe_pos_from_location (loc_05b55):
-        //   centre on the marker location's +2/+4 map words.
+        // = seg000:593e call set_zoomed_globe_pos_from_location — centre on the
+        //   marker location's +2/+4 map words.
         let li = location_index_from_ptr(marker);
-        self.zoomed_globe_longitude = self.locations[li].map_x as u16;
-        self.zoomed_globe_latitude = self.locations[li].map_y;
+        self.set_zoomed_globe_pos_from_location(li);
         // = seg000:5941 jmp map_refresh_main_view.
         self.map_refresh_main_view();
     }
@@ -908,7 +914,7 @@ impl GameState {
     fn map_overlay_panel_hit_test(&mut self) -> bool {
         let x = self.mouse_pos_x as i16;
         let y = self.mouse_pos_y as i16;
-        let (px, py) = self.map_overlay_panel_pos;
+        let (px, py) = self.get_overlay_panel_origin();
         // = seg000:5944..594d y above the map window rows: the title strip.
         if y - py - 7 < 0 {
             // = seg000:5958..5961 the close corner is the leftmost 10 px.
@@ -1067,7 +1073,7 @@ impl GameState {
         _index: usize,
     ) {
         // = seg000:8064/8067 install mouse_handlers_01aac.
-        self.active_mouse_handlers = &MOVE_TROOP_MOUSE_HANDLERS;
+        self.set_active_mouse_handlers(&MOVE_TROOP_MOUSE_HANDLERS);
         // = seg000:806a call contact_verb_troop.
         let Some(ti) = self.contact_verb_troop() else {
             return;
@@ -1426,7 +1432,7 @@ impl GameState {
     // = seg000:8250 loc_08250 (-> loc_05ad3) — restore the map view's mouse
     // handlers and nav rect, and reopen ONMAP.
     fn move_troop_restore_map_handlers(&mut self) {
-        self.active_mouse_handlers = &DUNE_MAP_MOUSE_HANDLERS;
+        self.set_active_mouse_handlers(&DUNE_MAP_MOUSE_HANDLERS);
         self.set_mouse_nav_rect(self.map_view_rect);
         self.open_onmap_spritesheet();
     }
@@ -2633,6 +2639,18 @@ impl GameState {
         _index: usize,
     ) {
         self.troop_occupation_within_class(1);
+    }
+
+    // = seg000:6a2f menu_callback_choice_troop_occupation_army_troop_doing_espionage_attack
+    // — ATTACK for an espionage army troop: job 2 inside its occupation class
+    // through choice_troop_occupation_common_code. The attack itself resolves
+    // in the troop event walk (seg000:503c), which is still unported.
+    pub(crate) fn menu_callback_choice_troop_occupation_army_troop_doing_espionage_attack(
+        &mut self,
+        _text_id: u16,
+        _index: usize,
+    ) {
+        self.troop_occupation_within_class(2);
     }
 
     // = seg000:6a35 choice_troop_occupation_common_code — cl = (occupation &

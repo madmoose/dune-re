@@ -251,6 +251,13 @@ const fn rp(
 // entry. The Harkonnen-Captain / Fremen-1 trampolines stage their troop's
 // CONDIT block first, and the Fremen-2 one (seg000:937e) decodes its
 // fremen2_troop_ptrs slot from the record's text id (DOS ax at the jmp).
+// = seg000:92f2 ui_dialogue_offset_base_for_funcs_and_code_related_to_DukeLetoAtreides / seg000:92f7 ui_dialogue_related_to_JessicaAtreides
+// = seg000:92fc ui_dialogue_related_to_ThufirHawat / seg000:9301 ui_dialogue_related_to_DuncanIdaho / seg000:9306 ui_dialogue_related_to_GurneyHalleck
+// = seg000:930b ui_dialogue_related_to_Stilgar / seg000:9310 ui_dialogue_related_to_LietKynes / seg000:9315 ui_dialogue_related_to_Chani
+// = seg000:931a ui_dialogue_related_to_Harah / seg000:931f ui_dialogue_related_to_BaronVladimirHarkonnen / seg000:9324 ui_dialogue_related_to_FeydRauthaHarkonnen
+// = seg000:9329 ui_dialogue_related_to_EmperorShaddamIV / seg000:936f ui_dialogue_related_to_Smugglers
+// — the thirteen `mov al,N; jmp common_code_for_ui_dialogue_related_functions`
+// trampolines, resolved here to common_dialogue(N).
 pub(crate) fn room_person_callback(handler: u16) -> MenuItemCallback {
     match handler {
         0x92f2 => |s, _, _| s.common_dialogue(0x0), // Duke Leto Atreides
@@ -625,7 +632,7 @@ impl GameState {
         // = seg000:0dc2 call game_over_play_death_video.
         self.game_over_play_death_video();
         // = seg000:0dc5 data_011ca = 1 — the travel pump stays suspended.
-        self.data_011ca = 1;
+        self.mark_room_swap_pending();
         // = seg000:0dca call loc_09f40 — fb1 active, the in-room subtitle
         //   pads and the tall font.
         self.prepare_dialogue_presentation();
@@ -1516,7 +1523,7 @@ impl GameState {
     // Called when entering the room view and from the mixer-panel cleanup
     // (loc_0a541) to restore the room handlers after the overlay closes.
     pub(crate) fn select_room_ui_table(&mut self) {
-        self.active_mouse_handlers = &crate::game_ui::ROOM_MOUSE_HANDLERS;
+        self.set_active_mouse_handlers(&crate::game_ui::ROOM_MOUSE_HANDLERS);
     }
 
     // = seg000:08f0 loc_008f0 / seg000:2d74 open_SAL_resource — open the current location/room's scene
@@ -3011,6 +3018,11 @@ impl GameState {
     // = seg000:5ba0 copy_game_area_rect_to_unknown_rect — copy the game-area rect
     // (si=1470h) to the backdrop buffer (di=0d83ch) before drawing the room.
     // TODO: port; no-op stub.
+    // = seg000:5ba8 copy_game_area_rect_to_clip_rect — install the game area as
+    // the sprite clip rect (_unk_2CCE4). The port clips per draw call from the
+    // active view, so there is no global clip rect to set.
+    pub(crate) fn copy_game_area_rect_to_clip_rect(&mut self) {}
+
     pub(crate) fn copy_game_area_rect_to_unknown_rect(&mut self) {}
 
     // = seg000:37b2 draw_room_scene — clear the game area and draw the current
@@ -3294,8 +3306,8 @@ impl GameState {
     // not overdraw the head. The lip-sync data setup + head render (9799..97cb)
     // are the port's setup_talking_head at the call sites.
     pub(crate) fn start_room_lip_sync(&mut self) {
-        // = seg000:978e call loc_04aca — data_011ca = 1.
-        self.data_011ca = 1;
+        // = seg000:978e call mark_room_swap_pending.
+        self.mark_room_swap_pending();
     }
 }
 

@@ -108,6 +108,12 @@ const SETTINGS_BUTTON_GRID_XLAT: [u8; 13] = [0, 3, 1, 2, 4, 5, 6, 7, 7, 7, 8, 9,
 /// language values 0..6 and the voice-mode values 8..10).
 const SETTINGS_LANGUAGE_SPRITE_XLAT: [u8; 11] = [0, 2, 3, 1, 4, 5, 6, 7, 10, 11, 12];
 
+// = seg000:a45c settings_ui_add_global_offset — panel-local to screen coordinates.
+fn global_xy(x: i16, y: i16) -> (i16, i16) {
+    (x + SETTINGS_RECT.x0, y + SETTINGS_RECT.y0)
+}
+
+// = seg000:a453 settings_ui_sub_global_offset — screen to panel-local coordinates.
 fn local_xy(x: i16, y: i16) -> (i16, i16) {
     (x - SETTINGS_RECT.x0, y - SETTINGS_RECT.y0)
 }
@@ -122,7 +128,7 @@ impl GameState {
     // headless renders can open the panel directly.
     pub fn open_mixer_panel(&mut self) {
         // = seg000:a3f0 mov ax,1ad6h; call loc_0d95e — select the mixer handler table.
-        self.active_mouse_handlers = &crate::game_ui::MIXER_MOUSE_HANDLERS;
+        self.set_active_mouse_handlers(&crate::game_ui::MIXER_MOUSE_HANDLERS);
         // = seg000:a3f6 call dismiss_stacked_overlays.
         self.dismiss_stacked_menus();
         // = seg000:a3f9 fall into settings_ui_draw.
@@ -235,8 +241,7 @@ impl GameState {
         // = seg000:a50a open MIXR.
         self.open_sprite_bank(sprite_bank::MIXR);
         // = seg000:a510 dx=record.dx, bx=34; add_global_offset — the track position.
-        let track_x = self.settings_records[i].x + SETTINGS_RECT.x0;
-        let track_y = 34 + SETTINGS_RECT.y0;
+        let (track_x, track_y) = global_xy(self.settings_records[i].x, 34);
         // = seg000:a519 draw sprite 1 (the slider track).
         self.draw_active_bank_sprite(1, track_x, track_y);
         // = seg000:a520 al=value; a521 mark drawn (record.drawn_flag = 1).

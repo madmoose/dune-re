@@ -497,7 +497,8 @@ impl GameState {
             .draw();
     }
 
-    // = seg000:c22f draw_sprite_clobbering_bx_dx.
+    // = seg000:c22f draw_sprite_clobbering_bx_dx / seg000:c2fd draw_sprite (the
+    // bx/dx-preserving wrapper).
     pub fn draw_active_bank_sprite(&mut self, sprite_id: u16, x: i16, y: i16) {
         let slot = self.banks.active_bank_id as usize;
         let physical_y = y + self.y_offset as i16;

@@ -203,12 +203,18 @@ impl GameState {
     // = seg000:d068 font_select_tall_font — select the 9-row font.
     pub fn font_select_tall_font(&mut self) {
         self.font_state.size = TextSize::Large;
-        self.font_state.book_drop_cap = false;
+        self.font_select_plain_glyph_func();
     }
 
     // = seg000:d075 font_select_small_font — select the 7-row font.
     pub fn font_select_small_font(&mut self) {
         self.font_state.size = TextSize::Small;
+        self.font_select_plain_glyph_func();
+    }
+
+    // = seg000:d08f font_select_plain_glyph_func — font_draw_glyph_func = the
+    // plain glyph drawer: leave the book drop-cap mode.
+    pub fn font_select_plain_glyph_func(&mut self) {
         self.font_state.book_drop_cap = false;
     }
 
