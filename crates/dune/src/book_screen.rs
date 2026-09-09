@@ -134,20 +134,37 @@ impl GameState {
         }
     }
 
-    // = seg000:af58/af60/af68/af70 the four topic menu verbs — DOS gives each
-    // row its own trampoline loading the filter word (bx) and menu-entry
-    // offset (bp = slot*4); the port shares one callback and derives both
-    // from the clicked slot index.
-    pub(crate) fn menu_callback_choice_book_topic(&mut self, _text_id: u16, index: usize) {
-        // = seg000:af58 bx=0 bp=0 / af60 bx=0x41c bp=4 / af68 bx=0x81c bp=8 /
-        // af70 bx=0xc1c bp=0xc.
-        let slot = index;
-        let filter = if slot == 0 {
-            0
-        } else {
-            ((slot as u16 * 4) << 8) | 0x1c
-        };
-        // = seg000:af76 book_topic_select_common.
+    // = seg000:af58 menu_callback_choice_book_all_topics — bx = 0, bp = 0.
+    pub(crate) fn menu_callback_choice_book_all_topics(&mut self, _text_id: u16, _index: usize) {
+        self.book_topic_select_common(0, 0);
+    }
+
+    // = seg000:af60 menu_callback_choice_book_paul_on_dune_topic — bx = 41ch, bp = 4.
+    pub(crate) fn menu_callback_choice_book_paul_on_dune_topic(
+        &mut self,
+        _text_id: u16,
+        _index: usize,
+    ) {
+        self.book_topic_select_common(0x41c, 4);
+    }
+
+    // = seg000:af68 menu_callback_choice_book_spice_topic — bx = 81ch, bp = 8.
+    pub(crate) fn menu_callback_choice_book_spice_topic(&mut self, _text_id: u16, _index: usize) {
+        self.book_topic_select_common(0x81c, 8);
+    }
+
+    // = seg000:af70 menu_callback_choice_book_fremen_topic — bx = 0c1ch, bp = 0ch.
+    pub(crate) fn menu_callback_choice_book_fremen_topic(&mut self, _text_id: u16, _index: usize) {
+        self.book_topic_select_common(0xc1c, 0xc);
+    }
+
+    // = seg000:af76 book_topic_select_common — the common tail of the four
+    // topic verbs (`filter` = the topic filter word, `entry` = the menu entry
+    // offset, slot * 4): flip a shown page back to the cover, find the first
+    // matching page (none: nothing), store the filter, reset the bookmark,
+    // move the highlight to the chosen entry, and show the first match.
+    fn book_topic_select_common(&mut self, filter: u16, entry: usize) {
+        let slot = entry / 4;
         // = seg000:af77 test data_000c6,2; jnz loc_0af86 — already at the
         // cover; otherwise flip the shown page back to the cover first.
         if self.data_000c6 & 2 == 0 {

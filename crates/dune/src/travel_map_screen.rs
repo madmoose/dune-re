@@ -2679,24 +2679,40 @@ impl GameState {
             // = seg000:b58e..b592 di = res_map_ofs + row start; row_base is the
             //   row's map offset without the longitude cell.
             let row_base = offset0 as i32 - cell0 as i32;
-            // = seg000:b543..b54f cell -= cols/2, wrapping once within the row.
-            let mut cell = cell0 as i32 - (cols / 2) as i32;
-            if cell < 0 {
-                cell += bp;
-            }
-            // = seg000:b551..b566 the horizontal run of `cols` cells.
-            for _ in 0..cols {
-                let di = (row_base + cell) as usize;
-                strip.push((self.map[di], di));
-                cell += 1;
-                if cell >= bp {
-                    cell -= bp;
-                }
-            }
+            // = seg000:b53b call map_build_cell_row.
+            self.map_build_cell_row(&mut strip, row_base, cell0 as i32, bp, cols);
             // = seg000:b583 inc bx — the next latitude row.
             latitude += 1;
         }
         strip
+    }
+
+    // = seg000:b53b map_build_cell_row — one row of the cell strip: the
+    // horizontal run of `cols` cells centred on the longitude's cell (cell
+    // -= cols/2, wrapping once within the row of `bp` bytes at `row_base`),
+    // each (map byte, map offset) appended.
+    fn map_build_cell_row(
+        &self,
+        strip: &mut Vec<(u8, usize)>,
+        row_base: i32,
+        cell0: i32,
+        bp: i32,
+        cols: usize,
+    ) {
+        // = seg000:b543..b54f cell -= cols/2, wrapping once within the row.
+        let mut cell = cell0 - (cols / 2) as i32;
+        if cell < 0 {
+            cell += bp;
+        }
+        // = seg000:b551..b566 the horizontal run of `cols` cells.
+        for _ in 0..cols {
+            let di = (row_base + cell) as usize;
+            strip.push((self.map[di], di));
+            cell += 1;
+            if cell >= bp {
+                cell -= bp;
+            }
+        }
     }
 
     // = seg000:4ec6 travel_select_flight_video — pick hnm_active_video_id from
@@ -2752,11 +2768,8 @@ impl GameState {
     // and play the clip to its end with SN8.VOC looping under it, then stop
     // the voice.
     fn play_worm_departure_transition(&mut self) {
-        // = seg000:47a0 call restore_subtitle_and_tear_down_head —
-        //   subtitle_restore_prior, falling into
-        //   tear_down_prior_talking_head_overlay.
-        self.subtitle_restore_prior();
-        self.tear_down_prior_talking_head_overlay();
+        // = seg000:47a0 call restore_subtitle_and_tear_down_head.
+        self.restore_subtitle_and_tear_down_head();
         // = seg000:47a3 key_hit_scancode = 0.
         self.kb_clear_scancode();
         // = seg000:47a8 al = 0x50; call set_game_phase_and_trigger_callbacks.

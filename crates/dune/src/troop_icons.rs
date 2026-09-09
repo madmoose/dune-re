@@ -140,6 +140,7 @@ fn popup_preserve_over_repaint(panel: Rect, clipped: Rect, yoff: i16) -> Option<
 impl GameState {
     // = seg000:c60b troop_icon_spawn — append a troop icon: centre the ONMAP
     // sprite on (cx, cy), fill a new record and bump troop_icon_count.
+    // = seg000:c613 troop_icon_spawn_record — the record fill.
     pub(crate) fn troop_icon_spawn(
         &mut self,
         sprite: u16,

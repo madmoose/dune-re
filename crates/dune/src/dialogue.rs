@@ -921,8 +921,16 @@ impl GameState {
         //   data_04756 troop — is not modelled.)
         self.current_lip_sync_resource_id = person_index as u16;
 
-        // = seg000:9702 ax = person*8 | 4.
-        let ofs = container::entry_offset(&self.dialogue, ((person_index as u16) << 3) + 4);
+        // = seg000:9702 ax = person*8 | 4; falls into present_dialogue_block.
+        self.present_dialogue_block(((person_index as u16) << 3) + 4)
+    }
+
+    // = seg000:970b present_dialogue_block — present dialogue block `ax`:
+    // its DIALOGUE entry, the presentation setup, then the first matching
+    // line with the auto mask. Returns whether a line was presented.
+    pub(crate) fn present_dialogue_block(&mut self, ax: u16) -> bool {
+        // = seg000:970b..970f si = DIALOGUE[ax].
+        let ofs = container::entry_offset(&self.dialogue, ax);
         if ofs == 0xffff {
             return false;
         }
@@ -930,6 +938,46 @@ impl GameState {
         self.prepare_dialogue_presentation();
         // = seg000:9716 jmp present_dialogue_line_with_auto_mask (seg000:9f8b).
         self.present_dialogue_line_with_auto_mask(ofs as usize)
+    }
+
+    // = seg000:9584 menu_callback_choice_overpower_the_prisoner — the
+    // OVERPOWER THE PRISONER verb: the first time per speaker (ds:ee bit
+    // person_index) the captain's troop loses 0x29 motivation and ds:ed
+    // drops by 0x29; below zero the captain is overpowered (troop occupation
+    // bit 4, room_persons[12].flags bit 4). Then, with the fixed-block voc
+    // bank armed, dialogue block 0x85 is presented and the bank cleared.
+    pub(crate) fn menu_callback_choice_overpower_the_prisoner(
+        &mut self,
+        _text_id: u16,
+        _index: usize,
+    ) {
+        // = seg000:9584..958e si = [data_047a2]; cl = person_index; ax = 1 << cl.
+        let speaker = self.current_lip_sync_resource_id as usize;
+        let bit = 1u16 << (self.room_persons[speaker].person_index & 15);
+        // = seg000:9590/9594 test ax,[ds:ee]; jnz loc_095b4 — once per speaker.
+        if self.data_000ee & bit == 0 {
+            // = seg000:9596 or [ds:ee],ax.
+            self.data_000ee |= bit;
+            // = seg000:959a..95a4 the captain's troop loses 29h motivation;
+            //   ds:ed -= 29h.
+            if let Some(ti) = self.harkonnen_captain_troop {
+                self.troops[ti].motivation = self.troops[ti].motivation.wrapping_sub(0x29);
+            }
+            let (ed, _) = self.data_000ed.overflowing_sub(0x29);
+            self.data_000ed = ed;
+            // = seg000:95a9 jns; 95ab/95af the captain is overpowered.
+            if (ed as i8) < 0 {
+                if let Some(ti) = self.harkonnen_captain_troop {
+                    self.troops[ti].occupation |= 0x10;
+                }
+                self.room_persons[12].flags |= 0x10;
+            }
+        }
+        // = seg000:95b4..95be ax = 85h; inc data_047dc; call
+        //   present_dialogue_block; jmp loc_096eb: data_047dc = 0.
+        self.data_047dc = self.data_047dc.wrapping_add(1);
+        self.present_dialogue_block(0x85);
+        self.data_047dc = 0;
     }
 
     // = seg000:96d8 loc_096d8 — play the fly-over narration line for a passed
@@ -1747,6 +1795,13 @@ impl GameState {
     // line (the room-leave scan at seg000:36da, the worm/ornithopter verbs, the
     // portrait reload at 91c2), tear down a prior talking-head overlay so the
     // new head does not composite over a stale one.
+    // = seg000:98af restore_subtitle_and_tear_down_head — subtitle_restore_
+    // prior, falling into tear_down_prior_talking_head_overlay.
+    pub(crate) fn restore_subtitle_and_tear_down_head(&mut self) {
+        self.subtitle_restore_prior();
+        self.tear_down_prior_talking_head_overlay();
+    }
+
     pub(crate) fn tear_down_prior_talking_head_overlay(&mut self) {
         // = seg000:98b2 cmp [mirror_dual_head],0; jnz ret — the mirror
         //   dual-head mode keeps its overlay.

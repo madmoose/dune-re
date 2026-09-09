@@ -870,25 +870,39 @@ impl GameState {
                 return;
             }
             if x10 {
-                // = seg000:bf61 results_stat_string_replace_x10 — force the
-                // last digit to '0' and write the 5-digit value before it
-                // (loc_0e31c), showing value*10.
-                self.command_bin[si - 1] = b'0';
-                write_stat_number_5(&mut self.command_bin[si - 6..si - 1], value);
+                self.results_stat_string_replace_x10(g, si, value);
             } else {
-                // = seg000:bf73 results_stat_string_replace — the plain
-                // 3-digit field (string_replace_number_ending_at_es_si).
-                write_stat_number_3(&mut self.command_bin[si - 3..si], value);
+                self.results_stat_string_replace(g, si, value);
             }
-            // = seg000:bf7d..bfa5 the shared trend tail: exchange the value
-            // with the previous one; a change picks rose/fell, an unchanged
-            // value marks "steady" only across a period boundary.
-            let old = std::mem::replace(&mut self.results_prev_values[g], value);
-            if value != old {
-                self.results_trend_glyphs[g] = if value < old { 2 } else { 1 };
-            } else if self.results_stats_timestamp != self.game_time & 0xfff0 {
-                self.results_trend_glyphs[g] = 3;
-            }
+        }
+    }
+
+    // = seg000:bf61 results_stat_string_replace_x10 — force the digit run's
+    // last digit to '0' and write the 5-digit value before it (loc_0e31c),
+    // showing value*10; then the trend tail.
+    fn results_stat_string_replace_x10(&mut self, g: usize, si: usize, value: u16) {
+        self.command_bin[si - 1] = b'0';
+        write_stat_number_5(&mut self.command_bin[si - 6..si - 1], value);
+        self.results_stat_trend_update(g, value);
+    }
+
+    // = seg000:bf73 results_stat_string_replace — the plain 3-digit field
+    // (string_replace_number_ending_at_es_si); then the trend tail.
+    fn results_stat_string_replace(&mut self, g: usize, si: usize, value: u16) {
+        write_stat_number_3(&mut self.command_bin[si - 3..si], value);
+        self.results_stat_trend_update(g, value);
+    }
+
+    // = seg000:bf7d results_stat_trend_update — the shared trend tail:
+    // exchange the value with the previous one; a change picks rose (1) /
+    // fell (2), an unchanged value marks steady (3) only across a period
+    // boundary.
+    fn results_stat_trend_update(&mut self, g: usize, value: u16) {
+        let old = std::mem::replace(&mut self.results_prev_values[g], value);
+        if value != old {
+            self.results_trend_glyphs[g] = if value < old { 2 } else { 1 };
+        } else if self.results_stats_timestamp != self.game_time & 0xfff0 {
+            self.results_trend_glyphs[g] = 3;
         }
     }
 

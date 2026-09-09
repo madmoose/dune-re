@@ -212,10 +212,10 @@ pub(crate) const MENU_MIXER_PANEL: MenuDef = menu(0xf8, &[
 /// the slot index selects the topic-bit pair.
 #[rustfmt::skip]
 pub(crate) const MENU_BOOK: MenuDef = menu(0xff, &[
-    item(cmd::ALL_TOPICS,         0xaf58, GameState::menu_callback_choice_book_topic),
-    item(cmd::TOPIC_PAUL_ON_DUNE, 0xaf60, GameState::menu_callback_choice_book_topic),
-    item(cmd::TOPIC_SPICE,        0xaf68, GameState::menu_callback_choice_book_topic),
-    item(cmd::TOPIC_THE_FREMEN,   0xaf70, GameState::menu_callback_choice_book_topic),
+    item(cmd::ALL_TOPICS,         0xaf58, GameState::menu_callback_choice_book_all_topics),
+    item(cmd::TOPIC_PAUL_ON_DUNE, 0xaf60, GameState::menu_callback_choice_book_paul_on_dune_topic),
+    item(cmd::TOPIC_SPICE,        0xaf68, GameState::menu_callback_choice_book_spice_topic),
+    item(cmd::TOPIC_THE_FREMEN,   0xaf70, GameState::menu_callback_choice_book_fremen_topic),
     item(cmd::CLOSE_BOOK,         0xb18b, |state, _, _| state.callback_ui_element_book_close()),
 ]);
 

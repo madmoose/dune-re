@@ -3659,34 +3659,44 @@ impl GameState {
         let t = self.troops[ti];
         let li = locations::location_index_from_ptr(t.offset_of_location);
         let loc = self.locations[li];
-        let not_viable = match t.occupation & 0x0f {
-            // = seg000:6b96 troop_location_test_spice_mining_viable — spice mining needs an
-            //   undamaged harvester (bitfield_10 bit 9 clear), a troop that is
-            //   not sulking (speech bits 4-5 clear), spice in the ground, and
-            //   an area that has been prospected but not exhausted (status bit
-            //   6 set, bit 0 clear).
-            0 => {
-                t.bitfield_10 & 0x200 != 0
-                    || t.dissatisfaction_and_speech & 0x30 != 0
-                    || loc.spice_density < 1
-                    || (loc.status ^ 0x40) & 0x41 != 0
-            }
-            // = seg000:6b8a troop_location_test_for_location_area_prospected —
-            //   prospecting only pays where the area is not prospected yet.
-            1 => loc.status & 0x41 != 0,
-            // = seg000:6bd7 troop_location_test_irrigation_viable — irrigation needs a
-            //   non-sulking troop, water at the location, its status bit 5, and
-            //   the troop's own bulb equipment (mask 2).
-            8 => {
-                t.dissatisfaction_and_speech & 0x30 != 0
-                    || loc.water < 1
-                    || loc.status & 0x20 == 0
-                    || t.equipment & 2 == 0
-            }
-            // = the nullsub_00f66 slots: nothing to test.
-            _ => false,
-        };
-        // = seg000:6bb6 jmp troop_sync_occupation_stopped_bit.
+        let _ = loc;
+        match t.occupation & 0x0f {
+            // = the array_callbacks_for_troop_occupation_06bf5 entries.
+            0 => self.troop_location_test_spice_mining_viable(ti, li),
+            1 => self.troop_location_test_for_location_area_prospected(ti, li),
+            8 => self.troop_location_test_irrigation_viable(ti, li),
+            // = the nullsub_00f66 slots: nothing to test; the sync tail still
+            //   runs with carry clear.
+            _ => self.troop_sync_occupation_stopped_bit(ti, false),
+        }
+    }
+
+    // = seg000:6b96 troop_location_test_spice_mining_viable — spice mining
+    // needs an undamaged harvester (bitfield_10 bit 9 clear), a troop that is
+    // not sulking (speech bits 4-5 clear), spice in the ground, and an area
+    // that has been prospected but not exhausted (status bit 6 set, bit 0
+    // clear); the answer goes through the stopped-bit sync.
+    fn troop_location_test_spice_mining_viable(&mut self, ti: usize, li: usize) -> bool {
+        let t = self.troops[ti];
+        let loc = self.locations[li];
+        let not_viable = t.bitfield_10 & 0x200 != 0
+            || t.dissatisfaction_and_speech & 0x30 != 0
+            || loc.spice_density < 1
+            || (loc.status ^ 0x40) & 0x41 != 0;
+        self.troop_sync_occupation_stopped_bit(ti, not_viable)
+    }
+
+    // = seg000:6bd7 troop_location_test_irrigation_viable — irrigation needs
+    // a non-sulking troop, water at the location, its status bit 5, and the
+    // troop's own bulb equipment (mask 2); the answer goes through the
+    // stopped-bit sync.
+    fn troop_location_test_irrigation_viable(&mut self, ti: usize, li: usize) -> bool {
+        let t = self.troops[ti];
+        let loc = self.locations[li];
+        let not_viable = t.dissatisfaction_and_speech & 0x30 != 0
+            || loc.water < 1
+            || loc.status & 0x20 == 0
+            || t.equipment & 2 == 0;
         self.troop_sync_occupation_stopped_bit(ti, not_viable)
     }
 

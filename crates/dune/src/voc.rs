@@ -1,6 +1,8 @@
 //! Creative Voice File (.VOC) parsing — shared by talking-head voices
 //! (which need the lip-sync mouth stream) and plain sound effects (which do
-//! not). = voc_get_lipsync_data (seg000:a83f) + the type-1 PCM block.
+//! not).
+//! = seg000:a83f voc_get_lipsync_data — the type-5 comment block's mouth
+//!   stream, then the type-1 PCM block.
 
 /// A parsed .VOC: the 8-bit unsigned mono PCM and its sample rate, plus the
 /// lip-sync mouth stream when present. Sound effects (SN3.VOC, …) carry no

@@ -81,6 +81,7 @@ its own framebuffer and paces frames itself.
 
 - `seg000:08e5 unused_midi_fade_out` — fade the music out over 200h ticks and return with CF clear, shaped like an intro script step; nothing references it.
 - `seg000:676e loc_0676e` — a `stc; ret` after map_spawn_troop_icon's own return; nothing jumps to it.
+- `seg000:bf55 results_stat_string_replace_5_unused` — unreferenced: the 5-digit results replace without the forced trailing zero.
 - `seg000:d677 ui_element_release_redraw_unused` — unreferenced: redraw the HUD element ui_element_press_feedback recorded.
 - `seg000:5381 find_nearest_location_unused` — an unreferenced variant of iterate_over_locations_and_coordinates without the hidden-location test.
 - `seg000:53b6 find_nearest_fortress_unused` — an unreferenced variant of iterate_over_locations_and_coordinates restricted to fortresses.

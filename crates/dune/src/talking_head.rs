@@ -1147,7 +1147,7 @@ impl GameState {
 
         // = seg000:a757- flip the TALK TO ME verb to its talking variant
         // (mark_talk_to_me_verb_talking, 0x90 '>>>> TALK TO ME <<<<').
-        self.set_talk_to_me_verb_text(0x90);
+        self.mark_talk_to_me_verb_talking();
 
         // = seg000:a75c loc_0a75c: start the Sound Blaster voice and seed the lip-sync
         // timing. pcm_stop_voc first (= seg000:a84a, inside
@@ -1537,7 +1537,7 @@ impl GameState {
         }
         // = seg000:a7b1 call mark_talk_to_me_verb_idle — flip the verb to its
         // quoted idle variant (0x9f '" TALK TO ME "') and redraw it in place.
-        self.set_talk_to_me_verb_text(0x9f);
+        self.mark_talk_to_me_verb_idle();
         // = seg000:a7b4 call is_voc_pcm_playing; a7b7 jz ret.
         if !self.voc_pcm_playing {
             return;

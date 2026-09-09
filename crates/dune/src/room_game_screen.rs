@@ -1802,6 +1802,8 @@ impl GameState {
     }
 
     // = seg000:d338 screen_element_stack_push — insert a command-record buffer
+    // = seg000:d33a screen_element_stack_insert — the priority-sorted insert
+    //   walk below.
     // (DOS bp) with its cleanup func (DOS bx) onto the z-ordered
     // menu stack and repaint the now-active verb menu. DOS chains
     // screen_element_stack_insert (d33a, the priority-sorted insert that pops
@@ -1865,9 +1867,11 @@ impl GameState {
             // = seg000:90c0 the Harkonnen-Captain prisoner: while the captain
             // (persons_in_room bit 0x1000) stands in the room and room_persons[12]
             // is not yet flagged 0x10, offer OVERPOWER THE PRISONER.
-            item(0x9c, 0x9584, |_, _, _| {
-                println!("menu: OVERPOWER THE PRISONER (seg000:9584) not ported")
-            })
+            item(
+                0x9c,
+                0x9584,
+                GameState::menu_callback_choice_overpower_the_prisoner,
+            )
         } else if pi == 0x0f {
             // = seg000:90d9 person 0x0f: text 0x93, handler loc_05a03.
             item(
@@ -2158,7 +2162,22 @@ impl GameState {
     // seg000:a757); the voice stopping sets 0x9f ('" TALK TO ME "',
     // lip_sync_stop seg000:a7b1). When the id changed and the NPC menu is the
     // active menu, redraw verb slot 0 in place.
-    pub(crate) fn set_talk_to_me_verb_text(&mut self, text_id: u16) {
+    // = seg000:d617 mark_talk_to_me_verb_talking — text id 0x90 ('   >>>>
+    // TALK TO ME  <<<<'), when a voice line starts (seg000:a757).
+    pub(crate) fn mark_talk_to_me_verb_talking(&mut self) {
+        self.set_talk_to_me_verb_text(0x90);
+    }
+
+    // = seg000:d61d mark_talk_to_me_verb_idle — text id 0x9f ('" TALK TO ME
+    // "'), when the voice stops (lip_sync_stop, seg000:a7b1).
+    pub(crate) fn mark_talk_to_me_verb_idle(&mut self) {
+        self.set_talk_to_me_verb_text(0x9f);
+    }
+
+    // = seg000:d621 set_talk_to_me_verb_text — write `text_id` into
+    // menu_NPC_actions record 0's text id (seg001:1f80); when the id changed
+    // and the NPC menu is the active menu, redraw verb slot 0 in place.
+    fn set_talk_to_me_verb_text(&mut self, text_id: u16) {
         // = seg000:d62a cmp [si+2],ax; mov [si+2],ax — patch menu_NPC_actions
         // record 0's text id in place (seg001:1f80). The buffer is the single
         // source of truth: the next setup_npc_dialogue_menu reuses whatever
