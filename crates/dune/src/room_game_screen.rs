@@ -4539,7 +4539,7 @@ mod tests {
         // One game-loop mouse pass first: the cursor starts hidden
         // (= seg000:e64a, cursor_hide_counter -1) and redraw_mouse is what
         // clears the counter and shows it — a click can only follow a pass.
-        game.get_mouse_pos_etc();
+        game.poll_pointer_input();
         let _ = game.redraw_mouse();
 
         // call_restore_cursor (the game loop's per-click hide) publishes the

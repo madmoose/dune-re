@@ -278,7 +278,7 @@ impl GameState {
     pub(crate) fn custom_save_panel_run(&mut self) {
         self.suspend_game_clock();
         // Disable the P-key GAME PAUSED window while the panel is open (the
-        // book screen's idiom): get_mouse_pos_etc runs the pause check every
+        // book screen's idiom): poll_pointer_input runs the pause check every
         // pass, and it would otherwise eat a typed 'p' and stall the panel.
         let saved_pause_enabled = self.pause_enabled;
         self.pause_enabled = 0;
@@ -294,7 +294,7 @@ impl GameState {
 
         let exit = 'modal: loop {
             let start = self.game_ticks();
-            self.get_mouse_pos_etc();
+            self.poll_pointer_input();
             let ax = self.mouse_stuff();
             if self.redraw_mouse() {
                 self.send_frame_to_display();

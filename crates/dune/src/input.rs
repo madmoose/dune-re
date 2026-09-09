@@ -74,6 +74,11 @@ pub struct InputState {
     // queues the translated characters here. Capped at TYPED_CHARS_CAP;
     // drained by GameState::take_typed_chars.
     pub typed: VecDeque<char>,
+
+    // Port-only: a pending driver warp for the host (= the INT 33,4 call of
+    // set_mouse_pos): the game pixel the OS pointer must move to. The host
+    // event loop takes it each pass and warps the window cursor there.
+    pub warp_request: Option<(u16, u16)>,
 }
 
 /// Cap on the typed-character queue; stale characters accumulated outside the
@@ -97,6 +102,7 @@ impl Default for InputState {
             mouse_y: MOUSE_START_Y,
             mouse_buttons: 0,
             typed: VecDeque::new(),
+            warp_request: None,
         }
     }
 }
@@ -135,6 +141,16 @@ impl InputState {
     pub fn on_mouse_move(&mut self, x: u16, y: u16) {
         self.mouse_x = x;
         self.mouse_y = y;
+    }
+
+    // = seg000:dae3 set_mouse_pos — push mouse_pos_x/y into the mouse driver
+    // (INT 33,4 after the mickey scalers). The shared input takes the
+    // position at once, so the next poll starts from it, and queues the
+    // warp for the host, which moves the OS pointer to the same game pixel.
+    pub fn set_mouse_pos(&mut self, x: u16, y: u16) {
+        self.mouse_x = x;
+        self.mouse_y = y;
+        self.warp_request = Some((x, y));
     }
 
     /// Update the mouse button bitmask (= the INT 33,3 `bl & 7`).

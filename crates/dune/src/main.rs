@@ -29,6 +29,7 @@ mod image;
 mod input;
 mod intro_cd;
 mod intro_floppy;
+mod kb_pointer;
 mod language;
 mod lipsync;
 mod locations;
@@ -679,6 +680,34 @@ impl Drop for App {
 }
 
 impl App {
+    /// Move the OS pointer to game pixel (gx, gy) — the host side of the
+    /// INT 33,4 driver warp (InputState::set_mouse_pos). Not every platform
+    /// supports warping; on failure the cursor stays where the shared input
+    /// says until the first real pointer move.
+    fn warp_host_pointer(&mut self, gx: u16, gy: u16) {
+        let Some(window) = &self.window else {
+            return;
+        };
+        let size = window.inner_size();
+        let (sw, sh, ox, oy) = fit_rect(size.width, size.height);
+        let px = ox as f64 + (gx as f64 + 0.5) * sw as f64 / 320.0;
+        let py = oy as f64 + (gy as f64 + 0.5) * sh as f64 / 200.0;
+        if window
+            .set_cursor_position(winit::dpi::PhysicalPosition::new(px, py))
+            .is_ok()
+        {
+            self.cursor_in_game_area = true;
+            self.cursor_in_window = true;
+            // The warp generates no pointer event, so the hidden-cursor rect
+            // stays un-applied until the first real move; in the GPU/software
+            // modes (OS cursor always hidden in-window) force it now. System
+            // mode is driven per-frame by update_system_cursor.
+            if !self.system_cursor {
+                self.apply_ns_cursor_hidden(true);
+            }
+        }
+    }
+
     // Port-only debug hotkey: write the last presented frame as a 320x200 PNG and
     // its palette as a 16x16 grid of 8x8 colour blocks (128x128 PNG), into the
     // working directory as dune-screen-NNN.png / dune-palette-NNN.png.
@@ -1103,35 +1132,16 @@ impl ApplicationHandler for App {
         // vector, resets the mouse driver and seeds its position and range.
         // The port takes pointer events from the window instead.
 
-        // = seg000:e65c..e662 initialize_system warps the pointer to its
-        // startup position (237, 171) via warp_mouse_cursor -> set_mouse_pos
-        // (INT 33,4). The port's equivalent of the driver warp is moving the
-        // OS pointer to the same game pixel, so the cursor and the host
-        // pointer agree from the first frame (InputState::default already
-        // seeds the shared input with this position). Not every platform
-        // supports warping; on failure the cursor stays at the seeded
-        // position until the first real pointer move.
-        let size = window.inner_size();
-        let (sw, sh, ox, oy) = fit_rect(size.width, size.height);
-        let px = ox as f64 + (MOUSE_START_X as f64 + 0.5) * sw as f64 / 320.0;
-        let py = oy as f64 + (MOUSE_START_Y as f64 + 0.5) * sh as f64 / 200.0;
-        if window
-            .set_cursor_position(winit::dpi::PhysicalPosition::new(px, py))
-            .is_ok()
-        {
-            self.cursor_in_game_area = true;
-            self.cursor_in_window = true;
-            // The warp generates no pointer event, so the hidden-cursor rect
-            // set above stays un-applied until the first real move; in the
-            // GPU/software modes (OS cursor always hidden in-window) force it
-            // now. System mode is driven per-frame by update_system_cursor.
-            if !self.system_cursor {
-                self.apply_ns_cursor_hidden(true);
-            }
-        }
-
         self.gpu = Some(Gpu::new(window.clone()));
         self.window = Some(window);
+
+        // = seg000:e65c..e662 initialize_system warps the pointer to its
+        // startup position (237, 171) via warp_mouse_cursor -> set_mouse_pos
+        // (INT 33,4). The host's equivalent of the driver warp is moving the
+        // OS pointer to the same game pixel, so the cursor and the host
+        // pointer agree from the first frame (InputState::default already
+        // seeds the shared input with this position).
+        self.warp_host_pointer(MOUSE_START_X, MOUSE_START_Y);
 
         // Signal the game thread to start
         if let Some(start_signal) = self.start_signal.take() {
@@ -1293,6 +1303,12 @@ impl ApplicationHandler for App {
     }
 
     fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
+        // A driver warp queued by the game thread (set_mouse_pos): move the
+        // OS pointer to the same game pixel.
+        let warp = self.input.lock().unwrap().warp_request.take();
+        if let Some((gx, gy)) = warp {
+            self.warp_host_pointer(gx, gy);
+        }
         // Heartbeat pacing: request one redraw per elapsed REDRAW_INTERVAL and
         // sleep until the next deadline. The deadline is absolute so a stream
         // of input events cannot starve redraws by resetting it. While

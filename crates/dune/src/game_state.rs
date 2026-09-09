@@ -2071,11 +2071,6 @@ pub struct GameState {
     // around HNM cutscenes; start sets it to 0xff to allow in-game pausing.
     pub(crate) pause_enabled: u8,
 
-    // = seg001:ceba data_0ceba — a keyboard-latch byte cleared alongside the
-    // Enter key whenever an element click fires (= seg000:d930), so a queued
-    // keyboard action does not also trigger after the mouse click.
-    pub(crate) data_0ceba: u8,
-
     // = seg001:ceeb language_setting — the selected voice/subtitle
     // language (0 = American, 3 = English, 6 = Fremen/DUT, ...). The mixer panel's
     // language buttons update this and reload the per-language COMMAND.BIN strings
@@ -2215,7 +2210,7 @@ pub struct GameState {
     pub(crate) voc_pcm_playing: bool,
 
     // = seg001:dc36 mouse_pos_x / seg001:dc38 mouse_pos_y — the cursor position
-    // get_mouse_pos_etc latches each poll. The port copies it from the shared
+    // poll_pointer_input latches each poll. The port copies it from the shared
     // InputState (already mapped into 320x200 game coordinates by the host)
     // instead of reading INT 33,3 and applying the mickey scalers.
     pub(crate) mouse_pos_x: u16,
@@ -2239,11 +2234,30 @@ pub struct GameState {
     // and draw_mouse_cursor_if_needed owes the balancing re-show.
     pub(crate) mouse_cursor_restore_needed: i8,
 
-    // = seg001:dc4b data_0dc4b — set by the post-arrival path
-    // (seg000:4fe8 / 5046) to request one game_loop pass through the idle
-    // animation chooser (loc_0d962) instead of the regular mouse poll. Reset
-    // to 0 at game_loop entry (seg000:d81b).
-    pub(crate) idle_anim_trigger: u8,
+    // = seg001:dc34 mouse_button_state — the button state of this pass:
+    // the live buttons (poll_pointer_input) with the keyboard's confirm keys
+    // folded in (poll_pointer_input_keyboard); mouse_stuff reads it.
+    pub(crate) mouse_button_state: u8,
+
+    // = seg001:dc4a..dc4e the keyboard pointer glide (kb_pointer.rs):
+    // kb_glide_tick (the tick byte of the last step), kb_glide_steps (steps
+    // left; 0 = idle, game_loop polls the mouse; cleared at game_loop entry,
+    // seg000:d81b), kb_glide_target_x/y.
+    pub(crate) kb_glide_tick: u8,
+    pub(crate) kb_glide_steps: u8,
+    pub(crate) kb_glide_target_x: i16,
+    pub(crate) kb_glide_target_y: i16,
+
+    // = seg001:dc50..dc57 the Ctrl+arrow accelerated move: kb_move_tick (the
+    // tick byte of the last move), kb_move_dist_x/y (the run so far, the
+    // acceleration measure), kb_move_frac (the 3-bit sub-pixel fraction per
+    // axis) and kb_button_prev (the keyboard button bit of the previous
+    // pass).
+    pub(crate) kb_move_tick: u8,
+    pub(crate) kb_move_dist_x: i16,
+    pub(crate) kb_move_dist_y: i16,
+    pub(crate) kb_move_frac: [u8; 2],
+    pub(crate) kb_button_prev: u8,
 
     // = seg001:dc58 mouse_nav_rect_ptr — the active navigation
     // mouse hot-zone: get_mouse_cursor_image switches the cursor to the hand
@@ -2907,7 +2921,6 @@ impl GameState {
             ui_hud_head_saved_strip: vec![0; 20 * 10],
             ui_hud_head_animating_down: false,
             pause_enabled: 0,
-            data_0ceba: 0,
             language_setting: 0,
             mouse_last_click_time: 0,
             voc_bases: [0; 17],
@@ -2944,7 +2957,16 @@ impl GameState {
             // Starts hidden; initialize_system sets the DOS value.
             cursor_hide_counter: -1,
             mouse_cursor_restore_needed: 0,
-            idle_anim_trigger: 0,
+            mouse_button_state: 0,
+            kb_glide_tick: 0,
+            kb_glide_steps: 0,
+            kb_glide_target_x: 0,
+            kb_glide_target_y: 0,
+            kb_move_tick: 0,
+            kb_move_dist_x: 0,
+            kb_move_dist_y: 0,
+            kb_move_frac: [0; 2],
+            kb_button_prev: 0,
             mouse_nav_rect: None,
             game_clock_tick_base: 0,
             drag_armed_element: None,
@@ -3121,7 +3143,8 @@ impl GameState {
         // = seg000:e635 init_extended_memory_allocator [not needed].
         // = seg000:e638..e640 vga_set_grayscale_mode [not needed] — cmd arg
         //   bit 1.
-        // = seg000:e644 mov [joystick_table_ptr], 271ch [not needed].
+        // = seg000:e644 mov [kb_pointer_key_table_ptr], 271ch [not needed] —
+        //   the keypad direction table is a constant in kb_pointer.rs.
         // = seg000:e64a mov [cursor_hide_counter], 0ffh — the cursor starts
         // hidden; the first redraw_mouse pass (game_loop) clears the counter
         // and shows it.
@@ -3256,9 +3279,9 @@ impl GameState {
         // ISR needs no anchor since it advances the clock per hardware tick).
         self.game_clock_last_tick = self.game_ticks();
 
-        // = seg000:d81b mov byte ptr [data_0dc4b], 0 — clear the idle-anim
-        //   request so the first pass takes the normal mouse path.
-        self.idle_anim_trigger = 0;
+        // = seg000:d81b mov byte ptr [kb_glide_steps], 0 — no keyboard
+        //   pointer glide in progress: the first pass polls the mouse.
+        self.kb_glide_steps = 0;
         loop {
             // = seg000:d820 loc_0d820 — the loop top.
 
@@ -3344,19 +3367,14 @@ impl GameState {
             //   travel step every 0x300 ticks (travel_map_screen.rs).
             self.travel_pump();
 
-            // = seg000:d854 if data_0dc4b != 0 take the idle-anim path
-            //   (loc_0d962, seg000:d962); else the normal mouse poll +
-            //   button-edge latch.
-            let ax = if self.idle_anim_trigger != 0 {
-                // TODO: port loc_0d962 — the post-arrival idle/glance animation
-                //   chooser. Until then fall through to the mouse path so the
-                //   pointer keeps tracking.
-                self.idle_anim_trigger = 0;
-                self.get_mouse_pos_etc();
-                self.mouse_stuff()
+            // = seg000:d854 cmp [kb_glide_steps],0; jz — a keyboard pointer
+            //   glide in progress steps the pointer instead of polling the
+            //   mouse (kb_pointer_glide_step ends in mouse_stuff).
+            let ax = if self.kb_glide_steps != 0 {
+                self.kb_pointer_glide_step()
             } else {
-                // = seg000:d860 call get_mouse_pos_etc; call mouse_stuff.
-                self.get_mouse_pos_etc();
+                // = seg000:d860 call poll_pointer_input; call mouse_stuff.
+                self.poll_pointer_input();
                 self.mouse_stuff()
             };
 

@@ -1,7 +1,7 @@
 //! The in-game main loop and the mouse-pointer plumbing it drives.
 //!
 //! Ported from `game_loop` (seg000:d815) — `start`'s final `call` — and the
-//! mouse routines it calls each pass: `get_mouse_pos_etc` (seg000:df1e),
+//! mouse routines it calls each pass: `poll_pointer_input` (seg000:df1e),
 //! `redraw_mouse` (seg000:dc20) and `get_mouse_cursor_image_addr` (seg000:dc6a).
 //! The cursor compositing itself lives in `gfx` (the segvga `vga_draw_cursor` /
 //! `vga_restore_cursor` primitives).
@@ -362,18 +362,24 @@ pub fn cursor_shape(id: CursorShapeId) -> &'static CursorShape {
 }
 
 impl GameState {
-    // = seg000:df1e get_mouse_pos_etc — latch the pointer position for this pass.
-    // Minimal port: copy the shared InputState (the host already maps the window
-    // cursor into 320x200 game coordinates) into mouse_pos_x/y. DOS instead reads
-    // INT 33,3 and shifts by the mickey scalers (_word_21A30..), then runs the
-    // joystick path (loc_0dd10) and the per-person idle/click scan (loc_0df56);
-    // mouse_stuff (seg000:db4c) button edge-detection is also TODO.
-    pub(crate) fn get_mouse_pos_etc(&mut self) {
+    // = seg000:df1e poll_pointer_input — latch the pointer position and the
+    // button state for this pass, then run the keyboard tail. DOS reads INT
+    // 33,3 and shifts by the mickey scalers (_word_21A30..); the host already
+    // maps the window cursor into 320x200 game coordinates.
+    pub(crate) fn poll_pointer_input(&mut self) {
         // = seg000:df1e call pause_if_p_key_pressed — honour the P-key pause.
         self.pause_if_p_key_pressed();
-        let input = self.input.lock().unwrap();
-        self.mouse_pos_x = input.mouse_x;
-        self.mouse_pos_y = input.mouse_y;
+        {
+            let input = self.input.lock().unwrap();
+            // = seg000:df2a..df45 INT 33,3: the position and the buttons.
+            self.mouse_pos_x = input.mouse_x;
+            self.mouse_pos_y = input.mouse_y;
+            // = seg000:df3d/df3f al = bl & 3; df49 mouse_button_state = al.
+            self.mouse_button_state = input.mouse_buttons & 3;
+        }
+        // = seg000:df4c..df53 the joystick path (loc_0dd10) [not needed].
+        // = seg000:df56 the keyboard tail (kb_pointer.rs).
+        self.poll_pointer_input_keyboard();
     }
 
     // = seg000:dc20 redraw_mouse — composite the cursor at its current position,
@@ -490,10 +496,9 @@ impl GameState {
         // = seg000:db06/db0a store mouse_pos_x/y.
         self.mouse_pos_x = x;
         self.mouse_pos_y = y;
-        // = seg000:dae3 set_mouse_pos [not needed] — INT 33,4: push the
-        //   position into the mouse driver. The port's equivalent is the host
-        //   pointer warp at window creation (main.rs); the shared input is
-        //   seeded with the same position.
+        // = seg000:db0e call set_mouse_pos — push the position into the
+        //   driver (InputState::set_mouse_pos; the host warps its pointer).
+        self.input.lock().unwrap().set_mouse_pos(x, y);
         // = seg000:db11 jmp draw_mouse.
         self.draw_mouse();
     }
@@ -621,9 +626,11 @@ impl GameState {
     // by the host event loop); the previous state lives in `prev_mouse_buttons`.
     // Returns the same ax as DOS so game_loop's dispatch reads it back unchanged.
     pub(crate) fn mouse_stuff(&mut self) -> u16 {
-        // = seg000:db4c mov ax, [data_0dc34]. AL = live buttons, AH = previously
-        //   latched buttons (set by the previous call's `mov [data_0dc35], al`).
-        let live = self.input.lock().unwrap().mouse_buttons;
+        // = seg000:db4c mov ax, [mouse_button_state]. AL = this pass's buttons
+        //   (poll_pointer_input, with the keyboard's confirm keys folded in), AH =
+        //   previously latched buttons (set by the previous call's
+        //   `mov [data_0dc35], al`).
+        let live = self.mouse_button_state;
         let prev = self.prev_mouse_buttons;
         // = seg000:db4f and al,3 — keep only LMB | RMB.
         let cur = live & 3;
@@ -736,7 +743,7 @@ mod tests {
         input.lock().unwrap().on_mouse_move(160, 80);
 
         // One game_loop cursor pass: cursor baked into the screen.
-        game.get_mouse_pos_etc();
+        game.poll_pointer_input();
         let drew = game.redraw_mouse();
         eprintln!(
             "pass1: drew={drew} counter={} save_h={}",
@@ -756,7 +763,7 @@ mod tests {
         );
 
         // Next game_loop pass without any pointer motion.
-        game.get_mouse_pos_etc();
+        game.poll_pointer_input();
         let drew = game.redraw_mouse();
         eprintln!(
             "pass2: drew={drew} counter={} save_h={}",
@@ -813,7 +820,7 @@ mod tests {
         let one_pass = |game: &mut crate::GameState| {
             game.ui_hud_companion_blink_task();
             game.process_frame_tasks();
-            game.get_mouse_pos_etc();
+            game.poll_pointer_input();
             let _ = game.redraw_mouse();
             let handlers = game.active_mouse_handlers;
             let _ = game.highlight_hovered_text_action_item();
@@ -850,7 +857,7 @@ mod tests {
         one_pass(&mut game);
 
         input.lock().unwrap().on_mouse_button(1);
-        game.get_mouse_pos_etc();
+        game.poll_pointer_input();
         let ax = game.mouse_stuff();
         let _ = game.redraw_mouse();
         assert_eq!(ax & 0x0f, 5, "press edge expected");
@@ -858,7 +865,7 @@ mod tests {
         game.game_loop_dispatch_lmb_press();
 
         input.lock().unwrap().on_mouse_button(0);
-        game.get_mouse_pos_etc();
+        game.poll_pointer_input();
         let ax = game.mouse_stuff();
         let _ = game.redraw_mouse();
         assert_eq!(ax & 0x0f, 4, "release edge expected");
@@ -936,7 +943,7 @@ mod tests {
         let one_pass = |game: &mut crate::GameState| {
             game.ui_hud_companion_blink_task();
             game.process_frame_tasks();
-            game.get_mouse_pos_etc();
+            game.poll_pointer_input();
             let _ = game.redraw_mouse();
             let handlers = game.active_mouse_handlers;
             let _ = game.highlight_hovered_text_action_item();
@@ -954,14 +961,14 @@ mod tests {
         input.lock().unwrap().on_mouse_move(120, 186);
         one_pass(&mut game);
         input.lock().unwrap().on_mouse_button(1);
-        game.get_mouse_pos_etc();
+        game.poll_pointer_input();
         let ax = game.mouse_stuff();
         let _ = game.redraw_mouse();
         assert_eq!(ax & 0x0f, 5, "press edge expected");
         game.call_restore_cursor();
         game.game_loop_dispatch_lmb_press();
         input.lock().unwrap().on_mouse_button(0);
-        game.get_mouse_pos_etc();
+        game.poll_pointer_input();
         let _ = game.mouse_stuff();
         let _ = game.redraw_mouse();
         game.call_restore_cursor();
@@ -1039,7 +1046,7 @@ mod tests {
         for pass in 0..400 {
             game.ui_hud_companion_blink_task();
             game.process_frame_tasks();
-            game.get_mouse_pos_etc();
+            game.poll_pointer_input();
             let _ = game.redraw_mouse();
             let h1 = shared.snapshot().hidden;
             let handlers = game.active_mouse_handlers;
@@ -1113,7 +1120,7 @@ mod tests {
         let one_pass = |game: &mut crate::GameState| {
             game.ui_hud_companion_blink_task();
             game.process_frame_tasks();
-            game.get_mouse_pos_etc();
+            game.poll_pointer_input();
             let _ = game.redraw_mouse();
             let handlers = game.active_mouse_handlers;
             let _ = game.highlight_hovered_text_action_item();

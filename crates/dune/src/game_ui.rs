@@ -1249,9 +1249,13 @@ impl GameState {
     // (= seg000:d935), and dispatch the element's handler ([di+0ch]). Reused by the
     // release and held-auto-repeat paths in game_loop.
     pub(crate) fn dispatch_element_with_latch(&mut self, i: usize) {
-        // = seg000:d92b mov [kb_keys_enter],0; d930 mov [data_0ceba],0.
-        self.input.lock().unwrap().kb_keys[crate::input::SCANCODE_ENTER as usize] = 0;
-        self.data_0ceba = 0;
+        // = seg000:d92b mov [kb_keys_enter],0; d930 mov [data_0ceba],0 — the
+        //   Enter and Space slots of the key array.
+        {
+            let mut input = self.input.lock().unwrap();
+            input.kb_keys[crate::input::SCANCODE_ENTER as usize] = 0;
+            input.kb_keys[0x39] = 0;
+        }
         // = seg000:d935 mov [mouse_last_click_time], pit counter.
         self.mouse_last_click_time = self.game_ticks() as u16;
         // = seg000:d93e call word ptr [di+0ch].
