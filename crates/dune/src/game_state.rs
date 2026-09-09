@@ -61,7 +61,8 @@ pub const MIDI_SAMPLE_RATE: u32 = 49716;
 /// function pointers aren't reliably comparable in Rust so we use an id.
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub(crate) enum TaskId {
-    // = seg000:0070c hnm frame player (intro_play_hnm_with_frame_task).
+    // = seg000:070c hnm_frame_task — the HNM frame player armed by
+    // intro_play_hnm_with_frame_task.
     HnmDoFrame,
 
     // = seg000:0b45 night_attack_frame_task — intro_28 night-attack particle tick.
@@ -3694,11 +3695,7 @@ impl GameState {
     fn run_frame_task(&mut self, task_id: TaskId) {
         match task_id {
             TaskId::HnmDoFrame => {
-                // = seg000:0070c
-                if self.hnm_do_frame() {
-                    self.gfx_copy_whole_framebuf_to_screen();
-                    self.send_frame_to_display();
-                }
+                self.hnm_frame_task();
             }
             TaskId::IntroNightAttack => {
                 self.tick_intro_night_attack();
@@ -3813,13 +3810,6 @@ impl GameState {
         while !self.frame_tasks.is_empty() {
             self.tick_one_frame();
         }
-    }
-
-    // = seg000:0704 intro_play_hnm_with_frame_task — install an HNM frame
-    // task that decodes one frame whenever the per-clip tick interval has
-    // elapsed. The task self-removes when the clip ends.
-    pub fn play_hnm_with_frame_task(&mut self) {
-        self.add_frame_task(5, TaskId::HnmDoFrame)
     }
 
     // = seg000:ca1b hnm_load_first_frame — open an HNM resource and decode its
@@ -4047,7 +4037,7 @@ impl GameState {
     pub fn hnm_do_frame(&mut self) -> bool {
         // = seg000:ca60 cmp word ptr [35a6h], 0; jz loc_0ca9a. Once a
         // non-looping clip runs out of frames it is closed/finished. From then on
-        // hnm_do_frame is a no-op: the frame task at loc_0070c keeps ticking (clc
+        // hnm_do_frame is a no-op: hnm_frame_task keeps ticking (clc
 
         // = stay scheduled) but decodes nothing, so the screen holds the last
         // frame until play_intro's wait elapses.

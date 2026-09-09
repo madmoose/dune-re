@@ -1350,11 +1350,26 @@ impl GameState {
     }
 
     // = seg000:0704 intro_play_hnm_with_frame_task. Install a per-tick task that
-    // decodes one HNM frame and blits it to the screen; play_intro's
-    // wait_for_pcm_voice_interruptable(stage.wait) drives it for the clip's
-    // duration. Shared by stages 12, 19, 29, 39.
+    // decodes one HNM frame and blits it to the screen, then fall into it for
+    // the first frame; play_intro's wait_for_pcm_voice_interruptable(stage.wait)
+    // drives it for the clip's duration. Shared by stages 12, 19, 29, 39, 41.
     fn intro_play_hnm_with_frame_task(&mut self) {
+        // = seg000:0704 xor bp,bp; add_frame_task(hnm_frame_task).
         self.add_frame_task(0, crate::TaskId::HnmDoFrame);
+        // = seg000:0709 falls through into hnm_frame_task.
+        self.hnm_frame_task();
+    }
+
+    // = seg000:070c hnm_frame_task — decode the next frame when its interval
+    // has elapsed and present it; `clc` keeps the task scheduled even once the
+    // clip has finished (hnm_do_frame then decodes nothing). DOS decodes
+    // straight into the visible screen; the port copies fb1 out after each
+    // decoded frame.
+    pub(crate) fn hnm_frame_task(&mut self) {
+        if self.hnm_do_frame() {
+            self.gfx_copy_whole_framebuf_to_screen();
+            self.send_frame_to_display();
+        }
     }
 
     // Story-still stages — each opens its INTxx.HSQ and draws sprite 0.
