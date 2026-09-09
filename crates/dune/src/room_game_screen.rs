@@ -1181,7 +1181,10 @@ impl GameState {
     // = seg000:0eb9 (the loc_00eb9 body) — leave the mirror still and return to
     // the bedroom: clear the suspend, re-arm the room screen, and redraw it.
     fn look_away_from_mirror(&mut self) {
-        // = seg000:0eb9 data_047c3 = 0. TODO: data_047c3 not modelled.
+        // = seg000:0eb9/0ebb mirror_dual_head = 0 — the shadow head goes
+        //   with it.
+        self.mirror_dual_head = 0;
+        self.talking_head_shadow = None;
         // = seg000:0ebe call reset_game_suspend.
         self.reset_game_suspend();
         // = seg000:0ec1 data_047a6 = 0xff.
@@ -2827,6 +2830,9 @@ impl GameState {
     pub(crate) fn stop_lip_sync_and_remove_idle_head_task(&mut self) {
         // = seg000:9b8b call lip_sync_stop.
         self.lip_sync_stop();
+        // = seg000:9b90 mirror_dual_head = 0 — the shadow head goes with it.
+        self.mirror_dual_head = 0;
+        self.talking_head_shadow = None;
         // = seg000:9b9d xchg ax,[data_047c6]; or ax,ax; jz loc_09bab.
         if self.talking_head.is_some() {
             self.remove_frame_task(crate::TaskId::TalkingHeadIdle);

@@ -55,10 +55,9 @@ impl GameState {
 
     // = seg000:0f13 mirror_dual_head_setup — the two-head still shared by
     // LOOK AT MIRROR and the ending's final room: Chani (lip-sync resource 7)
-    // set up first and her box lowered 15 px, then Paul beside her, shifted
-    // right by 0x2d. DOS swaps the head state block (loc_0998e) so the idle
-    // task ticks both heads; the port has one head slot, so Chani's first
-    // frame stays as a still in the fb2 backdrop while Paul's head idles.
+    // set up first with her box lowered 15 px and swapped into the shadow
+    // state, mirror mode raised, then Paul beside her, shifted right by 0x2d.
+    // frame_task_callback_099be then ticks both heads.
     pub(crate) fn mirror_dual_head_setup(&mut self) {
         // = seg000:0f13 call copy_active_framebuffer_to_framebuffer_2.
         self.copy_active_framebuffer_to_framebuffer_2();
@@ -66,13 +65,21 @@ impl GameState {
         //   sync_data_from_current; data_0478c = 0.
         self.setup_talking_head(7, 0);
         self.subtitle_word_count = 0;
-        // = seg000:0f24 ui_hud_elements[19].y0 += 0fh.
-        self.ui_elements[19].y0 = self.ui_elements[19].y0.wrapping_add(0x0f);
+        // = seg000:0f24 ui_hud_elements[19].y0 += 0fh — the head rect.
+        if let Some(head) = self.talking_head.as_mut() {
+            head.rect.1 = head.rect.1.wrapping_add(0x0f);
+        }
         // = seg000:0f29 call start_room_lip_sync.
         self.start_room_lip_sync();
-        // = seg000:0f2c..0f39 loc_0998e (the state swap), talking_head_id =
-        //   0ffffh, data_047c3 (mirror mode) += 1, data_047c6 = 1 — the
-        //   second head slot; not modelled (see above).
+        // = seg000:0f2c call swap_talking_head_state — Chani into the shadow.
+        self.swap_talking_head_state();
+        // = seg000:0f2f talking_head_id = 0ffffh — no head in the live slot
+        //   (the swapped-in shadow was empty), so Paul's open builds afresh.
+        self.talking_head = None;
+        // = seg000:0f35 inc [mirror_dual_head].
+        self.mirror_dual_head = self.mirror_dual_head.wrapping_add(1);
+        // = seg000:0f39 data_047c6 = 1 — the idle task counts as installed;
+        //   the port's add_frame_task is idempotent.
         // = seg000:0f3f call copy_active_framebuffer_to_framebuffer_2.
         self.copy_active_framebuffer_to_framebuffer_2();
         // = seg000:0f42/0f45 dx = 2dh; jmp loc_00965: al = 2dh; loc_009c7;

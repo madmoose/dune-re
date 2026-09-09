@@ -903,6 +903,30 @@ impl GameState {
     //
     // The task runs continuously until the next stage calls remove_all_frame_tasks.
     pub(crate) fn tick_talking_head_idle(&mut self) {
+        // = seg000:99be cmp [mirror_dual_head],0; jz loc_099da.
+        if self.mirror_dual_head != 0 {
+            // = seg000:99c5..99ce swap; ax = 7 (CHAN); open_talking_head_
+            //   resource; call loc_099da — Chani's tick.
+            self.swap_talking_head_state();
+            self.open_talking_head_resource(7, 0);
+            self.tick_talking_head_idle_one();
+            // = seg000:99d1..99d7 swap; ax = 2dh (PAUL); open_talking_head_
+            //   resource; falls into loc_099da — Paul's tick.
+            self.swap_talking_head_state();
+            self.open_talking_head_resource(0x2d, 0);
+        }
+        self.tick_talking_head_idle_one();
+    }
+
+    // = seg000:998e swap_talking_head_state — exchange the talking-head state
+    // with its shadow copy: the head rect, talking_head_id, the previous-frame
+    // copy and the idle block all live in TalkingHead, so the slots swap.
+    pub(crate) fn swap_talking_head_state(&mut self) {
+        std::mem::swap(&mut self.talking_head, &mut self.talking_head_shadow);
+    }
+
+    // = seg000:99da loc_099da — one head's idle tick.
+    fn tick_talking_head_idle_one(&mut self) {
         // Read the current animation's length (for the in-window frame advance
         // below). The settled resting animation was chosen by
         // idle_select_calm_animation (loc_09a7b) — animation `facing-1`

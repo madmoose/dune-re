@@ -271,6 +271,17 @@ pub struct GameState {
     // = the active talking-head portrait (intro + dialogue lip-sync). None when
     // no head is on screen. See `talking_head.rs`.
     pub talking_head: Option<TalkingHead>,
+    // = the talking-head shadow copy at RESOURCE_GLOBDATA that
+    // swap_talking_head_state (seg000:998e) exchanges with the live state
+    // (the head rect, talking_head_id, the previous-frame copy and the idle
+    // block): the second head of the mirror dual-head mode.
+    pub talking_head_shadow: Option<TalkingHead>,
+    // = seg001:47c3 data_047c3 — mirror dual-head mode: non-zero while LOOK
+    // AT MIRROR or the ending shows Chani beside Paul (mirror_dual_head_setup);
+    // frame_task_callback_099be then ticks both heads and
+    // tear_down_prior_talking_head_overlay is skipped. Cleared by the
+    // look-away verb (seg000:0ebb) and stop_lip_sync_and_remove_idle_head_task.
+    pub(crate) mirror_dual_head: u8,
 
     // The SD (digital-audio) chunk captured by the most recently decoded HNM
     // frame, awaiting wrap into a VOC by the audio orchestration. = the streaming
@@ -2513,6 +2524,8 @@ impl GameState {
             font_state: FontState::default(),
             command_bin,
             talking_head: None,
+            talking_head_shadow: None,
+            mirror_dual_head: 0,
             hnm_sd_block: None,
             hnm_ticks_per_frame: 0,
             hnm_last_frame_tick: 0,

@@ -1738,9 +1738,11 @@ impl GameState {
     // portrait reload at 91c2), tear down a prior talking-head overlay so the
     // new head does not composite over a stale one.
     pub(crate) fn tear_down_prior_talking_head_overlay(&mut self) {
-        // = seg000:98b2 cmp data_047c3,0; jnz ret — the bubble/no-head subtitle
-        //   presenter owns the overlay (armed at seg000:0ebb/0f35); that
-        //   presenter is unported, so the gate always passes.
+        // = seg000:98b2 cmp [mirror_dual_head],0; jnz ret — the mirror
+        //   dual-head mode keeps its overlay.
+        if self.mirror_dual_head != 0 {
+            return;
+        }
         // = seg000:98b9.._word_239F0_copy_of_non_pcm_lip_sync_data = 0 and
         //   data_047d1 &= 0x3f — pending lip-sync frame state; the port keeps
         //   the equivalents inside TalkingHead.
