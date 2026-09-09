@@ -1,6 +1,6 @@
 #![allow(unused)]
 
-use crate::{FbId, GameState, Rect, SpriteSheet, draw_sprite_from_sheet, sprite_blitter};
+use crate::{FbId, GameState, Rect, SpriteSheet, draw_sprite_from_sheet, gfx, sprite_blitter};
 
 pub const ICONES: i16 = 0x00;
 pub const FRESK: i16 = 0x01;
@@ -518,12 +518,26 @@ impl GameState {
     }
 
     // = seg000:c370 blit_repeated_x — tile the active bank sprite across
-    // `rect` (absolute framebuffer coordinates) in fb1, clamping the tiles to
-    // the rect so nothing spills past its edges. DOS blits the sprite once
-    // then copy-rects it right/down with the trailing tile clamped to the
-    // remaining width/height (the seg000:c3c7 loop); the port draws each tile
-    // clipped to the rect, which lands the same pixels.
+    // `rect` (absolute framebuffer coordinates) in fb1: clear the rect, blit
+    // the sprite once at its top-left, then copy-rect it rightward along the
+    // first strip and copy the full-width strip downward, the trailing copy
+    // clamped to the remaining width / height (vga_fb_copy_rect).
     pub(crate) fn blit_repeated_x(&mut self, sprite_id: u16, rect: crate::Rect) {
+        // The rect is absolute; the segvga primitives add y_offset themselves.
+        let yoff = self.y_offset as i16;
+        let (x0, y0) = (rect.x0, rect.y0 - yoff);
+        let (rw, rh) = (rect.x1 - rect.x0, rect.y1 - rect.y0);
+        // = seg000:c374 vga_clear_rect over the rect.
+        gfx::vga_clear_rect(
+            self,
+            FbId::Fb1,
+            rect.x0 as u16,
+            y0 as u16,
+            rect.x1 as u16,
+            (rect.y1 - yoff) as u16,
+        );
+        // = seg000:c38e..c3a6 the sprite's width (ax & 1ffh) and height, and
+        //   the one real blit at (x0, y0).
         let slot = self.banks.active_bank_id as usize;
         // Hold &self.banks.cache and &mut self.framebuffer at once (disjoint
         // fields), like draw_active_bank_sprite.
@@ -533,18 +547,44 @@ impl GameState {
         let Some(sprite) = sheet.get_sprite(sprite_id) else {
             return;
         };
-        let (sw, sh) = (sprite.width().max(1) as i16, sprite.height().max(1) as i16);
-        let fb = &mut self.framebuffer;
-        let mut y = rect.y0;
-        while y < rect.y1 {
-            let mut x = rect.x0;
-            while x < rect.x1 {
-                // clip_rect clamps each tile to the balloon rect so the
-                // trailing tiles do not spill past its right/bottom edge.
-                let _ = sprite_blitter(sprite, fb).at(x, y).clip_rect(rect).draw();
-                x += sw;
+        let (sw, sh) = (sprite.width() as i16, sprite.height() as i16);
+        let _ = sprite_blitter(sprite, &mut self.framebuffer)
+            .at(rect.x0, rect.y0)
+            .draw();
+        // = seg000:c3c1..c3de the copies to the right along the first strip:
+        //   dx = rect width - sprite width; each pass advances dst_col by the
+        //   copy width, and a borrow on `sub dx,ax` clamps the trailing copy
+        //   to what is left; loop while dx > 0.
+        let (mut width, mut dst_col, mut dx) = (sw, x0, rw - sw);
+        loop {
+            dst_col += width;
+            let borrow = (dx as u16) < (width as u16);
+            dx -= width;
+            if borrow {
+                width += dx;
             }
-            y += sh;
+            gfx::vga_fb_copy_rect(self, FbId::Fb1, x0, y0, width, sh, dst_col, y0);
+            if dx <= 0 {
+                break;
+            }
+        }
+        // = seg000:c3e0..c40b the full-width strip copied downward: bx = rect
+        //   height - sprite height, skipped when zero; the same clamp per pass.
+        let (mut height, mut dst_row, mut bx) = (sh, y0, rh - sh);
+        if bx == 0 {
+            return;
+        }
+        loop {
+            dst_row += height;
+            let borrow = (bx as u16) < (height as u16);
+            bx -= height;
+            if borrow {
+                height += bx;
+            }
+            gfx::vga_fb_copy_rect(self, FbId::Fb1, x0, y0, rw, height, x0, dst_row);
+            if bx <= 0 {
+                break;
+            }
         }
     }
 

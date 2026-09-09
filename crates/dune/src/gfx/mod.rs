@@ -171,6 +171,43 @@ pub fn vga_fill_rect(
     }
 }
 
+// = segvga:19c9 vga_fb_copy_rect (j_vga_fb_copy_rect, segvga:015d; the
+// gfx_vtable slot at seg001:3931) — copy a width x height rect within the
+// framebuffer `dest` from (src_col, src_row) to (dst_col, dst_row), row by
+// row (rep movsb at stride 320), both offsets through calc_fb_offset
+// (fb_base_ofs / y_offset applied). The port bounds-checks the rows and
+// columns DOS trusts its callers for.
+#[allow(clippy::too_many_arguments)]
+pub fn vga_fb_copy_rect(
+    state: &mut GameState,
+    dest: FbId,
+    src_col: i16,
+    src_row: i16,
+    width: i16,
+    height: i16,
+    dst_col: i16,
+    dst_row: i16,
+) {
+    let yoff = state.y_offset as i16;
+    let fb = state.fb_mut(dest);
+    let (w, h) = (fb.w() as i16, fb.h() as i16);
+    for row in 0..height.max(0) {
+        let sy = src_row + yoff + row;
+        let dy = dst_row + yoff + row;
+        if !(0..h).contains(&sy) || !(0..h).contains(&dy) {
+            continue;
+        }
+        for col in 0..width.max(0) {
+            let sx = src_col + col;
+            let dx = dst_col + col;
+            if (0..w).contains(&sx) && (0..w).contains(&dx) {
+                let p = fb.get(sx as u16, sy as u16);
+                fb.set(dx as u16, dy as u16, p);
+            }
+        }
+    }
+}
+
 // = segvga:19f7 vga_clear_screen — clear the active framebuffer to color 0.
 pub fn vga_clear_screen(state: &mut GameState) {
     state.active_fb_mut().clear();
