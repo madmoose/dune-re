@@ -11,6 +11,8 @@ instead (see CLAUDE.md); this file is for machinery with no counterpart.
 The port reads the mouse and keyboard from the window; there is no joystick.
 
 - `seg000:ea32 initialize_joystick` — read the game port and calibrate the joystick centre/range into _word_22E5B_joystick_param.
+- `seg000:e9f4 mouse_func_uncalled` — a mouse-driver event handler that nothing installs (dead code).
+- `seg000:db14 define_mouse_range` — store the mouse clip region and set the INT 33h range; the window bounds the pointer in the port.
 - `seg000:dce0 read_game_port` — time the game port's axis pulses (port 201h) into bx/dx; called by the joystick calibration and the mouse-handler joystick path (seg000:dd10 / dd91).
 
 ## HNM streaming
@@ -60,6 +62,11 @@ its own framebuffer and paces frames itself.
 - `segvga:0aa4 vga_fade_save_and_black` — no callers (dead code).
 - `segvga:2e2c mosaic_pass_4x4_flush` — no callers (dead code).
 
+## Interrupts and startup checks
+
+- `seg000:e913 install_interrupt_handlers` — hook the PIT, keyboard and mouse interrupt vectors from _word_21DC3_interrupt_table.
+- `seg000:a87e audio_test_frequency` — play FREQ.HSQ at startup to time the PCM driver.
+
 ## Memory management
 
 Every resource the port opens is read whole into a `Vec<u8>` from DUNE.DAT
@@ -95,4 +102,5 @@ with it:
 - `seg000:f0ff bump_allocate_bump_cx_bytes` — advance allocator_next_free_seg by cx bytes (rounded to paragraphs), exiting through out_of_memory_error past allocator_last_free_seg.
 - `seg000:f11c alloc_check_cx_pages_available` — retry allocator_attempt_to_free_space until cx paragraphs fit.
 - `seg000:f131 out_of_memory_error` — print the error and exit_to_dos.
+- `seg000:e8d5 uninitialize_memory_driver` — free the XMS block / EMS handle at exit.
 - `seg000:f13f allocator_attempt_to_free_space` — pick the least-recently-used open resource (largest game_time delta in _word_2CF3C_open_res_info) and evict it to make room.

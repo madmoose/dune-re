@@ -219,7 +219,8 @@ impl GameState {
         self.font_state.book_drop_cap = true;
     }
 
-    // = seg000:d096 / d12f font_draw_glyph_func — draw glyph `c` at the pen into
+    // = seg000:d096 font_draw_glyph_func_tall / seg000:d12f font_draw_glyph_func_small
+    // — draw glyph `c` at the pen into
     // the active framebuffer with the current colour, then advance the pen x by
     // the glyph width. (DOS picks tall/small via the _off_219C8 pointer; the
     // port reads font_state.size.)

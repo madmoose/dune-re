@@ -1519,7 +1519,7 @@ impl GameState {
         self.active_mouse_handlers = &crate::game_ui::ROOM_MOUSE_HANDLERS;
     }
 
-    // = seg000:08f0 open_SAL_resource — open the current location/room's scene
+    // = seg000:08f0 loc_008f0 / seg000:2d74 open_SAL_resource — open the current location/room's scene
     // (.SAL) resource. The port currently opens + renders together inside
     // draw_location_room (room_scene.rs).
     // TODO: port the standalone open; no-op stub.

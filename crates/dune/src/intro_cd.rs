@@ -1426,16 +1426,29 @@ impl GameState {
     fn stage_37_play(&mut self) {}
 
     // = seg000:07e0 intro_water_ripples_in_cave. A still sietch cave (with a
-    // water pool). DOS plays PCM sound 4 (play_pcm_al -> PCM resource 0xb2, the
-    // water ambience — not ported: the port has no general PCM sound-effect
-    // path, cf. SN3/SN8.VOC), then `dx=804h; bx=1080h; jmp loc_00981` draws the
-    // room: SIET.SAL room 12 + SIET1.HSQ. Like intro_inside_sietch it skips the
+    // water pool). DOS plays PCM sound 4 (play_pcm_al -> resource 0xb2 =
+    // SN4.HSQ, the water drip), then `dx=804h; bx=1080h; jmp loc_00981` draws
+    // the room: SIET.SAL room 12 + SIET1.HSQ. Like intro_inside_sietch it skips the
     // persons_in_room write (stays 0 -> empty cave). draw_SAL clears the game
     // area first (clear_game_area), so the water reflection's dithered gaps show
     // black, not the previous stage's leftover image. The stage's play is a
     // no-op; the scene is held for wait=1200.
     fn stage_38_init(&mut self) {
+        // = seg000:07e0 mov al,4; call play_pcm_al.
+        self.intro_play_pcm("SN4.HSQ");
         self.draw_location_room(0x804, 0x1080);
+    }
+
+    // = seg000:abdb play_pcm_al — the intro's sound-effect start: nothing when
+    // music is switched off (check_music_enabled: cmd_args_memory bit 4) or no
+    // PCM device is present, otherwise close the current voice file and open
+    // resource 0xae + al (open_voc_resource), which the PCM service then plays.
+    // The port's audio_start_voc opens and starts the same resource.
+    fn intro_play_pcm(&mut self, name: &str) {
+        if self.cmd_args_memory & 0x10 != 0 || !self.check_pcm_enabled() {
+            return;
+        }
+        self.audio_start_voc(name);
     }
 
     fn stage_38_play(&mut self) {}

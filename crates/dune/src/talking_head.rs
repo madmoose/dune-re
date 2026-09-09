@@ -1140,7 +1140,7 @@ impl GameState {
         self.add_frame_task(0, crate::TaskId::TalkingHeadVoc);
     }
 
-    // = seg000:ab15 audio_start_voc — play a .voc sound effect by name (e.g.
+    // = seg000:ab15 audio_start_voc / seg000:abe9 open_voc_resource — play a .voc sound effect by name (e.g.
     // SN3.VOC, the night-attack sound). Loads the resource, parses its type-1
     // PCM block, and queues it on the Sound Blaster voice. Unlike a talking
     // head this needs no lip-sync stream. Silently does nothing if the file is

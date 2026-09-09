@@ -3961,8 +3961,6 @@ impl GameState {
             self.font_draw_phrase_or_command_string(cmd::NONE);
             return;
         }
-        let clip = self.map_view_clip_rect();
-        let yoff = self.y_offset as i16;
         let mut x = x0;
         // = seg000:7e6b..7e93 one column per nonzero type.
         for (slot, &count) in counts.iter().enumerate() {
@@ -3972,44 +3970,71 @@ impl GameState {
             let sprite = crate::troop_icons::equipment_icon_sprite(slot);
             // = seg000:7e80 [di+4c60h] = dx — the column's left edge.
             self.map_equipment_column_x_ranges[slot].0 = x;
-            // = seg000:61d3 draw_equipment_column — read the sprite dims.
-            let (mut w, mut sh) = (0i16, 0i16);
-            self.with_active_bank_sheet(|_, sheet| {
-                if let Some(sp) = sheet.get_sprite(sprite) {
-                    w = sp.width() as i16;
-                    sh = sp.height() as i16;
-                }
-            });
-            if w == 0 {
-                self.map_equipment_column_x_ranges[slot].1 = x;
-                continue;
-            }
-            // = seg000:61e2..620d the vertical spacing: fit `count` icons in
-            //   the available height, squeezing (min step 2) only if they do
-            //   not fit at the natural step of sprite_height + 2.
-            let avail = bottom - y;
-            let step_full = sh + 2;
-            let n = count as i16;
-            let (mut draw_n, step) = if avail / n >= step_full {
-                (n, step_full)
-            } else {
-                let s = ((avail - step_full).max(0) / n).max(2);
-                if s > 2 { (n, s) } else { (avail / 2, 2) }
-            };
-            draw_n = draw_n.max(1).min(n);
-            // = seg000:6211..6220 stack the icons.
-            let mut iy = y;
-            for _ in 0..draw_n {
-                self.with_active_bank_sheet(|s, sheet| {
-                    s.draw_sprite_from_sheet_clipped(sheet, sprite, x, iy + yoff, clip);
-                });
-                iy += step;
-            }
-            // = seg000:6224..622f advance x by the icon width + 1 (add dx,ax;
-            //   inc dx); 7e87 [di+4c62h] = dx — the column's right edge.
-            x += w + 1;
+            // = seg000:7e84 call draw_equipment_column.
+            x = self.draw_equipment_column(sprite, x, y, count, bottom);
+            // = seg000:7e87 [di+4c62h] = dx — the column's right edge.
             self.map_equipment_column_x_ranges[slot].1 = x;
         }
+    }
+
+    // = seg000:61d3 draw_equipment_column — stack `count` copies of ONMAP
+    // sprite `sprite` down from (x, y) toward `bottom`: at the natural step of
+    // sprite height + 2 when they fit, otherwise at (avail - step) / count,
+    // and when even that is under 2 at step 2 with only (avail - step) / 2
+    // icons. Returns x advanced by the sprite width + 1. The port clips the
+    // icons to the map view.
+    fn draw_equipment_column(
+        &mut self,
+        sprite: u16,
+        x: i16,
+        y: i16,
+        count: u8,
+        bottom: i16,
+    ) -> i16 {
+        // = seg000:61d3 and cx,0ffh; jz ret — nothing to draw, x unchanged.
+        if count == 0 {
+            return x;
+        }
+        // = seg000:61dd get_subresource_ax_pointer_to_dssi — the sprite dims.
+        let (mut w, mut sh) = (0i16, 0i16);
+        self.with_active_bank_sheet(|_, sheet| {
+            if let Some(sp) = sheet.get_sprite(sprite) {
+                w = sp.width() as i16;
+                sh = sp.height() as i16;
+            }
+        });
+        if w == 0 {
+            return x;
+        }
+        // = seg000:61e0..61f7 di = avail = bottom - y; bp = height + 2;
+        //   avail / count >= bp keeps the natural step.
+        let avail = bottom - y;
+        let step_full = sh + 2;
+        let n = count as i16;
+        let (draw_n, step) = if avail / n >= step_full {
+            (n, step_full)
+        } else {
+            // = seg000:61f9..620d di -= bp; bp = di / cx; under 2 → bp = 2 and
+            //   cx = di / 2.
+            let squeezed = avail - step_full;
+            let s = squeezed / n;
+            if s >= 2 { (n, s) } else { (squeezed / 2, 2) }
+        };
+        // DOS's `loop` with cx = 0 would run 65536 times; never reached with a
+        // positive count, guarded here.
+        let draw_n = draw_n.max(1);
+        // = seg000:6211..6220 draw_sprite_clobbering_bx_dx per icon, bx += bp.
+        let clip = self.map_view_clip_rect();
+        let yoff = self.y_offset as i16;
+        let mut iy = y;
+        for _ in 0..draw_n {
+            self.with_active_bank_sheet(|s, sheet| {
+                s.draw_sprite_from_sheet_clipped(sheet, sprite, x, iy + yoff, clip);
+            });
+            iy += step;
+        }
+        // = seg000:6224..622f dx += (width & 0x0fff) + 1.
+        x + w + 1
     }
 
     // = seg000:79de loc_079de — close the troop info panel: clear data_046fa

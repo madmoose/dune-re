@@ -335,6 +335,8 @@ fn draw_8bpp(
     }
 }
 
+// = seg000:c2a1 unrle_image_to_tmp_buffer — expand an RLE sprite into a flat
+// buffer before the blit (DOS unpacks into RESOURCE_GLOBDATA).
 fn unrle(data: &[u8], pitch: u16, height: u16) -> std::io::Result<Vec<u8>> {
     let pitch = pitch as usize;
     let height = height as usize;
