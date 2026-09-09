@@ -39,6 +39,24 @@ impl GameState {
     // events for a newly-entered time period (new_hour_flag, consumed here),
     // then refresh whichever main view is up. See the module header for the
     // full breakdown.
+    // = seg000:1b0d game_loop_sub_01b0d — the game loop's per-pass gate on
+    // the world clock: with no voice declared playing (is_voc_pcm_playing),
+    // the clock not suspended and the game not ended (game_phase < 0xc8),
+    // run the idle-room message check, then fall into the per-period events.
+    pub(crate) fn game_loop_sub_01b0d(&mut self) {
+        // = seg000:1b0d..1b1e the three gates.
+        if self.voc_pcm_playing
+            || self.game_suspend_count != 0
+            || self.game_phase >= crate::game_phase::PHASE_C8_GAME_WON
+        {
+            return;
+        }
+        // = seg000:1b20 call idle_room_message_check; falls into
+        //   run_events_for_current_time_period.
+        self.idle_room_message_check();
+        self.run_events_for_current_time_period();
+    }
+
     pub(crate) fn run_events_for_current_time_period(&mut self) {
         println!(
             "run_events_for_current_time_period: new_time_period_pending = {}",
@@ -709,9 +727,19 @@ impl GameState {
         self.spice_shipment_roll_new_demand();
     }
 
-    // = seg000:20d2 loc_020d2 — roll a new spice demand (also entered from
-    // the first-vision advance via loc_02090). Base quantity = (sequence *
-    // 150 + 100), saturating to 0xffff on overflow.
+    // = seg000:2090 spice_shipment_start_first_demand — the first-vision
+    // phase advance's entry: stamp today as the shipment event day and fall
+    // into the demand roll.
+    pub(crate) fn spice_shipment_start_first_demand(&mut self) {
+        // = seg000:2090/2093 data_0118d = get_ingame_day.
+        self.ingame_day_of_last_spice_shipment_event = self.get_ingame_day();
+        // = seg000:2096 jmp spice_shipment_roll_new_demand.
+        self.spice_shipment_roll_new_demand();
+    }
+
+    // = seg000:20d2 spice_shipment_roll_new_demand — roll a new spice demand.
+    // Base quantity = (sequence * 150 + 100), saturating to 0xffff on
+    // overflow.
     pub(crate) fn spice_shipment_roll_new_demand(&mut self) {
         let seq = self.spice_shipment_sequence_number;
         self.spice_shipment_sequence_number = seq.wrapping_add(1);

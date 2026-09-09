@@ -338,10 +338,8 @@ impl GameState {
         rp.location_and_room = (rp.location_and_room & 0xff00) | 0x0a;
         // = seg000:1091 [contact_distance_related_ds_d5] = 0xff.
         self.contact_distance_related_ds_d5 = 0xff;
-        // = seg000:1096 call loc_02090 — stamp today as the shipment event
-        //   day and roll the first demand.
-        self.ingame_day_of_last_spice_shipment_event = self.get_ingame_day();
-        self.spice_shipment_roll_new_demand();
+        // = seg000:1096 call spice_shipment_start_first_demand.
+        self.spice_shipment_start_first_demand();
         // = seg000:1099 or [bitfield_Paul_events], 1 — visions enabled.
         self.bitfield_paul_events |= 1;
         // = seg000:109e/10a1 queue message 1.

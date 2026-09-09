@@ -4,7 +4,7 @@ use crate::{
     attack::AttackState,
     cmd,
     frame_slot::FrameSink,
-    game_phase::{PHASE_15_FIRST_VISION, PHASE_20_THUFIR_FOUND, PHASE_C8_GAME_WON},
+    game_phase::{PHASE_15_FIRST_VISION, PHASE_20_THUFIR_FOUND},
     game_ui::{self, MouseHandlers, NavPanel, ROOM_MOUSE_HANDLERS, UI_ELEMENTS_INIT, UiElement},
     gfx::{self, blit, globe_renderer::GlobeRenderer, map_renderer::MapRenderer, palette_flush},
     hnm::hnm_id_by_name,
@@ -3367,22 +3367,8 @@ impl GameState {
                 // = seg000:d838 call ui_hud_companion_blink_task.
                 self.ui_hud_companion_blink_task();
 
-                // = seg000:1b0d game_loop_sub_01b0d — gated on no voice
-                // playing (is_voc_pcm_playing), the clock not suspended and
-                // the game not ended (game_phase < 0xc8): run the idle-room
-                // message check (loc_02b2a), then the per-period events
-                // (seg000:1b23). run_events itself consumes
-                // new_time_period_pending, so the flag pre-check just skips
-                // the call when nothing is pending.
-                if !self.talking_head.as_ref().is_some_and(|h| h.speaking)
-                    && self.game_suspend_count == 0
-                    && self.game_phase < PHASE_C8_GAME_WON
-                {
-                    self.idle_room_message_check();
-                    if self.new_time_period_pending != 0 {
-                        self.run_events_for_current_time_period();
-                    }
-                }
+                // = seg000:d83b call game_loop_sub_01b0d.
+                self.game_loop_sub_01b0d();
             }
 
             // = seg000:d83e — process_frame_tasks also steps the per-frame

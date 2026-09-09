@@ -521,7 +521,16 @@ impl GameState {
             self.service_midi_music();
         }
 
-        // = seg000:2e52 loc_02e52 — post-render bookkeeping + dialogue tail.
+        // = seg000:2e52 falls into room_screen_post_render.
+        self.room_screen_post_render();
+    }
+
+    // = seg000:2e52 room_screen_post_render — after a room screen present
+    // (and each travel step): the post-present dispatch, the game-clock
+    // stamp, then the desert-walk toll, the HUD head raise, or a pending
+    // speaker's lip-sync.
+    pub(crate) fn room_screen_post_render(&mut self) {
+        // = seg000:2e52 call finish_room_screen_setup.
         self.finish_room_screen_setup();
         // = seg000:2e55 game_clock_tick_base = the current PIT counter.
         self.game_clock_tick_base = self.game_ticks() as u16;

@@ -1713,14 +1713,11 @@ impl GameState {
             self.travel_arrive();
             return;
         }
-        // = seg000:4f52 call loc_02e52 — the post-step settle. It opens by
-        //   calling loc_035ad (unconditionally): during a travel that runs the
-        //   mode != 0 branch (loc_035e9), which re-detects a passed location
-        //   and raises the fly-over companion cabin. The remaining loc_02e52
-        //   tail (2e5b onward: the auto-action / head-raise branches) bails in
-        //   flight, so only the game-clock stamp is modelled after it.
-        self.travel_settle_companion_dispatch();
-        self.game_clock_tick_base = self.game_ticks() as u16;
+        // = seg000:4f52 call room_screen_post_render — the post-step settle:
+        //   its finish_room_screen_setup runs the travel branch (loc_035e9),
+        //   which re-detects a passed location and raises the fly-over
+        //   companion cabin; the rest of the tail bails in flight.
+        self.room_screen_post_render();
         // = seg000:4f55 a staged night attack pauses the flight side effects.
         if self.data_047a7 != 0 {
             return;
@@ -1844,13 +1841,10 @@ impl GameState {
                 // = seg000:5031 data_04726 += 20h — re-add the accumulator
                 //   step the check just consumed.
                 self.data_04726 = self.data_04726.wrapping_add(0x20);
-                // = seg000:5036 jmp loc_02e52 — the post-step settle:
-                //   finish_room_screen_setup (loc_035ad, the port stub that
-                //   would run the armed hostile-zone warning) and the
-                //   game-clock stamp; the dialogue/lip-sync tail bails in a
-                //   travel mode (seg000:2e7d).
-                self.finish_room_screen_setup();
-                self.game_clock_tick_base = self.game_ticks() as u16;
+                // = seg000:5036 jmp room_screen_post_render — the post-step
+                //   settle; the dialogue/lip-sync tail bails in a travel mode
+                //   (seg000:2e7d).
+                self.room_screen_post_render();
                 return;
             }
         }
