@@ -238,9 +238,9 @@ pub(crate) const NAV_PANEL_ALT: NavPanel = [
 #[rustfmt::skip]
 pub(crate) const NAV_PANEL_FLIGHT: NavPanel = [
     ui2(262, 168, 263, 169, 0x0200, -1, 0x0f66, None),
-    ui1(258, 172, 266, 182, 0x4080, 42, 0x4ad0),
-    ui1(270, 170, 279, 182, 0x0080, 43, 0x4f09),
-    ui1(283, 172, 291, 182, 0x4080, 44, 0x4ad7),
+    ui2(258, 172, 266, 182, 0x4080, 42, 0x4ad0, Some(GameState::flight_nav_turn_left)),
+    ui2(270, 170, 279, 182, 0x0080, 43, 0x4f09, Some(GameState::menu_callback_choice_resume_flight)),
+    ui2(283, 172, 291, 182, 0x4080, 44, 0x4ad7, Some(GameState::flight_nav_turn_right)),
     ui2(  0,   0,   0,   0, 0x0000, -1, 0x0f66, None),
     ui2(  0,   0,   0,   0, 0x0000, -1, 0x0f66, None),
 ];

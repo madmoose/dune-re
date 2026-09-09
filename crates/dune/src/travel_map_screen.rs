@@ -175,6 +175,34 @@ impl GameState {
         self.data_011ca = 1;
     }
 
+    // = seg000:4ac4 clear_room_swap_pending — data_011ca = 0: the pending
+    // room-screen swap is done, so travel_pump may run again.
+    pub(crate) fn clear_room_swap_pending(&mut self) {
+        self.data_011ca = 0;
+    }
+
+    // = seg000:4f09 menu_callback_choice_resume_flight — the in-flight nav
+    // panel's flight button: clear the pending room swap, then fall into
+    // travel_pump to resume the flight.
+    pub(crate) fn menu_callback_choice_resume_flight(&mut self) {
+        self.clear_room_swap_pending();
+        self.travel_pump();
+    }
+
+    // = seg000:4ad0 flight_nav_turn_left — the in-flight nav panel's TURN LEFT
+    // button. DOS tests the click's left-button bit (`shr al,1; jnb`); the
+    // port dispatches these handlers on left clicks only.
+    pub(crate) fn flight_nav_turn_left(&mut self) {
+        self.travel_heading_mode = 1;
+        self.adjust_travel_heading(-4);
+    }
+
+    // = seg000:4ad7 flight_nav_turn_right — the TURN RIGHT button.
+    pub(crate) fn flight_nav_turn_right(&mut self) {
+        self.travel_heading_mode = 1;
+        self.adjust_travel_heading(4);
+    }
+
     // = seg000:42d9 menu_callback_choice_map_main_take_an_ornithopter — the map
     // main menu's (MENU_MAP_TROOPS) TAKE AN ORNITHOPTER slot, reached from the SEE
     // DUNE MAP view: board from the current location's outdoor room 1, leave the
@@ -573,8 +601,8 @@ impl GameState {
         if self.travel_minimap_state > 0 {
             self.travel_enter_minimap_view();
         }
-        // = seg000:445a jmp loc_04ac4 — data_011ca = 0.
-        self.data_011ca = 0;
+        // = seg000:445a jmp clear_room_swap_pending.
+        self.clear_room_swap_pending();
     }
 
     // = seg000:43e3 loc_043e3 — restore the room backdrop the map screen drew
@@ -1399,9 +1427,9 @@ impl GameState {
 
     // = seg000:5119 adjust_travel_heading — travel_heading += delta, and
     // re-seed the travel step accumulator to half a cell.
-    fn adjust_travel_heading(&mut self, delta: u8) {
+    fn adjust_travel_heading(&mut self, delta: i8) {
         // = seg000:5119 add [travel_heading], al.
-        self.travel_heading = self.travel_heading.wrapping_add(delta);
+        self.travel_heading = self.travel_heading.wrapping_add_signed(delta);
         // = seg000:511d travel_step_accum = 0x80.
         self.travel_step_accum = 0x80;
     }
@@ -1446,7 +1474,9 @@ impl GameState {
         self.travel_destination_ptr = dest;
         self.travel_heading_mode = mode;
         self.travel_heading = 0;
-        self.adjust_travel_heading(angle);
+        // The angle is a whole byte added to the zeroed heading; as a signed
+        // delta it lands on the same byte.
+        self.adjust_travel_heading(angle as i8);
     }
 
     // = seg000:41c5 ungrey_skip_to_destination_verb — clear the map verbs'
@@ -1483,8 +1513,8 @@ impl GameState {
         self.pending_room_action = 7;
         // = seg000:40da call run_room_leave_dialogue_scan.
         self.run_room_leave_dialogue_scan();
-        // = seg000:40dd call loc_04ac4 — data_011ca = 0.
-        self.data_011ca = 0;
+        // = seg000:40dd call clear_room_swap_pending.
+        self.clear_room_swap_pending();
         // = seg000:40e0/40e3 the companion-detach scan.
         self.scan_current_room_npcs(Self::npc_travel_detach_companion);
     }
@@ -1741,8 +1771,8 @@ impl GameState {
             self.locations[dest].equipment.ornithopters =
                 self.locations[dest].equipment.ornithopters.wrapping_add(1);
         }
-        // = seg000:4fdf loc_04ac4 — data_011ca = 0.
-        self.data_011ca = 0;
+        // = seg000:4fdf clear_room_swap_pending.
+        self.clear_room_swap_pending();
         // = seg000:4fe2 call call_restore_cursor.
         self.call_restore_cursor();
         // = seg000:4fe5 call ui_setup_nav_panel — back to the room panel.
@@ -1836,8 +1866,8 @@ impl GameState {
         // = seg000:50ab di = [last_location_ptr]; 50af call get_map_position;
         //   50b2 call travel_aim_at_location.
         self.travel_aim_at_location(self.last_location_index);
-        // = seg000:50b5 call loc_04ac4 — data_011ca = 0.
-        self.data_011ca = 0;
+        // = seg000:50b5 call clear_room_swap_pending.
+        self.clear_room_swap_pending();
         // = seg000:50b8 call loc_050be — travel_no_location_dest = 0 (back to the homing
         //   verb pair).
         self.travel_no_location_dest = 0;
@@ -1859,8 +1889,8 @@ impl GameState {
         // = seg000:50ca call arm_pending_travel — di is a location ptr, so
         //   the click-coordinate arguments go unused.
         self.arm_pending_travel(location_ptr(nearest as u16), 0, 0);
-        // = seg000:50cd call loc_04ac4 — data_011ca = 0.
-        self.data_011ca = 0;
+        // = seg000:50cd call clear_room_swap_pending.
+        self.clear_room_swap_pending();
         // = seg000:50d0 travel_heading_mode = 0 (already 0 from the location
         //   path of arm_pending_travel).
         self.travel_heading_mode = 0;
@@ -2241,8 +2271,8 @@ impl GameState {
         self.travel_load_flight_view();
         // = seg000:4ac1 call present_game_area.
         self.present_game_area();
-        // = seg000:4ac4 loc_04ac4: data_011ca = 0.
-        self.data_011ca = 0;
+        // = seg000:4ac4 clear_room_swap_pending.
+        self.clear_room_swap_pending();
     }
 
     // = seg000:4988 travel_minimap_setup — set up the flight minimap view:
