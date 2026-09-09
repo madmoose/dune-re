@@ -931,9 +931,9 @@ impl GameState {
         // blitter. A body with x == 0 is off screen (= seg000:1aa3 `or dx,dx; jz`).
         let [sun, moon] = SUN_MOON_COORDS[self.game_time as usize % SUN_MOON_COORDS.len()];
         // = seg000:1a53 mov ax,4ah; call draw_sun_and_moon — ICONES sprite 0x4a.
-        self.ui_draw_date_and_time_indicator_sprite(0x4a, sun);
+        self.draw_sun_and_moon(0x4a, sun);
         // = seg000:1a59 mov ax,4bh; call draw_sun_and_moon — ICONES sprite 0x4b.
-        self.ui_draw_date_and_time_indicator_sprite(0x4b, moon);
+        self.draw_sun_and_moon(0x4b, moon);
 
         // = seg000:1a5f font_select_small_font; colour 0xf1fa (fg 0xfa, bg 0xf1).
         self.font_select_small_font();
@@ -958,8 +958,15 @@ impl GameState {
         self.active_fb = saved;
     }
 
-    // = seg000:1a42
-    fn ui_draw_date_and_time_indicator_sprite(&mut self, id: u16, (x, y): (u16, u16)) {
+    // = seg000:1a9b draw_sun_and_moon — blit ICONES sprite `id` at the table
+    // entry's (x, y) on the screen, clipped to sun_moon_clip_rect; an x of 0
+    // is off screen.
+    fn draw_sun_and_moon(&mut self, id: u16, (x, y): (u16, u16)) {
+        // = seg000:1aa3 or dx,dx; jz ret.
+        if x == 0 {
+            return;
+        }
+        // = seg001 sun_moon_clip_rect (6, 181)-(30, 190).
         let clip = crate::Rect {
             x0: 6,
             y0: 181,

@@ -348,9 +348,11 @@ impl GameState {
     // (seg000:9472) and the auto-dialogue present chain (seg000:9713).
     pub(crate) fn prepare_dialogue_presentation(&mut self) {
         // = seg000:9f43..9f51 — current_lip_sync_resource_id == 2 (Stilgar)
-        //   during final-attack stage 4 (final_attack_stage_ds_c2 == 4) re-runs
-        //   increase_final_attack_stage_if_more_than_10K_Fremen_near_Harkonnen_
-        //   palace; the final-attack model is unported.
+        //   during final-attack stage 4 re-runs increase_final_attack_stage_
+        //   if_more_than_10K_Fremen_near_Harkonnen_palace.
+        if self.current_lip_sync_resource_id == 2 && self.final_attack_stage == 4 {
+            self.increase_final_attack_stage_if_more_than_10k_fremen_near_harkonnen_palace();
+        }
         // = seg000:9f56 data_047a2 = &room_persons[id] — the active-speaker
         //   entry pointer; only the unported loc_094f3 reads it.
         // = seg000:9f60 cmp data_046eb,0; jnz loc_09f82 — in the room view,
@@ -1441,10 +1443,8 @@ impl GameState {
             // = seg000:a15f jmp callback_event_dialogue_line_09_Duncan_Idaho.
             3 => self.dialogue_event_09_duncan_idaho(),
             // = seg000:a167 jmp callback_event_dialogue_line_09_Stilgar_final_
-            //   attack_select_troops (seg000:2d2c) — unported.
-            5 => println!(
-                "dialogue event 0x09: Stilgar final-attack troop select (seg000:2d2c) not ported"
-            ),
+            //   attack_select_troops.
+            5 => self.dialogue_event_09_stilgar_final_attack_select_troops(),
             // = seg000:a16f jmp null_callback_event_dialogue_line_09_Smugglers.
             0x0d => {}
             _ => {}

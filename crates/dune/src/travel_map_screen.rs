@@ -2507,11 +2507,13 @@ impl GameState {
     // from the back buffer into fb1 (loc_0c46f). The loc_0dbca cursor-hide
     // tail is the game_loop-driven cursor bracket in the port.
     pub(crate) fn travel_restore_minimap_rect(&mut self) {
+        // = seg000:4b2b/4b30 cmp [travel_minimap_state],0; js.
         if self.travel_minimap_state >= 0 {
+            // = seg000:4b32/4b35 si = travel_minimap_restore_rect; call
+            //   copy_rect_back_to_fb1.
             let yoff = self.y_offset as i16;
             let r = TRAVEL_MINIMAP_RESTORE_RECT;
-            let src_rect = rect(r.x0, r.y0 + yoff, r.x1, r.y1 + yoff);
-            gfx::vga_copy_rect(&mut self.framebuffer, &self.framebuffer_back, src_rect);
+            self.copy_rect_back_to_fb1(rect(r.x0, r.y0 + yoff, r.x1, r.y1 + yoff));
         }
     }
 

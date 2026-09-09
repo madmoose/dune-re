@@ -17,7 +17,8 @@
 //! then `jmp [array + bx]`).
 
 use crate::{
-    GameState, TaskId, game_phase::PHASE_48_CHANI_MET, menu_defs::MenuRef, panel::MapPanelRef,
+    GameState, TaskId, game_phase::PHASE_48_CHANI_MET, gfx, menu_defs::MenuRef, panel::MapPanelRef,
+    sprite_bank,
 };
 
 // The script opcodes, as the byte offsets the DOS dispatcher consumes
@@ -27,9 +28,19 @@ const SCRIPT_SPEAKER_LINE: u8 = 0x02; // action 1: [speaker]
 const SCRIPT_REDRAW: u8 = 0x04; // action 2
 const SCRIPT_SET_SPEAKER: u8 = 0x06; // action 3: [speaker], head only
 const SCRIPT_WAIT: u8 = 0x08; // action 4: wait for the Continue click
+const SCRIPT_TIME_SKIP: u8 = 0x0a; // action 5: run the clock to time of day 13
+const SCRIPT_CHANI_KISS: u8 = 0x0c; // action 6: the Chani kiss close-up
 const SCRIPT_SHOW_SPICE_MAP: u8 = 0x0e; // action 7
 const SCRIPT_HIDE_SPICE_MAP: u8 = 0x10; // action 8
 const SCRIPT_END: u8 = 0xff; // end of script
+
+// = seg001:2290 icon_list_chani_after_time_skip — CHANKISS.HSQ sprite 0 at
+// (78, 33), drawn after the cutscene time skip.
+const ICON_LIST_CHANI_AFTER_TIME_SKIP: [(u16, i16, i16); 1] = [(0, 0x4e, 0x21)];
+
+// = seg001:2298 _stru_21748_icon_list_chankiss — CHANKISS.HSQ sprite 1 at
+// (26, 4), the kiss close-up.
+const ICON_LIST_CHANKISS: [(u16, i16, i16); 1] = [(1, 0x1a, 4)];
 
 // = seg000:12f8 cutscene_game_phase_below_14_dialogue.
 #[rustfmt::skip]
@@ -234,10 +245,13 @@ impl GameState {
             SCRIPT_SHOW_SPICE_MAP => self.sequence_action_07_show_spice_map(),
             // = seg000:13aa callback_action_in_continue_sequence_08.
             SCRIPT_HIDE_SPICE_MAP => self.sequence_action_08_hide_spice_map(),
+            // = seg000:1422 callback_action_in_continue_sequence_05.
+            SCRIPT_TIME_SKIP => self.sequence_action_05_time_skip(),
+            // = seg000:1442 callback_action_in_continue_sequence_06_chankiss.
+            SCRIPT_CHANI_KISS => self.sequence_action_06_chankiss(),
             other => {
-                // The remaining cutscene-script actions: the time skip
-                // (seg000:1422, byte 0x0a), the Chani kiss (1442, 0x0c) and
-                // the Baron-scene steps (148d/14c9/167c, 0x12/0x14/0x16).
+                // The remaining cutscene-script actions: the Baron-scene
+                // steps (148d/14c9/167c, 0x12/0x14/0x16).
                 // Their scripts are only reached from the unported phase
                 // callbacks. TODO.
                 println!("continue-sequence: unported action {other} (byte {byte:#04x})");
@@ -245,6 +259,59 @@ impl GameState {
                 self.sequence_push_continue_menu();
             }
         }
+    }
+
+    // = seg000:1422 callback_action_in_continue_sequence_05 — the time skip:
+    // the Continue menu is re-pushed and the clock advanced one period at a
+    // time until time of day 13; then the sky fade drains, the room is drawn
+    // and snapshotted to fb2, and CHANKISS.HSQ sprite 0 goes over it.
+    fn sequence_action_05_time_skip(&mut self) {
+        loop {
+            // = seg000:1422 call change_menu_to_continue_menu.
+            self.change_menu_to_continue_menu();
+            // = seg000:1425..142a get_ingame_time_of_day; cmp al,0dh; jnb.
+            if self.get_ingame_time_of_day() >= 0x0d {
+                break;
+            }
+            // = seg000:142c..1432 run_events_for_n_time_periods(1); jmp.
+            self.run_events_for_n_time_periods(1);
+        }
+        // = seg000:1434..143a drain_sky_fade; draw_room_scene;
+        //   copy_active_framebuffer_to_framebuffer_2.
+        self.drain_sky_fade();
+        self.draw_room_scene();
+        self.copy_active_framebuffer_to_framebuffer_2();
+        // = seg000:143d/1440 si = icon_list_chani_after_time_skip; jmp
+        //   draw_chankiss_icon_list.
+        self.draw_chankiss_icon_list(&ICON_LIST_CHANI_AFTER_TIME_SKIP);
+    }
+
+    // = seg000:1442 callback_action_in_continue_sequence_06_chankiss — the
+    // Chani kiss close-up: the room drawn and zoomed 3x from (0, 50) into
+    // fb2, copied back as the backdrop, and the CHANKISS.HSQ close-up over it.
+    fn sequence_action_06_chankiss(&mut self) {
+        // = seg000:1442/1445 change_menu_to_continue_menu; draw_room_scene.
+        self.change_menu_to_continue_menu();
+        self.draw_room_scene();
+        // = seg000:1448..145e vga_zoom_screen(es = fb2, ds = the active fb1;
+        //   dx = 0, bx = 32h, bp = 3).
+        gfx::zoom::vga_zoom_fb1_to_fb2(self, 0, 0x32, 3);
+        // = seg000:145f call copy_game_area_to_screen_fb2_to_fb1.
+        self.copy_game_area_fb2_to_fb1();
+        // = seg000:1462 si = _stru_21748_icon_list_chankiss; falls into
+        //   draw_chankiss_icon_list.
+        self.draw_chankiss_icon_list(&ICON_LIST_CHANKISS);
+    }
+
+    // = seg000:1465 draw_chankiss_icon_list — open CHANKISS.HSQ, draw the icon
+    // list, update the palette and present the game area.
+    fn draw_chankiss_icon_list(&mut self, list: &[(u16, i16, i16)]) {
+        self.open_sprite_bank(sprite_bank::CHANKISS);
+        self.with_active_bank_sheet(|s, sheet| {
+            s.draw_icons_list_at_si(list, sheet);
+        });
+        self.update_screen_palette();
+        self.present_game_area();
     }
 
     // = seg000:13c8 callback_action_in_continue_sequence_00 — [room, count,

@@ -4827,6 +4827,26 @@ impl GameState {
         self.send_frame_to_display();
     }
 
+    // = seg000:c449 copy_rect_seg_to_fb1 — copy `rect` from framebuffer `src`
+    // into fb1; an empty rect does nothing.
+    pub(crate) fn copy_rect_seg_to_fb1(&mut self, src: FbId, rect: Rect) {
+        if rect.x1 <= rect.x0 || rect.y1 <= rect.y0 {
+            return;
+        }
+        match src {
+            FbId::Screen => gfx::vga_copy_rect(&mut self.framebuffer, &self.screen, rect),
+            FbId::Back => gfx::vga_copy_rect(&mut self.framebuffer, &self.framebuffer_back, rect),
+            FbId::Saved => gfx::vga_copy_rect(&mut self.framebuffer, &self.framebuffer_saved, rect),
+            FbId::Fb1 => {}
+        }
+    }
+
+    // = seg000:c46f copy_rect_back_to_fb1 — copy_rect_seg_to_fb1 from the
+    // back buffer.
+    pub(crate) fn copy_rect_back_to_fb1(&mut self, rect: Rect) {
+        self.copy_rect_seg_to_fb1(FbId::Back, rect);
+    }
+
     // = seg000:c474 copy_game_rect_fb1_to_fb2 — snapshot the game-area rect
     // (game_area_rect) from fb1 into fb2.
     pub(crate) fn copy_game_rect_fb1_to_fb2(&mut self) {

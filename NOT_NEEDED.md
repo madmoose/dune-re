@@ -42,6 +42,8 @@ The port reads resources from DUNE.DAT by name and save games through
 `std::fs`; the DOS-side filename buffer, drive selection and heap staging have
 no counterpart.
 
+- `seg000:e826 dat_toc_fill_lookup_table` — fill the resource lookup table from DUNE.DAT's table of contents at startup; the port resolves entries by name.
+- `seg000:e75b res_store_in_lookup_table` — store one entry in the resource lookup table.
 - `seg000:f0a0 open_resource_force_hsq` — load DIALOGUE with unpacking disabled into the GLOBDATA scratch area, then unpack from there into the real buffer (a heap-layout trick; the port unpacks straight into a Vec).
 - `seg000:f2fc strcpy_to_filename_buf` — copy a name into the DOS filename buffer before int 21h.
 - `seg000:f29b set_default_drive` — int 21h/0e; no callers.

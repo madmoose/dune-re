@@ -9,6 +9,88 @@
 use crate::{GameState, locations};
 
 impl GameState {
+    // = seg000:1243 increase_final_attack_stage_if_more_than_10K_Fremen_near_
+    // Harkonnen_palace — with at least 1000 people in atomics-equipped army
+    // troops at the three locations closest to the Harkonnen palace, the
+    // final attack stage advances.
+    pub(crate) fn increase_final_attack_stage_if_more_than_10k_fremen_near_harkonnen_palace(
+        &mut self,
+    ) {
+        // = seg000:1243..124a bx = 0; the accumulator callback over the
+        //   three locations.
+        let mut population = 0u16;
+        self.for_each_hired_troop_near_harkonnen_palace(|s, ti| {
+            s.callback_troop_accumulate_atomics_equipped_army_troop_population(ti, &mut population);
+        });
+        // = seg000:124d..1253 cmp bx,3e8h; jb; inc final_attack_stage.
+        if population >= 0x3e8 {
+            self.final_attack_stage = self.final_attack_stage.wrapping_add(1);
+        }
+    }
+
+    // = seg000:1258 for_each_hired_troop_near_harkonnen_palace — the hired
+    // troops of the three locations closest to the Harkonnen palace
+    // (locations[2..=4]).
+    fn for_each_hired_troop_near_harkonnen_palace(
+        &mut self,
+        mut callback: impl FnMut(&mut Self, usize),
+    ) {
+        for li in 2..5 {
+            self.for_each_hired_troop_in_location(li, &mut callback);
+        }
+    }
+
+    // = seg000:1269 callback_troop_accumulate_atomics_equipped_army_troop_
+    // population — an army troop (occupation 4) holding atomics (equipment
+    // bit 2) adds its population.
+    fn callback_troop_accumulate_atomics_equipped_army_troop_population(
+        &self,
+        ti: usize,
+        population: &mut u16,
+    ) {
+        let t = &self.troops[ti];
+        if t.occupation == 4 && t.equipment & 4 != 0 {
+            *population = population.wrapping_add(t.population as u16);
+        }
+    }
+
+    // = seg000:2d2c callback_event_dialogue_line_09_Stilgar_final_attack_
+    // select_troops — Stilgar's final-attack line: the stage advances, and up
+    // to seven atomics-equipped army troops from the three locations closest
+    // to the Harkonnen palace are sent to Arrakeen and take their first
+    // travel step.
+    pub(crate) fn dialogue_event_09_stilgar_final_attack_select_troops(&mut self) {
+        // = seg000:2d2c inc final_attack_stage.
+        self.final_attack_stage = self.final_attack_stage.wrapping_add(1);
+        // = seg000:2d30..2d3b a 25-word stack list, filled by
+        //   store_troop_to_array_of_troop_ptrs_if_army_and_atomics_equipped
+        //   and 0-terminated.
+        let mut selected: Vec<usize> = Vec::new();
+        self.for_each_hired_troop_near_harkonnen_palace(|s, ti| {
+            s.store_troop_to_array_of_troop_ptrs_if_army_and_atomics_equipped(ti, &mut selected);
+        });
+        // = seg000:2d3f..2d5c the first seven (cmp si, sp + 0eh): move order
+        //   to locations[1], then one travel step.
+        for &ti in selected.iter().take(7) {
+            self.troop_issue_move_order(ti, 1);
+            self.troop_travel_step(ti);
+        }
+    }
+
+    // = seg000:2d62 store_troop_to_array_of_troop_ptrs_if_army_and_atomics_
+    // equipped — an army troop (occupation 4) holding atomics (equipment bit
+    // 2) joins the list.
+    fn store_troop_to_array_of_troop_ptrs_if_army_and_atomics_equipped(
+        &self,
+        ti: usize,
+        list: &mut Vec<usize>,
+    ) {
+        let t = &self.troops[ti];
+        if t.occupation == 4 && t.equipment & 4 != 0 {
+            list.push(ti);
+        }
+    }
+
     // = seg000:668f troop_capture — capture the troop: unless it is already
     // away or a Harkonnen troop, mark it away (occupation bit 5), strip its
     // equipment, stamp the time and lose 4 charisma.
