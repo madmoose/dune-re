@@ -1,6 +1,6 @@
 #![allow(unused)]
 
-use crate::{FbId, GameState, SpriteSheet, draw_sprite_from_sheet, sprite_blitter};
+use crate::{FbId, GameState, Rect, SpriteSheet, draw_sprite_from_sheet, sprite_blitter};
 
 pub const ICONES: i16 = 0x00;
 pub const FRESK: i16 = 0x01;
@@ -386,6 +386,11 @@ impl GameState {
         prev
     }
 
+    // The cached sheet for bank `slot`, if loaded.
+    pub(crate) fn banks_cache_get(&self, slot: usize) -> Option<&Option<SpriteSheet>> {
+        self.banks.cache.get(slot)
+    }
+
     // = seg000:c1aa apply_sprite_sheet_palette.
     fn apply_sprite_sheet_palette(&mut self, idx: u16) {
         // Disjoint field borrows: &self.banks.cache + &mut self.palette.
@@ -454,6 +459,42 @@ impl GameState {
             .flip_x(flip_x)
             .flip_y(flip_y)
             .draw()
+    }
+
+    // = the vga_blit_clipped call in sprite_anim_draw_frame (seg000:4c89, bp =
+    // the animation rect): draw a sprite of the active bank clipped to `clip`
+    // (game-area coordinates; both the position and the clip get y_offset).
+    pub(crate) fn draw_active_bank_sprite_clipped(
+        &mut self,
+        sprite_id: u16,
+        x: i16,
+        y: i16,
+        clip: Rect,
+    ) {
+        let slot = self.banks.active_bank_id as usize;
+        let yoff = self.y_offset as i16;
+        let Some(Some(sheet)) = self.banks.cache.get(slot) else {
+            return;
+        };
+        let Some(sprite) = sheet.get_sprite(sprite_id) else {
+            return;
+        };
+        let fb = match self.active_fb {
+            FbId::Screen => &mut self.screen,
+            FbId::Fb1 => &mut self.framebuffer,
+            FbId::Saved => &mut self.framebuffer_saved,
+            FbId::Back => &mut self.framebuffer_back,
+        };
+        let clip = Rect {
+            x0: clip.x0,
+            y0: clip.y0 + yoff,
+            x1: clip.x1,
+            y1: clip.y1 + yoff,
+        };
+        let _ = sprite_blitter(sprite, fb)
+            .at(x, y + yoff)
+            .clip_rect(clip)
+            .draw();
     }
 
     // = seg000:c22f draw_sprite_clobbering_bx_dx.

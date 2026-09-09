@@ -102,6 +102,9 @@ pub(crate) enum TaskId {
     // step per finished pass.
     GlobeRotation,
 
+    // = seg000:4bb9 desert_harvester_frame_task — the desert harvester animation.
+    DesertHarvester,
+
     // = seg000:be57 results_gauge_task (interval 0xc).
     ResultsGauges,
 
@@ -770,6 +773,11 @@ pub struct GameState {
     // DESERT_EXHAUSTION_GAUNT_THRESHOLD (seg000:1b36); Jessica's desert
     // dialogue reads it.
     pub(crate) for_condit_jessica_commented_on_exhaustion_ds_f5: u8,
+
+    // = seg001:00f6 for_condit_Paul_next_to_harvester_ds_f6 — set by
+    // desert_harvester_check while the player stands at a location whose
+    // spice-mining troop has a working harvester.
+    pub(crate) for_condit_paul_next_to_harvester_ds_f6: u8,
 
     // = seg001:00f8 number_of_locations_with_illness / seg001:00f9
     // Chani_troop_illness_cure_progress / seg001:11db PTR_Location_latest_
@@ -1665,6 +1673,15 @@ pub struct GameState {
     // draw_orni maps it to the two animated part sprites.
     pub(crate) orni_anim_frame: u8,
 
+    // = seg001:4733 spice_mining_troops_with_harvester_in_location — low byte:
+    // the hired spice-mining troops with a harvester at the location the
+    // player stands at, high byte: the location's own harvester count. Staged
+    // by desert_entrance_pass, read by desert_harvester_check.
+    pub(crate) spice_mining_troops_with_harvester_in_location: u16,
+
+    // = seg001:485e..487c the sprite animation record (the desert harvester).
+    pub(crate) sprite_anim: crate::room_scene::SpriteAnim,
+
     // = seg001:4732 data_04732 — room-entry flags; bit 0 requests the extra
     // location overlay SAL (loc_0488a) on the normal draw_room_game_screen path.
     pub(crate) data_04732: u8,
@@ -2550,6 +2567,7 @@ impl GameState {
             data_000ee: 0,
             desert_exhaustion_counter: 0,
             for_condit_jessica_commented_on_exhaustion_ds_f5: 0,
+            for_condit_paul_next_to_harvester_ds_f6: 0,
             number_of_locations_with_illness: 0,
             chani_troop_illness_cure_progress: 0,
             latest_location_with_illness: 0,
@@ -2784,6 +2802,8 @@ impl GameState {
             orni_hotspot_x: 0,
             orni_hotspot_y: 0,
             orni_anim_frame: 0,
+            spice_mining_troops_with_harvester_in_location: 0,
+            sprite_anim: crate::room_scene::SpriteAnim::default(),
             data_04732: 0,
             desert_step_counter: 0,
             room_redraw_request: 0,
@@ -3709,6 +3729,9 @@ impl GameState {
             }
             TaskId::GlobeRotation => {
                 self.tick_globe_rotation();
+            }
+            TaskId::DesertHarvester => {
+                self.desert_harvester_frame_task();
             }
             TaskId::ResultsGauges => {
                 self.tick_results_gauges();

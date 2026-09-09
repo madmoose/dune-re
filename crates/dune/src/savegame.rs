@@ -400,6 +400,7 @@ impl GameState {
             0x00f5,
             self.for_condit_jessica_commented_on_exhaustion_ds_f5,
         );
+        w8(b, 0x00f6, self.for_condit_paul_next_to_harvester_ds_f6);
         w8(b, 0x00f8, self.number_of_locations_with_illness);
         w8(b, 0x00f9, self.chani_troop_illness_cure_progress);
         w8(b, 0x00fa, self.vegetation_started_on_dune);
@@ -739,6 +740,7 @@ impl GameState {
         self.data_000ee = r16(b, 0x00ee);
         self.desert_exhaustion_counter = r8(b, 0x00f4);
         self.for_condit_jessica_commented_on_exhaustion_ds_f5 = r8(b, 0x00f5);
+        self.for_condit_paul_next_to_harvester_ds_f6 = r8(b, 0x00f6);
         self.number_of_locations_with_illness = r8(b, 0x00f8);
         self.chani_troop_illness_cure_progress = r8(b, 0x00f9);
         self.vegetation_started_on_dune = r8(b, 0x00fa);

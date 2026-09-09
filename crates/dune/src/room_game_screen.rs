@@ -938,9 +938,8 @@ impl GameState {
         // = seg000:0f96 call drain_sky_fade — drain any in-flight sky cross-fade to
         //   completion before the skip.
         self.drain_sky_fade();
-        // = seg000:0f99 call loc_04d00 — remove the command-panel overlay frame
-        //   task (frame_task_callback_04bb9). The port never arms it, so this is
-        //   a no-op (matching map_confirm_travel_and_close's loc_04d00 call).
+        // = seg000:0f99 call desert_harvester_remove_task.
+        self.desert_harvester_remove_task();
         // = seg000:0f9c call reset_game_suspend — resume the game clock/idle anims.
         self.reset_game_suspend();
         // = seg000:0fa0 cx = target - game_time — the number of time periods to
@@ -3026,6 +3025,9 @@ impl GameState {
         // talking head (and its idle/voc frame tasks) before redrawing the room,
         // so the LOOK AT MIRROR head stops compositing once the player looks away.
         self.reset_scene_lip_sync_state();
+        // = seg000:37b5 call desert_harvester_remove_task — every scene draw
+        //   drops the harvester animation first.
+        self.desert_harvester_remove_task();
         // = seg000:37b8 orni_hotspot_x = 0 — no parked-orni hover hotspot until
         // this scene's orni pass (draw_room_ornis) records one.
         self.orni_hotspot_x = 0;

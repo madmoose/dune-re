@@ -1027,8 +1027,8 @@ impl GameState {
         self.remove_room_frame_task();
         // = seg000:18cf call_pcm_vtable_end_loop — end a looping VOC.
         self.pcm_player.end_loop();
-        // = seg000:18d2 call loc_04d00 — remove the command-panel overlay
-        //   frame task (frame_task_callback_04bb9); never armed in the port.
+        // = seg000:18d2 call desert_harvester_remove_task.
+        self.desert_harvester_remove_task();
         // = seg000:18d5 call dismiss_stacked_overlays.
         self.dismiss_stacked_menus();
         // = seg000:18d8 call loc_04aca — data_011ca = 1.

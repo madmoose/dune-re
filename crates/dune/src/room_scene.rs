@@ -29,15 +29,41 @@
 //! 0x3a -> room 9 + EQUI.HSQ.
 
 use crate::{
-    DrawOptions, GameState, Rect, RoomRenderer, RoomSheet, SpriteSheet,
+    DrawOptions, GameState, Rect, RoomRenderer, RoomSheet, SpriteSheet, TaskId,
     game_phase::{
         PHASE_10_TUONO_HARG_FOUND, PHASE_24_ARMORY_FOUND, PHASE_54_GREENHOUSE_OPENED,
         PHASE_C8_GAME_WON,
     },
-    gfx::blit,
+    gfx::{self, blit},
+    menu_defs::MenuRef,
+    rect::rect,
     room_game_screen::{NPC_COMPANION, NPC_LEFT_BEHIND, NPC_STORY_BIT},
     sal_position_markers, sal_position_markers_from_list, sprite_bank,
+    travel_map_screen::TABLE_196D,
 };
+
+// = seg001:485e..487c the sprite animation record: resource (485e), the
+// clamped draw rect (4860..4866), the script start and cursor (4868/486a), the
+// frame-list table (486c), position (486e/4870), velocity (4872/4874) with the
+// 8.8 accumulators (4876/4878) and the size (487a/487c). The port keeps the
+// animation data itself alongside, with the cursors as offsets into it.
+#[derive(Default)]
+pub(crate) struct SpriteAnim {
+    pub(crate) resource: i16,
+    pub(crate) rect: Rect,
+    pub(crate) script_start: usize,
+    pub(crate) script_cursor: usize,
+    pub(crate) frames_base: usize,
+    pub(crate) x: i16,
+    pub(crate) y: i16,
+    pub(crate) vx: i16,
+    pub(crate) vy: i16,
+    pub(crate) acc_x: u16,
+    pub(crate) acc_y: u16,
+    pub(crate) w: i16,
+    pub(crate) h: i16,
+    pub(crate) data: Vec<u8>,
+}
 
 // = SAL room sheets, resources 0xa1..0xa4 (calc_SAL_index result + 0xa1).
 const SAL_NAMES: [&str; 4] = ["SIET.SAL", "PALACE.SAL", "VILG.SAL", "HARK.SAL"];
@@ -887,14 +913,308 @@ impl GameState {
         // a backdrop sprite narrower than the game area leaves no leftovers.
         self.clear_game_area();
         self.draw_outdoor_backdrop();
-        // = seg000:37ee call loc_04e12 — resolve (and draw via loc_04ded) a
-        //   neighbouring location's entrance on the horizon when within ±4
-        //   longitude cells of it. TODO: not ported.
-        // = seg000:37f1 jmp loc_04d06 — the location-entrance proximity pass:
-        //   standing on a location's longitude within its visibility distance
-        //   animates the walk-up (loc_04d57/loc_04bdf) and plays SN5.VOC.
-        //   TODO: not ported (data_04733 stays 0, which disables it in DOS
-        //   too).
+        // = seg000:37ee call desert_entrance_pass.
+        self.desert_entrance_pass();
+        // = seg000:37f1 jmp desert_harvester_check.
+        self.desert_harvester_check();
+    }
+
+    // = seg000:4e12 desert_entrance_pass — the tail of the desert view: stage
+    // the fly-over silhouette of the location whose cell the player stands in
+    // (data_01968 / data_0196a) and count its harvesters
+    // (desert_count_harvesters). Runs before desert_harvester_check.
+    fn desert_entrance_pass(&mut self) {
+        // = seg000:4e12 spice_mining_troops_with_harvester_in_location = 0.
+        self.spice_mining_troops_with_harvester_in_location = 0;
+        // = seg000:4e18/4e1b get_map_position + read_map_byte_at_dx_bl.
+        let (px, plat) = self.get_map_position();
+        let map_byte = self.read_map_byte(px, plat);
+        // = seg000:4e1f travel_select_flight_video; 4e22 data_0196a = 0.
+        self.travel_select_flight_video(map_byte);
+        self.data_0196a = 0;
+        // = seg000:4e29 test al,40h — only a location cell has a silhouette.
+        if map_byte & 0x40 == 0 {
+            return;
+        }
+        // = seg000:4e2d find_location_by_map_offset; jnz — no location here.
+        let offset = self.map_position_to_offset(px, plat).0;
+        let Some(li) = self.find_location_by_map_offset(offset) else {
+            return;
+        };
+        // = seg000:4e32 cmp [location_appearance],80h — not from inside a room.
+        if self.location_appearance & 0xff == 0x80 {
+            return;
+        }
+        // = seg000:4e39..4e44 ax = map_x - dx + 4; jnb when ax >= 8 — within
+        //   ±4 longitude cells.
+        let loc = self.locations[li];
+        let d = (loc.map_x - px as i16).wrapping_add(4);
+        if !(0..8).contains(&d) {
+            return;
+        }
+        // = seg000:4e46..4e50 data_01968 = ax; data_01964 = ax + 1;
+        //   data_01960 = ax - 1 (the latter two are not modelled).
+        self.data_01968 = d;
+        // = seg000:4e53..4e6c al = table_196d[calc_SAL_index]; a tier >= 13h
+        //   adds (bl - 28h) & ~4 of the latitude, capped at 17h.
+        let mut al = TABLE_196D[calc_sal_index(loc.appearance)];
+        if al >= 0x13 {
+            al = al
+                .wrapping_add((plat as u8).wrapping_sub(0x28) & 0xfb)
+                .min(0x17);
+        }
+        self.data_0196a = al as u16;
+        // = seg000:4e73 desert_count_harvesters (di = the location).
+        self.desert_count_harvesters(li);
+        // = seg000:4e78..4e8c cx = the harvester word with cl = orni_count —
+        //   a return value the desert view does not use.
+    }
+
+    // = seg000:4ded desert_count_harvesters / seg000:4e04 callback_troop_accumulate_spice_mining_troops_with_harvesters_04e04
+    // — count the hired spice-mining
+    // troops (occupation 0) holding a harvester (equipment bit 7) at location
+    // `li` (callback_troop_accumulate_spice_mining_troops_with_harvesters,
+    // seg000:4e04) into the low byte of
+    // spice_mining_troops_with_harvester_in_location, with the location's own
+    // harvester count in the high byte, then compute_location_available_equipment.
+    fn desert_count_harvesters(&mut self, li: usize) {
+        let mut count: u16 = 0;
+        self.for_each_hired_troop_in_location(li, |game, ti| {
+            let t = &game.troops[ti];
+            // = seg000:4e04 cmp [si+3],0; 4e0a test [si+19h],80h.
+            if t.occupation == 0 && t.equipment & 0x80 != 0 {
+                count += 1;
+            }
+        });
+        // = seg000:4df6 ch = [di+14h] — the location's harvesters.
+        let harvesters = self.locations[li].equipment.harvesters as u16;
+        self.spice_mining_troops_with_harvester_in_location = (harvesters << 8) | (count & 0xff);
+        // = seg000:4dfe call compute_location_available_equipment.
+        self.compute_location_available_equipment(li);
+    }
+
+    // = seg000:4d06 desert_harvester_check — when the player stands at the
+    // cell of last_location_ptr's location and a spice-mining troop with a
+    // harvester works there, set the CONDIT flag, draw the harvester once
+    // (snapshotted into fb2) and, when the mining troop count reaches the
+    // distance, play SN5.VOC and arm the animation task.
+    fn desert_harvester_check(&mut self) {
+        // = seg000:4d06 for_condit_Paul_next_to_harvester = 0.
+        self.for_condit_paul_next_to_harvester_ds_f6 = 0;
+        // = seg000:4d0b..4d16 di = [last_location_ptr]; location_and_room must
+        //   be the location's longitude ([di+2] = map_x).
+        let loc = self.locations[self.last_location_index];
+        if self.location_and_room != loc.map_x as u16 {
+            return;
+        }
+        // = seg000:4d18..4d1d ah = the location's harvester count; 0 = none.
+        let word = self.spice_mining_troops_with_harvester_in_location;
+        let (al, ah) = (word as u8, (word >> 8) as u8);
+        if ah == 0 {
+            return;
+        }
+        // = seg000:4d1f..4d2a bx = location_appearance: bl must equal the
+        //   location's map_y low byte ([di+4]) and bh (the distance) must not
+        //   exceed the harvester count.
+        let (bl, bh) = (
+            (self.location_appearance & 0xff) as u8,
+            (self.location_appearance >> 8) as u8,
+        );
+        if bl != loc.map_y as u8 || bh > ah {
+            return;
+        }
+        // = seg000:4d2e inc for_condit_Paul_next_to_harvester.
+        self.for_condit_paul_next_to_harvester_ds_f6 += 1;
+        // = seg000:4d32..4d3a variant 1: draw one frame and snapshot it to fb2.
+        self.desert_harvester_setup(1, bh);
+        self.sprite_anim_step();
+        self.copy_active_framebuffer_to_framebuffer_2();
+        // = seg000:4d3f cmp bh,al; ja ret — animate only when the mining troop
+        //   count reaches the distance.
+        if bh > al {
+            return;
+        }
+        // = seg000:4d43 audio_start_voc(5) — SN5.VOC, the harvester.
+        self.audio_start_voc("SN5.HSQ");
+        // = seg000:4d48..4d53 variant 0 + add_frame_task(desert_harvester_frame_task, 10h).
+        self.desert_harvester_setup(0, bh);
+        self.add_frame_task(0x10, TaskId::DesertHarvester);
+    }
+
+    // = seg000:4d57 desert_harvester_setup — resource 31h (MOIS.HSQ) at
+    // x = 5 + 4 * bh, y = 29h, no motion, script `variant`.
+    fn desert_harvester_setup(&mut self, variant: u8, bh: u8) {
+        self.sprite_anim_init(sprite_bank::MOIS, 5 + 4 * bh as i16, 0x29, 0, 0, variant);
+    }
+
+    // = seg000:4d00 desert_harvester_remove_task.
+    pub(crate) fn desert_harvester_remove_task(&mut self) {
+        self.remove_frame_task(TaskId::DesertHarvester);
+    }
+
+    // = seg000:4bb9 desert_harvester_frame_task — every 10h ticks while the
+    // room screen is on top with no talking head: restore the animation rect
+    // from fb2, step the animation, and present the rect around the cursor.
+    pub(crate) fn desert_harvester_frame_task(&mut self) {
+        // = seg000:4bb9..4bc7 get_active_screen_element == command_menu_buf and
+        //   data_047c6 == 0.
+        if self.talking_head.is_some() || self.get_active_menu_ref() != MenuRef::CommandMenuBuf {
+            return;
+        }
+        // = seg000:4bc9 copy_rect_fb2_to_fb1(data_04860).
+        let r = self.sprite_anim.rect;
+        let yoff = self.y_offset as i16;
+        let phys = Rect {
+            x0: r.x0,
+            y0: r.y0 + yoff,
+            x1: r.x1,
+            y1: r.y1 + yoff,
+        };
+        gfx::vga_copy_rect(&mut self.framebuffer, &self.framebuffer_saved, phys);
+        // = seg000:4bcf sprite_anim_step.
+        self.sprite_anim_step();
+        // = seg000:4bd2..4bdb present the rect around the mouse cursor.
+        let r = self.sprite_anim.rect;
+        self.restore_mouse_if_rect_intersects(r);
+        self.present_screen_rect(r);
+        self.draw_mouse_cursor_if_needed();
+    }
+
+    // = seg000:4c92 sprite_anim_init — fill the animation record: resource,
+    // position, velocity (8.8 fixed point, accumulators cleared), then read the
+    // animation data from the resource's last sub-table entry: a 4-byte header,
+    // the rect (its size goes to w/h), the frame-list table and the script
+    // table, with the cursor seated on script `variant`.
+    fn sprite_anim_init(&mut self, resource: i16, x: i16, y: i16, vx: i16, vy: i16, variant: u8) {
+        // = seg000:4c96..4caf the record fields.
+        let a = &mut self.sprite_anim;
+        a.resource = resource;
+        a.x = x;
+        a.y = y;
+        a.vx = vx;
+        a.vy = vy;
+        a.acc_x = 0;
+        a.acc_y = 0;
+        // = seg000:4cb5 open_resource_by_index; 4cba..4cc0 si = the last entry
+        //   of the resource's offset table.
+        self.open_sprite_bank(resource);
+        let data = {
+            let slot = resource as usize;
+            let Some(Some(sheet)) = self.banks_cache_get(slot) else {
+                return;
+            };
+            match sheet.get_resource(sheet.resource_count() - 1) {
+                Some(d) => d.to_vec(),
+                None => return,
+            }
+        };
+        let u16_at = |p: usize| u16::from_le_bytes([data[p], data[p + 1]]);
+        let a = &mut self.sprite_anim;
+        // = seg000:4cc6..4cd9 skip 4 bytes; rect (x0, y0, x1, y1): w = x1 - x0,
+        //   h = y1 - y0.
+        let (x0, y0, x1, y1) = (u16_at(4), u16_at(6), u16_at(8), u16_at(10));
+        a.w = x1.wrapping_sub(x0) as i16;
+        a.h = y1.wrapping_sub(y0) as i16;
+        // = seg000:4cdd..4ce2 frames_base = the frame-list table body (past its
+        //   length word).
+        let s = 12;
+        a.frames_base = s + 2;
+        // = seg000:4ce6 si += [si] — the script table; 4ce8..4cf9 the cursor
+        //   for variant ah: si += [si + 2*ah].
+        let t = s + u16_at(s) as usize;
+        let start = t + u16_at(t + 2 * variant as usize) as usize;
+        a.script_start = start;
+        a.script_cursor = start;
+        a.data = data;
+    }
+
+    // = seg000:4bdf sprite_anim_step — advance the 8.8 position accumulators
+    // (the high byte moves the sprite), clamp the rect, draw every frame list
+    // of the current script step, and step the cursor (0ffh wraps to the
+    // script start).
+    fn sprite_anim_step(&mut self) {
+        // = seg000:4bdf open_resource_by_index(resource).
+        let resource = self.sprite_anim.resource;
+        self.open_sprite_bank(resource);
+        let a = &mut self.sprite_anim;
+        // = seg000:4be5..4c07 acc.lo + v -> acc; the new high byte (sign
+        //   extended) moves the position. 4874/4878 drive y, 4872/4876 drive x.
+        let acc = (a.acc_y & 0xff).wrapping_add(a.vy as u16);
+        a.acc_y = acc;
+        a.y = a.y.wrapping_add((acc >> 8) as u8 as i8 as i16);
+        let acc = (a.acc_x & 0xff).wrapping_add(a.vx as u16);
+        a.acc_x = acc;
+        a.x = a.x.wrapping_add((acc >> 8) as u8 as i8 as i16);
+        // = seg000:4c0b..4c13 sprite_anim_clamp_rect(dx = x, bx = y).
+        self.sprite_anim_clamp_rect();
+        // = seg000:4c16..4c24 a cursor on 0ffh wraps to the script start.
+        let a = &self.sprite_anim;
+        let mut cursor = a.script_cursor;
+        if a.data.get(cursor) == Some(&0xff) {
+            cursor = a.script_start;
+        }
+        // = seg000:4c29..4c3c lodsb: 0 ends the step, 1 prefixes a 16-bit frame
+        //   id (1xxh), else the frame id; draw each frame list.
+        while let Some(&b) = self.sprite_anim.data.get(cursor) {
+            cursor += 1;
+            if b == 0 {
+                break;
+            }
+            let frame = if b == 1 {
+                let lo = self.sprite_anim.data.get(cursor).copied().unwrap_or(0);
+                cursor += 1;
+                0x100 | lo as u16
+            } else {
+                b as u16
+            };
+            self.sprite_anim_draw_frame(frame);
+        }
+        // = seg000:4c40 [486a] = si.
+        self.sprite_anim.script_cursor = cursor;
+    }
+
+    // = seg000:4b5f sprite_anim_clamp_rect — the record's rect: (x, y) to
+    // (x + w, y + h), each edge clamped into _stru_20920_game_area_rect.
+    fn sprite_anim_clamp_rect(&mut self) {
+        const GAME_AREA: Rect = rect(0, 0, 320, 152);
+        let a = &mut self.sprite_anim;
+        let cx = |v: i16| v.clamp(GAME_AREA.x0, GAME_AREA.x1);
+        let cy = |v: i16| v.clamp(GAME_AREA.y0, GAME_AREA.y1);
+        a.rect = Rect {
+            x0: cx(a.x),
+            y0: cy(a.y),
+            x1: cx(a.x + a.w),
+            y1: cy(a.y + a.h),
+        };
+    }
+
+    // = seg000:4c45 sprite_anim_draw_frame — frame `frame` selects a list of
+    // (sprite, dx, dy) bytes (0 ends it); each sprite (1-based) is drawn at the
+    // record position plus the offset, clipped to the record's rect.
+    fn sprite_anim_draw_frame(&mut self, frame: u16) {
+        let a = &self.sprite_anim;
+        let base = a.frames_base;
+        let idx = (frame as usize).wrapping_sub(2);
+        let (Some(&lo), Some(&hi)) = (a.data.get(base + 2 * idx), a.data.get(base + 2 * idx + 1))
+        else {
+            return;
+        };
+        let mut p = base + u16::from_le_bytes([lo, hi]) as usize;
+        let mut draws = Vec::new();
+        while let (Some(&sprite), Some(&dx), Some(&dy)) =
+            (a.data.get(p), a.data.get(p + 1), a.data.get(p + 2))
+        {
+            if sprite == 0 {
+                break;
+            }
+            p += 3;
+            draws.push((sprite as u16 - 1, a.x + dx as i16, a.y + dy as i16));
+        }
+        let clip = a.rect;
+        // = seg000:4c6d..4c89 vga_blit_clipped(sprite - 1, dx, bx, bp = rect).
+        for (sprite, x, y) in draws {
+            self.draw_active_bank_sprite_clipped(sprite, x, y, clip);
+        }
     }
 
     // = seg000:40c3 move_all_NPCs_whose_bit_6_of_flags_is_set — via

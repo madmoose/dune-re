@@ -56,7 +56,7 @@ const MAP_SCROLL_DELTA_LEFT: (u16, i16) = (0x1002u16.wrapping_neg(), 0);
 // location SAL tier (calc_sal_index 0..4): SIET 0x11, PALACE 0x10, VILG 0x12,
 // HARK 0x13/0x13. Indexed by travel_flyover_detect after the xlat at
 // seg000:424a.
-const TABLE_196D: [u8; 5] = [0x11, 0x10, 0x12, 0x13, 0x13];
+pub(crate) const TABLE_196D: [u8; 5] = [0x11, 0x10, 0x12, 0x13, 0x13];
 
 // = seg001:148a travel_minimap_rect — the flight minimap view rect, copied
 // into data_046e3_rect (map_view_rect) by travel_minimap_setup.
@@ -2846,8 +2846,8 @@ impl GameState {
         //   map screen menu; map_screen_cleanup keeps the mode flags now
         //   travel_destination_ptr is armed.
         self.menu_stack_pop_and_cleanup();
-        // = seg000:472a call loc_04d00 — remove the command-panel overlay
-        //   task (frame_task_callback_04bb9); the port never arms it.
+        // = seg000:472a call desert_harvester_remove_task.
+        self.desert_harvester_remove_task();
         // = seg000:472d..4730 with the old flags already in a travel mode
         //   (a mid-flight re-confirm) only the panel redraw below runs.
         if old_flags & 3 == 0 {
