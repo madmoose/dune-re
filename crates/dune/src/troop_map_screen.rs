@@ -3226,7 +3226,7 @@ impl GameState {
             // = seg000:7a82..7a94 ax = 0x0c both as the resource id and as the
             //   anchor table's byte offset (entry 3); bp = 0 (animation 0).
             self.current_lip_sync_resource_id = 0x0c;
-            self.open_talking_head_resource(0x0c, 0);
+            self.setup_lip_sync_data_from_sprite_sheet(0x0c, 0);
             self.update_screen_palette();
             (0usize, 3usize)
         } else {
@@ -3236,7 +3236,7 @@ impl GameState {
             self.current_lip_sync_resource_id = 0x0f;
             self.fremen2_troops[0] = Some(ti);
             self.selected_fremen2 = 0;
-            self.open_talking_head_resource(0x0f, 0);
+            self.setup_lip_sync_data_from_sprite_sheet(0x0f, 0);
             self.update_screen_palette();
             // = seg000:7aab..7abf ax = (talking_head_id - 0x0e) * 4 (the anchor
             //   entry); bp = (talking_head_idle_expr - 1) * 2 (the animation).

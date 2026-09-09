@@ -715,7 +715,7 @@ impl GameState {
         // = seg000:93b6 call setup_lip_sync_data_from_sprite_sheet (91a0) —
         //   open + parse the portrait sheet. An unchanged head is left exactly
         //   as it is, and so is everything below it.
-        if !self.open_talking_head_resource(lip_sync_resource_id, dx) {
+        if !self.setup_lip_sync_data_from_sprite_sheet(lip_sync_resource_id, dx) {
             return;
         }
         // = seg000:c412 copy_active_framebuffer_to_framebuffer_2: save the freshly-drawn
@@ -744,22 +744,8 @@ impl GameState {
         if let Some(head) = self.talking_head.as_mut() {
             head.frame = frame;
         }
-        self.composite_head_frame(anim, frame);
-
-        // = seg000:9d16 copy_non_pcm_lip_sync_data_and_draw_talking_head's [460a]->[4540]
-        // copy (seg000:9d18): record this first pose as the previous frame so
-        // every later tick diffs against it and redraws incrementally
-        // (redraw_head_frame_incremental) rather than wiping the whole head
-        // rect. This is what preserves a sprite drawn over the backdrop after
-        // setup — the LOOK AT MIRROR frame (MIRROR.HSQ sprite 2).
-        let first_images = self
-            .talking_head
-            .as_ref()
-            .map(|h| flatten_frame(&h.lipsync, anim, frame))
-            .unwrap_or_default();
-        if let Some(head) = self.talking_head.as_mut() {
-            head.prev_images = first_images;
-        }
+        // = seg000:9930 call copy_non_pcm_lip_sync_data_and_draw_talking_head.
+        self.copy_non_pcm_lip_sync_data_and_draw_talking_head(anim, frame);
 
         // = seg000:9945 loc_09908 installs the idle animator (loc_099be) as a
         // frame task at interval bp=0x10 (16 ticks). It walks the current
@@ -780,12 +766,47 @@ impl GameState {
         }
     }
 
+    // = seg000:9d16 copy_non_pcm_lip_sync_data_and_draw_talking_head — copy
+    // the lip-sync head structure ([460a], 3 bytes per image + the count)
+    // into its previous-frame copy ([4540]), then fall into
+    // draw_talking_head_at_si. Recording this first pose as the previous
+    // frame is what lets every later tick diff against it and redraw
+    // incrementally (redraw_head_frame_incremental) rather than wiping the
+    // whole head rect — it preserves a sprite drawn over the backdrop after
+    // setup, the LOOK AT MIRROR frame (MIRROR.HSQ sprite 2).
+    fn copy_non_pcm_lip_sync_data_and_draw_talking_head(&mut self, anim: usize, frame: usize) {
+        // = seg000:9d18..9d2a the rep movsb copy.
+        let first_images = self
+            .talking_head
+            .as_ref()
+            .map(|h| flatten_frame(&h.lipsync, anim, frame))
+            .unwrap_or_default();
+        if let Some(head) = self.talking_head.as_mut() {
+            head.prev_images = first_images;
+        }
+        // = seg000:9d2d draw_talking_head_at_si.
+        self.composite_head_frame(anim, frame);
+    }
+
     // = seg000:9945 install_talking_head_idle_animator — add the idle
     // animator (frame_task_callback_099be) as a frame task at interval 0x10.
     // The tail of loc_09908's install, and called on its own by
     // present_vision_message (seg000:2b17) after its silent present.
     pub(crate) fn install_talking_head_idle_animator(&mut self) {
         self.add_frame_task(0x10, crate::TaskId::TalkingHeadIdle);
+    }
+
+    // = seg000:920f open_talking_head_resource — ax + 2 = the portrait sheet's
+    // resource index (head 0 = LETO.HSQ at index 2); open_resource_by_index.
+    // The port reads the sheet by name and parses it.
+    fn open_talking_head_resource(&mut self, head: usize) -> SpriteSheet {
+        let name = Self::head_name(head);
+        let file = format!("{name}.HSQ");
+        let data = self
+            .dat_file
+            .read(&file)
+            .unwrap_or_else(|_| panic!("failed to read {file}"));
+        SpriteSheet::from_slice(&data).unwrap_or_else(|_| panic!("failed to parse {file}"))
     }
 
     /// = seg000:91a0 setup_lip_sync_data_from_sprite_sheet / seg000:9197 setup_lip_sync_data_from_current
@@ -799,8 +820,12 @@ impl GameState {
     /// the backdrop save, the first idle render and the idle task; the
     /// troop-contact popup calls it directly and draws its own frame into the
     /// popup's head box (draw_talking_head_in_box).
-    pub(crate) fn open_talking_head_resource(&mut self, lip_sync_resource_id: u8, dx: i16) -> bool {
-        // = seg000:9123 character_id_to_sprite + open_talking_head_resource.
+    pub(crate) fn setup_lip_sync_data_from_sprite_sheet(
+        &mut self,
+        lip_sync_resource_id: u8,
+        dx: i16,
+    ) -> bool {
+        // = seg000:9123 character_id_to_sprite.
         let (head, facing) = self.character_id_to_sprite(lip_sync_resource_id);
         // = seg000:91bb cmp ax,[talking_head_id]; jz open_talking_head_resource
         // — the same head stays up untouched: DOS's per-line setup only
@@ -835,15 +860,8 @@ impl GameState {
         // on a head change; the value is head-determined, so setting it every
         // setup is equivalent.
         self.balloon_x = balloon_x_for_head(head);
-        let name = Self::head_name(head);
-        let file = format!("{name}.HSQ");
-
-        let data = self
-            .dat_file
-            .read(&file)
-            .unwrap_or_else(|_| panic!("failed to read {file}"));
-        let sheet =
-            SpriteSheet::from_slice(&data).unwrap_or_else(|_| panic!("failed to parse {file}"));
+        // = seg000:91da call open_talking_head_resource.
+        let sheet = self.open_talking_head_resource(head);
         // = seg000:c1aa apply_sprite_sheet_palette after open_spritesheet.
         sheet
             .apply_palette_update(&mut self.palette)
@@ -916,19 +934,21 @@ impl GameState {
             // = seg000:99c5..99ce swap; ax = 7 (CHAN); open_talking_head_
             //   resource; call loc_099da — Chani's tick.
             self.swap_talking_head_state();
-            self.open_talking_head_resource(7, 0);
+            self.setup_lip_sync_data_from_sprite_sheet(7, 0);
             self.tick_talking_head_idle_one();
             // = seg000:99d1..99d7 swap; ax = 2dh (PAUL); open_talking_head_
             //   resource; falls into loc_099da — Paul's tick.
             self.swap_talking_head_state();
-            self.open_talking_head_resource(0x2d, 0);
+            self.setup_lip_sync_data_from_sprite_sheet(0x2d, 0);
         }
         self.tick_talking_head_idle_one();
     }
 
-    // = seg000:998e swap_talking_head_state — exchange the talking-head state
-    // with its shadow copy: the head rect, talking_head_id, the previous-frame
-    // copy and the idle block all live in TalkingHead, so the slots swap.
+    // = seg000:998e swap_talking_head_state / seg000:99b2 swap_byte_arrays —
+    // exchange the talking-head state with its shadow copy (DOS swaps the
+    // word arrays in place): the head rect, talking_head_id, the
+    // previous-frame copy and the idle block all live in TalkingHead, so the
+    // slots swap.
     pub(crate) fn swap_talking_head_state(&mut self) {
         std::mem::swap(&mut self.talking_head, &mut self.talking_head_shadow);
     }

@@ -2826,12 +2826,27 @@ impl GameState {
         let mut count = 0u16;
         let mut sum = 0u16;
         self.for_each_hired_troop_in_location(li, |g, tj| {
-            if g.troops[tj].occupation == 4 {
-                count += 1;
-                sum = sum.wrapping_add(g.troops[tj].army_skill as u16);
-            }
+            g.callback_troop_accumulate_army_military_training_troops_and_army_skill(
+                tj, &mut count, &mut sum,
+            );
         });
         (count, sum)
+    }
+
+    // = seg000:72a2 callback_troop_accumulate_army_military_training_troops_
+    // and_army_skill — a troop whose occupation is exactly 4 counts into cx
+    // and adds its army_skill to dx.
+    fn callback_troop_accumulate_army_military_training_troops_and_army_skill(
+        &self,
+        ti: usize,
+        count: &mut u16,
+        sum: &mut u16,
+    ) {
+        let t = &self.troops[ti];
+        if t.occupation == 4 {
+            *count += 1;
+            *sum = sum.wrapping_add(t.army_skill as u16);
+        }
     }
 
     // = seg000:727d troop_location_clear_saboteurs_in_location_and_spice_
@@ -2843,12 +2858,22 @@ impl GameState {
         self.locations[li].status &= 0xfb;
         let mut found = 0u16;
         self.for_each_hired_troop_in_location(li, |g, tj| {
-            if g.troops[tj].dissatisfaction_and_speech & 0x40 != 0 {
-                g.troops[tj].dissatisfaction_and_speech &= 0xffbf;
-                found = 0x100;
-            }
+            g.callback_troop_remove_saboteurs_in_spice_mining_troop(tj, &mut found);
         });
         found
+    }
+
+    // = seg000:7289 callback_troop_remove_saboteurs_in_spice_mining_troop — a
+    // troop with speech bit 6 set drops it and sets cx = 0x100.
+    fn callback_troop_remove_saboteurs_in_spice_mining_troop(
+        &mut self,
+        ti: usize,
+        found: &mut u16,
+    ) {
+        if self.troops[ti].dissatisfaction_and_speech & 0x40 != 0 {
+            self.troops[ti].dissatisfaction_and_speech &= 0xffbf;
+            *found = 0x100;
+        }
     }
 
     // = seg000:6e20 troop_location_new_day_upkeep — the per-day upkeep an
@@ -2933,16 +2958,23 @@ impl GameState {
             self.current_room = self.location_and_room as u8;
             self.data_00008 = scene;
         }
-        // = seg000:6dfc callback_troop_battle_flag_to_sietch_speech — a troop
-        //   that fought the won battle (bitfield_10 bit 5) gets speech bit 12.
+        // = seg000:6dfc callback_troop_battle_flag_to_sietch_speech over the
+        //   location's troops.
         self.for_each_troop_in_location(li, |g, tj| {
-            let t = &mut g.troops[tj];
-            if t.bitfield_10 & 0x20 != 0 {
-                t.bitfield_10 &= !0x20;
-                t.dissatisfaction_and_speech |= 0x1000;
-            }
+            g.callback_troop_battle_flag_to_sietch_speech(tj);
         });
         self.location_evict_unhired_harkonnen_troops(li);
+    }
+
+    // = seg000:6e0f callback_troop_battle_flag_to_sietch_speech — a troop that
+    // fought the won battle (bitfield_10 bit 5, set at 75c8) drops that bit
+    // and gets speech bit 12.
+    fn callback_troop_battle_flag_to_sietch_speech(&mut self, ti: usize) {
+        let t = &mut self.troops[ti];
+        if t.bitfield_10 & 0x20 != 0 {
+            t.bitfield_10 &= !0x20;
+            t.dissatisfaction_and_speech |= 0x1000;
+        }
     }
 
     // = seg000:348a troop_water_yield — a wind-trap troop's water per period:
@@ -3002,15 +3034,23 @@ impl GameState {
             let mut removed = 0;
             // = seg000:764d callback_troop_evict_unhired_harkonnen.
             self.for_each_troop_in_location(li, |g, tj| {
-                let t = g.troops[tj];
-                if t.occupation >= 0x80 && t.bitfield_10 & 0x80 != 0 {
-                    g.troop_remove_from_play(tj);
-                    removed += 1;
-                }
+                g.callback_troop_evict_unhired_harkonnen(tj, &mut removed);
             });
             if removed == 0 {
                 return;
             }
+        }
+    }
+
+    // = seg000:764d callback_troop_evict_unhired_harkonnen — cf (from
+    // get_address_of_troop_by_ID) set = hired: skip. An unhired troop with
+    // bitfield_10 bit 7 (Harkonnen) is removed from play; cx counts removals.
+    fn callback_troop_evict_unhired_harkonnen(&mut self, ti: usize, removed: &mut u16) {
+        let t = self.troops[ti];
+        if t.occupation >= 0x80 && t.bitfield_10 & 0x80 != 0 {
+            // = seg000:7655 loc_07655 troop_remove_from_play; inc cx.
+            self.troop_remove_from_play(ti);
+            *removed += 1;
         }
     }
 
@@ -3580,6 +3620,27 @@ impl GameState {
             return;
         }
         self.troop_reinit_occupation(ti, new);
+    }
+
+    // = seg000:6ebf location_reinit_troops_with_speech_bit_4 — the hired
+    // troops left behind at the caller troop's location with the
+    // just-reassigned speech bit re-derive their occupation
+    // (callback_troop_reinit_occupation_if_speech_bit_4).
+    fn location_reinit_troops_with_speech_bit_4(&mut self, ti: usize) {
+        let li = locations::location_index_from_ptr(self.troops[ti].offset_of_location);
+        self.for_each_hired_troop_in_location(li, |s, tj| {
+            s.callback_troop_reinit_occupation_if_speech_bit_4(tj);
+        });
+    }
+
+    // = seg000:6ecb callback_troop_reinit_occupation_if_speech_bit_4 — a
+    // troop with dissatisfaction_and_speech bit 4 re-derives its occupation:
+    // troop_06ad4 with cl = the occupation nibble.
+    fn callback_troop_reinit_occupation_if_speech_bit_4(&mut self, ti: usize) {
+        if self.troops[ti].dissatisfaction_and_speech & 0x10 != 0 {
+            let nibble = self.troops[ti].occupation & 0x0f;
+            self.troop_reinit_occupation(ti, nibble);
+        }
     }
 
     // = seg000:6ad4 troop_06ad4 — the inner entry of troop_set_occupation
@@ -4233,16 +4294,9 @@ impl GameState {
             self.troop_refresh_icon(ti);
             return;
         }
-        // = seg000:84ca call troop_06ebf — the hired troops left behind with
-        //   the just-reassigned speech bit re-derive their occupation
-        //   (callback_troop_06ecb).
+        // = seg000:84ca call location_reinit_troops_with_speech_bit_4.
         let old_li = locations::location_index_from_ptr(self.troops[ti].offset_of_location);
-        self.for_each_hired_troop_in_location(old_li, |s, tj| {
-            if s.troops[tj].dissatisfaction_and_speech & 0x10 != 0 {
-                let nibble = s.troops[tj].occupation & 0x0f;
-                s.troop_reinit_occupation(tj, nibble);
-            }
-        });
+        self.location_reinit_troops_with_speech_bit_4(ti);
         // = seg000:84ce call troop_unlink_from_location_chain.
         self.troop_unlink_from_location_chain(ti);
         // = seg000:84d2..84fe a defending troop (occupation exactly 6)

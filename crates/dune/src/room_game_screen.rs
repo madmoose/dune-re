@@ -674,7 +674,7 @@ impl GameState {
         if face >= 0 {
             // = seg000:0dfa call setup_lip_sync_data_from_sprite_sheet — open
             //   the person's portrait sheet.
-            self.open_talking_head_resource(face as u8, 0);
+            self.setup_lip_sync_data_from_sprite_sheet(face as u8, 0);
             // = seg000:0dfd..0e05 ax = [sheet first word] / 2 - 3 — the sheet's
             //   entry count less three: the game-over portrait is its last two
             //   sprites before the lip-sync resource.

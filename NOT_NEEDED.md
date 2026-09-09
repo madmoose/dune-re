@@ -127,3 +127,5 @@ with it:
 - `seg000:e8b8 pit_timer_callback` — the boot PIT probe ISR: latch the 8253 counter into pit_timer_value and bump pit_timer_counter; the port's clock is the frame sink's.
 - `seg000:ae3f herad_alloc_buffer` — bump-allocate the 9c40h-byte HERAD music buffer once the driver is present; the port's MIDI driver owns its buffers.
 - `seg000:a9a1 close_pcm_voice_file_handle` — close the streaming voice file's DOS handle (INT 21h/3Eh) unless it is the shared DUNE.DAT handle; the port reads voice clips whole from the DAT.
+- `seg000:6670 location_sum_harvest_total_of_same_occupation` — unreachable: no caller in DNCDPRG sums harvest_total over the location's troops sharing a troop's occupation nibble.
+- `seg000:667d callback_troop_sum_harvest_total_if_same_occupation` — the per-troop step of that unreachable sum.

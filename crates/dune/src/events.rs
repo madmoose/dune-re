@@ -346,13 +346,11 @@ impl GameState {
             if loc.appearance >= 0x28 || loc.status & 0x80 != 0 || li == 16 {
                 continue;
             }
-            // = seg000:1e72..1e77 callback_troop_accumulate_troop_fremen_non_
-            //   ecology_troops over the hired troops: cmp occupation,8; adc.
+            // = seg000:1e72..1e77 dx = 0; callback_troop_accumulate_troop_
+            //   fremen_non_ecology_troops over the hired troops.
             let mut count = 0u16;
             self.for_each_hired_troop_in_location(li, |s, ti| {
-                if s.troops[ti].occupation < 8 {
-                    count += 1;
-                }
+                s.callback_troop_accumulate_troop_fremen_non_ecology_troops(ti, &mut count);
             });
             if count > best_count {
                 best_count = count;
@@ -368,10 +366,9 @@ impl GameState {
         self.number_of_locations_with_illness =
             self.number_of_locations_with_illness.wrapping_add(1);
         // = seg000:1e96..1e99 callback_troop_make_troop_ill_and_stop_working
-        //   on every hired troop: dissatisfaction bit 0x400 + stop working.
+        //   on every hired troop.
         self.for_each_hired_troop_in_location(li, |s, ti| {
-            s.troops[ti].dissatisfaction_and_speech |= 0x400;
-            s.troop_make_stop_working(ti);
+            s.callback_troop_make_troop_ill_and_stop_working(ti);
         });
         // = seg000:1e9c/1e9e message 8 = "There is a strange disease here in
         //   .... We all are ill... very ill."
@@ -440,6 +437,34 @@ impl GameState {
         self.location_houses_ill_troop(li).then_some(li)
     }
 
+    // = seg000:1ea1 callback_troop_accumulate_troop_fremen_non_ecology_troops
+    // — cmp occupation,8; adc dx,0: count a hired troop whose occupation is
+    // below 8 (not ecology).
+    fn callback_troop_accumulate_troop_fremen_non_ecology_troops(
+        &self,
+        ti: usize,
+        count: &mut u16,
+    ) {
+        if self.troops[ti].occupation < 8 {
+            *count += 1;
+        }
+    }
+
+    // = seg000:1ea9 callback_troop_make_troop_ill_and_stop_working — set
+    // dissatisfaction bit 0x400 (ill), then
+    // callback_troop_make_troop_stop_working.
+    fn callback_troop_make_troop_ill_and_stop_working(&mut self, ti: usize) {
+        self.troops[ti].dissatisfaction_and_speech |= 0x400;
+        self.troop_make_stop_working(ti);
+    }
+
+    // = seg000:1eb1 callback_troop_make_troop_cured_from_illness — clear the
+    // ill bit 0x400 and set the was-cured speech bit 0x800.
+    fn callback_troop_make_troop_cured_from_illness(&mut self, ti: usize) {
+        let t = &mut self.troops[ti];
+        t.dissatisfaction_and_speech = (t.dissatisfaction_and_speech & !0x400) | 0x800;
+    }
+
     // = seg000:1eda chani_troop_cure_progress_step — +8 per period; on the
     // wrap to 0 every troop at the location is cured, the "I've managed to
     // cure everybody" message is queued, and the plot either moves to the
@@ -452,11 +477,9 @@ impl GameState {
             return;
         }
         // = seg000:1ee3..1ee6 callback_troop_make_troop_cured_from_illness on
-        //   ALL troops at the location: clear bit 0x400, set the was-cured
-        //   speech bit 0x800.
+        //   ALL troops at the location.
         self.for_each_troop_in_location(li, |s, ti| {
-            let t = &mut s.troops[ti];
-            t.dissatisfaction_and_speech = (t.dissatisfaction_and_speech & !0x400) | 0x800;
+            s.callback_troop_make_troop_cured_from_illness(ti);
         });
         // = seg000:1ee9/1eec message 9 = "Paul, I'm so happy! I've managed to
         //   cure everybody, here in ...."

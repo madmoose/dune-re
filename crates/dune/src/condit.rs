@@ -613,69 +613,86 @@ impl GameState {
     }
 }
 
+const CONDIT_TRUE: u16 = 0xffff;
+const CONDIT_FALSE: u16 = 0;
+
 // = seg000:a334 evaluate_operator_bx_on_dx_and_ax / seg000:a372 condit_operator_return_ffff / seg000:a36f condit_operator_return_0
-// — the operator body and its two shared exits (TRUE / FALSE).
+// — the operator jump table and its two shared exits (TRUE / FALSE).
 fn apply_operator(op: u16, a: u16, b: u16) -> u16 {
-    const TRUE: u16 = 0xffff;
-    const FALSE: u16 = 0;
     match op & 0x1f {
-        // = seg000:a348 cmpeq (jz).
-        0x00 => {
-            if a == b {
-                TRUE
-            } else {
-                FALSE
-            }
-        }
-        // = seg000:a34f cmple (jb — unsigned below).
-        0x02 => {
-            if a < b {
-                TRUE
-            } else {
-                FALSE
-            }
-        }
-        // = seg000:a356 cmpge (ja — unsigned above).
-        0x04 => {
-            if a > b {
-                TRUE
-            } else {
-                FALSE
-            }
-        }
-        // = seg000:a35d cmpne (jnz).
-        0x06 => {
-            if a != b {
-                TRUE
-            } else {
-                FALSE
-            }
-        }
-        // = seg000:a364 cmplt (jle — signed less-or-equal).
-        0x08 => {
-            if (a as i16) <= (b as i16) {
-                TRUE
-            } else {
-                FALSE
-            }
-        }
-        // = seg000:a36b cmpgt (jge — signed greater-or-equal).
-        0x0a => {
-            if (a as i16) >= (b as i16) {
-                TRUE
-            } else {
-                FALSE
-            }
-        }
-        // = seg000:a33c addition.
-        0x0c => a.wrapping_add(b),
-        // = seg000:a33f subtraction.
-        0x0e => a.wrapping_sub(b),
-        // = seg000:a342 and.
-        0x10 => a & b,
-        // = seg000:a345 or.
-        0x12 => a | b,
+        0x00 => callback_condit_operator_00_cmpeq(a, b),
+        0x02 => callback_condit_operator_01_cmple(a, b),
+        0x04 => callback_condit_operator_02_cmpge(a, b),
+        0x06 => callback_condit_operator_03_cmpne(a, b),
+        0x08 => callback_condit_operator_04_cmplt(a, b),
+        0x0a => callback_condit_operator_05_cmpgt(a, b),
+        0x0c => callback_condit_operator_06_addition(a, b),
+        0x0e => callback_condit_operator_07_subtraction(a, b),
+        0x10 => callback_condit_operator_08_and(a, b),
+        0x12 => callback_condit_operator_09_or(a, b),
         // = seg000:a36f condit_operator_return_0 (codes 0x14..0x1e).
-        _ => 0,
+        _ => CONDIT_FALSE,
     }
+}
+
+// = seg000:a348 callback_condit_operator_00_cmpeq — cmp dx,ax; jz TRUE.
+fn callback_condit_operator_00_cmpeq(dx: u16, ax: u16) -> u16 {
+    if dx == ax { CONDIT_TRUE } else { CONDIT_FALSE }
+}
+
+// = seg000:a34f callback_condit_operator_01_cmple — cmp dx,ax; jb TRUE
+// (unsigned below).
+fn callback_condit_operator_01_cmple(dx: u16, ax: u16) -> u16 {
+    if dx < ax { CONDIT_TRUE } else { CONDIT_FALSE }
+}
+
+// = seg000:a356 callback_condit_operator_02_cmpge — cmp dx,ax; ja TRUE
+// (unsigned above).
+fn callback_condit_operator_02_cmpge(dx: u16, ax: u16) -> u16 {
+    if dx > ax { CONDIT_TRUE } else { CONDIT_FALSE }
+}
+
+// = seg000:a35d callback_condit_operator_03_cmpne — cmp dx,ax; jnz TRUE.
+fn callback_condit_operator_03_cmpne(dx: u16, ax: u16) -> u16 {
+    if dx != ax { CONDIT_TRUE } else { CONDIT_FALSE }
+}
+
+// = seg000:a364 callback_condit_operator_04_cmplt — cmp dx,ax; jle TRUE
+// (signed less-or-equal).
+fn callback_condit_operator_04_cmplt(dx: u16, ax: u16) -> u16 {
+    if (dx as i16) <= (ax as i16) {
+        CONDIT_TRUE
+    } else {
+        CONDIT_FALSE
+    }
+}
+
+// = seg000:a36b callback_condit_operator_05_cmpgt — cmp dx,ax; jge TRUE
+// (signed greater-or-equal), else falls into condit_operator_return_0.
+fn callback_condit_operator_05_cmpgt(dx: u16, ax: u16) -> u16 {
+    if (dx as i16) >= (ax as i16) {
+        CONDIT_TRUE
+    } else {
+        CONDIT_FALSE
+    }
+}
+
+// = seg000:a33c callback_condit_operator_06_addition — add dx,ax.
+fn callback_condit_operator_06_addition(dx: u16, ax: u16) -> u16 {
+    dx.wrapping_add(ax)
+}
+
+// = seg000:a33f callback_condit_operator_07_subtraction — sub dx,ax.
+fn callback_condit_operator_07_subtraction(dx: u16, ax: u16) -> u16 {
+    dx.wrapping_sub(ax)
+}
+
+// = seg000:a342 callback_condit_operator_08_and — and dx,ax.
+fn callback_condit_operator_08_and(dx: u16, ax: u16) -> u16 {
+    dx & ax
+}
+
+// = seg000:a345 callback_condit_operator_09_or — or dx,ax.
+fn callback_condit_operator_09_or(dx: u16, ax: u16) -> u16 {
+    dx | ax
 }
