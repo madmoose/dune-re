@@ -1797,6 +1797,10 @@ pub struct GameState {
 
     // = seg001:4737 troop_irrigated_this_period.
     pub(crate) troop_irrigated_this_period: u8,
+    // = seg001:00ec bulb_growing_progress — the bulb-growing counter: a
+    // bulb-growing troop at a location without bulbs bumps it each period;
+    // when it wraps to 0 the location gets 16 bulbs (seg000:767d).
+    pub(crate) bulb_growing_progress: u8,
     // = seg001:473c gurney_location_ptr — the location record Gurney
     // (room_persons[4]) stands in, or 0 when he is not placed. Refreshed at
     // the start of every troop walk; army training there is much faster.
@@ -2867,6 +2871,7 @@ impl GameState {
             selected_fremen2: 0,
             vegetation_started_on_dune: 0,
             troop_irrigated_this_period: 0,
+            bulb_growing_progress: 0,
             gurney_location_ptr: 0,
             troop_condit: Default::default(),
             location_condit: Default::default(),

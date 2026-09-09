@@ -2553,17 +2553,20 @@ impl GameState {
     }
 
     // = seg000:6c26 array_callbacks_for_troop_occupation_06c26 — the per-period
-    // callback for each occupation nibble. Spice mining (0), prospecting (1),
-    // military training (4), attacking (6) and irrigation (8) are ported; the
-    // others (espionage, wind-trap assembly, bulb growing) are their own
-    // subsystems, and slots 2/3/7/11..15 are nullsub_00f66.
+    // callback for each occupation nibble: spice mining (0), prospecting (1),
+    // military training (4), espionage (5), attacking (6), irrigation (8),
+    // wind-trap assembly (9) and bulb growing (10); slots 2/3/7/11..15 are
+    // nullsub_00f66.
     fn run_troop_occupation_callback(&mut self, ti: usize) {
         match self.troops[ti].occupation & 0x0f {
             0 => self.troop_occupation_event_spice_mining(ti),
             1 => self.troop_occupation_event_spice_prospecting(ti),
             4 => self.troop_occupation_event_military_training(ti),
+            5 => self.troop_occupation_event_espionage(ti),
             6 => self.troop_occupation_event_attacking(ti),
             8 => self.troop_occupation_event_irrigation(ti),
+            9 => self.troop_occupation_event_wind_trap_assembly(ti),
+            10 => self.troop_occupation_event_bulb_growing(ti),
             _ => {}
         }
     }
@@ -2823,6 +2826,56 @@ impl GameState {
         self.location_evict_unhired_harkonnen_troops(li);
     }
 
+    // = seg000:348a troop_water_yield — a wind-trap troop's water per period:
+    // al = 2 * motivation modifier + spice_skill (0xff on carry), times
+    // population, / 16; the high byte, or 1 for a troop with any population
+    // (the loc_0347a tail shared with troop_battle_strength).
+    fn troop_water_yield(&self, ti: usize) -> u8 {
+        let t = &self.troops[ti];
+        let modifier = self.troop_compute_motivation_modifier(ti);
+        let al = modifier
+            .wrapping_add(modifier)
+            .saturating_add(t.spice_skill);
+        let ax = ((al as u16) * (t.population as u16)) >> 4;
+        // = seg000:347a..3487.
+        let yield_ = (ax >> 8) as u8;
+        if yield_ == 0 && t.population >= 1 {
+            1
+        } else {
+            yield_
+        }
+    }
+
+    // = seg000:7711 callback_troop_location_for_troop_occupation_wind_trap_
+    // assembly_possibly_create_first_wind_trap — one time period of wind-trap
+    // assembly: at a location without a wind trap (status bit 5) the troop
+    // gains 1 motivation and adds its water yield to the location's water;
+    // when that overflows the wind trap is built (status bit 5, appearance
+    // bit 3, water 5) and the troop's occupation bits 0-1 clear. With a wind
+    // trap already there the bits clear at once.
+    fn troop_occupation_event_wind_trap_assembly(&mut self, ti: usize) {
+        let li = locations::location_index_from_ptr(self.troops[ti].offset_of_location);
+        // = seg000:7711 test status,20h; jnz loc_07731.
+        if self.locations[li].status & 0x20 == 0 {
+            // = seg000:7717/7719 al = 1; call troop_increase_motivation.
+            self.troop_increase_motivation(ti, 1);
+            // = seg000:771c..7724 add water, troop_water_yield; jb; ret.
+            let yield_ = self.troop_water_yield(ti);
+            let (water, overflow) = self.locations[li].water.overflowing_add(yield_);
+            self.locations[li].water = water;
+            if !overflow {
+                return;
+            }
+            // = seg000:7725..772d the wind trap.
+            let loc = &mut self.locations[li];
+            loc.status |= 0x20;
+            loc.appearance |= 8;
+            loc.water = 5;
+        }
+        // = seg000:7731 jmp troop_clear_occupation_bits_0_and_1.
+        self.troop_clear_occupation_bits_0_and_1(ti);
+    }
+
     // = seg000:6e02 location_evict_unhired_harkonnen_troops — remove every
     // unhired Harkonnen troop; the chain walk stops at a removal, so repeat.
     pub(crate) fn location_evict_unhired_harkonnen_troops(&mut self, li: usize) {
@@ -2868,6 +2921,120 @@ impl GameState {
             self.troop_make_stop_working(ti);
             self.troops[ti].dissatisfaction_and_speech |= 0x10;
         }
+    }
+
+    // = seg000:68d2 location_reveal_stationed_troops — reveal the stationed
+    // troops at `li`: every troop there with bitfield_10 bit 4 loses it and
+    // gets its map icon back (callback_troop_reveal_stationed ->
+    // troop_finish_conversion). Returns the count.
+    fn location_reveal_stationed_troops(&mut self, li: usize) -> u16 {
+        let mut count = 0u16;
+        self.for_each_troop_in_location(li, |s, tj| {
+            s.callback_troop_reveal_stationed(tj, &mut count);
+        });
+        count
+    }
+
+    // = seg000:68da callback_troop_reveal_stationed — a stationed troop
+    // (bitfield_10 bit 4) falls into troop_finish_conversion: the bit
+    // clears, the count bumps and its map icon respawns.
+    fn callback_troop_reveal_stationed(&mut self, ti: usize, count: &mut u16) {
+        if self.troops[ti].bitfield_10 & 0x10 != 0 {
+            self.troop_finish_conversion(ti, count);
+        }
+    }
+
+    // = seg000:72b0 callback_troop_location_for_troop_occupation_espionage —
+    // one time period of espionage. Until the report is filed (bitfield_10
+    // bit 6) two deadlines run from the arrival, (80 - army_skill) / 4 and
+    // / 2 periods: the first reveals the stationed troops here (the count
+    // into harvest_rate; nothing to reveal files the report at once), the
+    // second stages the location strengths and stores the Harkonnen strength
+    // per revealed troop in harvest_total, then files the report. Every
+    // period, unless the spy heads the location chain, once army_skill / 2
+    // periods have passed a roll below the army skill keeps the spy safe,
+    // else it is captured.
+    fn troop_occupation_event_espionage(&mut self, ti: usize) {
+        let li = locations::location_index_from_ptr(self.troops[ti].offset_of_location);
+        // = seg000:72b0/72b4 bx = game_time - time_period_of_ralliement.
+        let elapsed = self
+            .game_time
+            .wrapping_sub(self.troops[ti].time_period_of_ralliement) as i16;
+        // = seg000:72b7 test bitfield_10,40h; jnz loc_072f7 — report filed.
+        if self.troops[ti].bitfield_10 & 0x40 == 0 {
+            // = seg000:72bd..72c7 bp = (0x50 - army_skill) / 2; ax = bp / 2.
+            let half = ((0x50u8.wrapping_sub(self.troops[ti].army_skill) as i8) as i16) >> 1;
+            let quarter = half >> 1;
+            // = seg000:72c9 cmp ax,bx; jge loc_072f7 — the first deadline.
+            if quarter < elapsed {
+                // = seg000:72cd..72dc with no count yet, reveal; nothing
+                //   revealed (jcxz) files the report at once.
+                let mut filed = false;
+                if self.troops[ti].harvest_rate == 0 {
+                    let count = self.location_reveal_stationed_troops(li);
+                    if count == 0 {
+                        filed = true;
+                    } else {
+                        self.troops[ti].harvest_rate = count;
+                    }
+                }
+                if !filed {
+                    // = seg000:72df cmp bp,bx; jge loc_072f7 — the second deadline.
+                    if half < elapsed {
+                        // = seg000:72e3..72f0 stage the strengths; E =
+                        //   harkonnen_strength / C.
+                        self.condit_stage_location_strengths(li);
+                        let per_troop = self
+                            .location_condit
+                            .harkonnen_strength
+                            .checked_div(self.troops[ti].harvest_rate)
+                            .unwrap_or(0);
+                        self.troops[ti].harvest_total = per_troop;
+                        filed = true;
+                    }
+                }
+                // = seg000:72f3 or bitfield_10,40h.
+                if filed {
+                    self.troops[ti].bitfield_10 |= 0x40;
+                }
+            }
+        }
+        // = seg000:72f7..72fc the chain head is never caught.
+        if self.troops[ti].troop_id == self.locations[li].troop_id {
+            return;
+        }
+        // = seg000:72fe..7307 cmp army_skill / 2, bx; jnb ret.
+        if (self.troops[ti].army_skill as i16 >> 1) >= elapsed {
+            return;
+        }
+        // = seg000:7309..7313 rand & 3fh below the army skill: safe; else
+        //   troop_capture.
+        let roll = (self.rand() as u8) & 0x3f;
+        if roll < self.troops[ti].army_skill {
+            return;
+        }
+        self.troop_capture(ti);
+    }
+
+    // = seg000:767d callback_troop_location_for_troop_occupation_bulb_growing_
+    // spawn_16_bulbs_if_growing_progress_over — one time period of bulb
+    // growing: at a location without bulbs the progress counter counts up;
+    // when it wraps the location gets 16 bulbs. With bulbs at the location
+    // the troop goes back to irrigation.
+    fn troop_occupation_event_bulb_growing(&mut self, ti: usize) {
+        let li = locations::location_index_from_ptr(self.troops[ti].offset_of_location);
+        // = seg000:767d cmp equipment.bulbs,0; jnz loc_0768d.
+        if self.locations[li].equipment.bulbs == 0 {
+            // = seg000:7683/7687 inc bulb_growing_progress; jnz ret.
+            self.bulb_growing_progress = self.bulb_growing_progress.wrapping_add(1);
+            if self.bulb_growing_progress != 0 {
+                return;
+            }
+            // = seg000:7689 bulbs = 16.
+            self.locations[li].equipment.bulbs = 0x10;
+        }
+        // = seg000:768d/768f cl = 8; jmp troop_set_occupation.
+        self.troop_set_occupation(ti, 8);
     }
 
     // = seg000:7693 callback_troop_location_for_troop_occupation_irrigation —

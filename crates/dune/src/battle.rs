@@ -12,7 +12,7 @@ impl GameState {
     // = seg000:668f troop_capture — capture the troop: unless it is already
     // away or a Harkonnen troop, mark it away (occupation bit 5), strip its
     // equipment, stamp the time and lose 4 charisma.
-    fn troop_capture(&mut self, ti: usize) {
+    pub(crate) fn troop_capture(&mut self, ti: usize) {
         let t = self.troops[ti];
         // = seg000:668f..6699 test occupation,20h; test bitfield_10,80h.
         if t.occupation & 0x20 != 0 || t.bitfield_10 & 0x80 != 0 {
@@ -32,7 +32,7 @@ impl GameState {
     // = seg000:68e0 troop_finish_conversion — the tail of
     // callback_troop_convert_captured_harkonnen: clear bitfield_10 bit 4,
     // count the troop and respawn its map icon.
-    fn troop_finish_conversion(&mut self, ti: usize, count: &mut u16) {
+    pub(crate) fn troop_finish_conversion(&mut self, ti: usize, count: &mut u16) {
         self.troops[ti].bitfield_10 &= 0xffef;
         *count += 1;
         self.troop_respawn_map_icon(ti);
@@ -40,7 +40,7 @@ impl GameState {
 
     // = seg000:6f48 troop_increase_motivation — motivation += `by`, capped
     // at 100.
-    fn troop_increase_motivation(&mut self, ti: usize, by: u8) {
+    pub(crate) fn troop_increase_motivation(&mut self, ti: usize, by: u8) {
         let t = &mut self.troops[ti];
         t.motivation = t.motivation.wrapping_add(by).min(0x64);
     }
