@@ -692,9 +692,7 @@ impl GameState {
         // gfx_call_bp_with_front_buffer_as_screen.
         self.gfx_call_bp_with_front_buffer_as_screen(|s| s.results_draw_text_and_icones());
         // = seg000:b8fc call copy_game_rect_fb1_to_fb2.
-        let yoff = self.y_offset as i16;
-        let game_area = crate::rect::rect(0, yoff, 320, 152 + yoff);
-        crate::gfx::vga_copy_rect(&mut self.framebuffer_saved, &self.framebuffer, game_area);
+        self.copy_game_rect_fb1_to_fb2();
         // = seg000:b8ff..b912 the slide loop: restore fb1 from fb2, draw the
         // decorations at the current offset, present, step outward by 0x10
         // until the offset passes -0x6a.

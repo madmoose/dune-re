@@ -2047,6 +2047,9 @@ pub struct GameState {
     // ORNITHOPTER, seg000:42ff / seg000:50db). loc_04ec6 refines it into
     // hnm_active_video_id (the day/night flight HNM variants 2..5).
     pub(crate) travel_vehicle_mode: u16,
+    // = the VER.BIN blob worm_ride_setup loads over cs:015f, with
+    // worm_view_rect (seg001:aa66) and worm_script_cursor (seg001:aa6e).
+    pub(crate) worm_anim: Option<crate::worm_ride::WormAnim>,
 
     // = seg001:494c _dword_23DFC (the TABLAT entry-0 fp field) — the globe
     // rotation phase in 1/398ths of a revolution (0..397): the integer word
@@ -2926,6 +2929,7 @@ impl GameState {
             dialogue: Default::default(),
             map: Default::default(),
             tablat: None,
+            worm_anim: None,
             travel_vehicle_mode: 0,
             globe_rotation: 0,
             visible_location_markers: Vec::new(),
@@ -4818,6 +4822,14 @@ impl GameState {
         self.send_frame_to_display();
     }
 
+    // = seg000:c474 copy_game_rect_fb1_to_fb2 — snapshot the game-area rect
+    // (game_area_rect) from fb1 into fb2.
+    pub(crate) fn copy_game_rect_fb1_to_fb2(&mut self) {
+        let yoff = self.y_offset as i16;
+        let game_area = crate::rect::rect(0, yoff, 320, 152 + yoff);
+        self.gfx_copy_rect_fb1_to_fb2(game_area);
+    }
+
     // = seg000:c477 gfx_copy_rect_fb1_to_fb2 — copy `rect` from fb1 into fb2
     // (the clean scene backup), so a later fb2 restore keeps what was drawn.
     // An empty rect does nothing.
@@ -4828,6 +4840,12 @@ impl GameState {
         }
         // = seg000:c48a..c493 es = fb2, ds = fb1; vga_copy_rect.
         gfx::vga_copy_rect(&mut self.framebuffer_saved, &self.framebuffer, rect);
+    }
+
+    // = seg000:c49a gfx_copy_screen_to_framebuffer_1 — fb1 = the visible
+    // screen (vga_copy_screen with ds = the screen buffer, es = fb1).
+    pub(crate) fn gfx_copy_screen_to_framebuffer_1(&mut self) {
+        self.framebuffer.copy_from(&self.screen);
     }
 
     // = seg000:127c is_Gurney_Halleck_and_between_game_phases_15_and_20 — true

@@ -345,12 +345,31 @@ impl GameState {
         self.set_fb1_as_active_framebuffer();
         // = seg000:43a2 cmp map_ornithopter_mode,0; jnz loc_043cc.
         if self.map_ornithopter_mode == 0 {
-            // = seg000:43a9..43c9 the globe/worm-mode base: present the
-            //   framebuffer, snapshot it to fb2, flush the palette, draw the
-            //   nested border around the map window (loc_05b69, colour 0xfc)
-            //   and fill the title strip (data_014a4, colour 0xf5), then
-            //   present_game_area. TODO: port with CALL A WORM.
-            println!("map_screen_draw_base: globe-mode base not ported");
+            // = seg000:43a9..43ac ax = 24h (ORNYPAN); open_resource_by_index.
+            self.open_sprite_bank(sprite_bank::ORNYPAN);
+            // = seg000:43af..43b5 fb1 = the screen, snapshot it to fb2, flush
+            //   the palette.
+            self.gfx_copy_screen_to_framebuffer_1();
+            self.copy_active_framebuffer_to_framebuffer_2();
+            gfx::palette_flush(self);
+            // = seg000:43b9 call draw_map_view_border.
+            self.draw_map_view_border();
+            // = seg000:43bc..43c5 fill map_caption_rect with 0xf5 in the
+            //   active framebuffer.
+            let yoff = self.y_offset as i16;
+            let c = MAP_CAPTION_RECT;
+            let dest = self.active_fb();
+            gfx::vga_fill_rect(
+                self,
+                dest,
+                c.x0 as u16,
+                (c.y0 + yoff) as u16,
+                c.x1 as u16,
+                (c.y1 + yoff) as u16,
+                0xf5,
+            );
+            // = seg000:43c9 jmp present_game_area.
+            self.present_game_area();
             return;
         }
         // = seg000:43cc cmp night_attack_stage,0; jnz — the sky backdrop is
@@ -1670,7 +1689,7 @@ impl GameState {
         //   frame through hnm_present_flight_frame (from hnm_decode_video_
         //   frame, seg000:ccee); the port runs it after the frame advances.
         if self.hnm_do_frame() {
-            self.hnm_present_flight_frame();
+            self.hnm_present_decoded_frame();
         }
         // = seg000:4f27..4f31 one travel step every 0x300 ticks.
         let now = self.game_ticks() as u16;
@@ -2196,8 +2215,10 @@ impl GameState {
         // = seg000:3693..36a1 branch on the travel sub-mode.
         match self.game_screen_mode_flags & 3 {
             2 => {
-                // = seg000:36cb the worm-travel view (loc_04aeb +
-                //   copy_game_rect_fb1_to_fb2). TODO: port the worm cabin.
+                // = seg000:36cb call worm_view_redraw; 36ce call
+                //   copy_game_rect_fb1_to_fb2.
+                self.worm_view_redraw();
+                self.copy_game_rect_fb1_to_fb2();
             }
             1 => {
                 // = seg000:36a3/36a8 cockpit mode; a room render is pending.
@@ -2255,7 +2276,7 @@ impl GameState {
         //   hnm_present_flight_frame (seg000:ccee), which stamps the minimap.
         let id = self.travel_vehicle_mode;
         self.hnm_load_first_frame_by_id(id, 0);
-        self.hnm_present_flight_frame();
+        self.hnm_present_decoded_frame();
         // = seg000:3805 call [gfx_vtable_vga_save_palette_to_fade_target]; 3809
         //   jmp set_sky_palette.
         gfx::vga_save_palette_to_fade_target(self);
@@ -2469,6 +2490,31 @@ impl GameState {
         }
     }
 
+    // = seg000:ccea the flight clips' per-frame present dispatch inside
+    // hnm_decode_video_frame: resource flag bit 5 (DFL2.HNM, the worm ride)
+    // routes the decoded frame through worm_view_redraw (seg000:ccf1), bit 4
+    // (the MNT clips) through hnm_present_flight_frame.
+    pub(crate) fn hnm_present_decoded_frame(&mut self) {
+        if self.hnm_resource_data & 0x20 != 0 {
+            self.worm_view_redraw();
+        } else {
+            self.hnm_present_flight_frame();
+        }
+    }
+
+    // = seg000:4b2b travel_restore_minimap_rect — unless the minimap is
+    // hidden (travel_minimap_state bit 0x80), copy travel_minimap_restore_rect
+    // from the back buffer into fb1 (loc_0c46f). The loc_0dbca cursor-hide
+    // tail is the game_loop-driven cursor bracket in the port.
+    pub(crate) fn travel_restore_minimap_rect(&mut self) {
+        if self.travel_minimap_state >= 0 {
+            let yoff = self.y_offset as i16;
+            let r = TRAVEL_MINIMAP_RESTORE_RECT;
+            let src_rect = rect(r.x0, r.y0 + yoff, r.x1, r.y1 + yoff);
+            gfx::vga_copy_rect(&mut self.framebuffer, &self.framebuffer_back, src_rect);
+        }
+    }
+
     // = seg000:4afd hnm_present_flight_frame — the resource-flag bit 4
     // full-screen present the flight clips take after each decoded frame
     // (from hnm_decode_video_frame, seg000:ccee): restore the minimap rect
@@ -2477,17 +2523,8 @@ impl GameState {
         // = seg000:4afd cmp [suppress_sky_240_255],0; jnz — suppressed skips
         //   the minimap restore (hnm_blit_frame_to_screen).
         if self.data_0227d == 0 {
-            // = seg000:4b04 call travel_restore_minimap_rect (loc_04b2b):
-            //   unless the minimap is hidden (travel_minimap_state bit 0x80),
-            //   copy travel_minimap_restore_rect from the back buffer into
-            //   fb1 (loc_0c46f); the loc_0dbca cursor-hide tail is the
-            //   game_loop-driven cursor bracket in the port.
-            if self.travel_minimap_state >= 0 {
-                let yoff = self.y_offset as i16;
-                let r = TRAVEL_MINIMAP_RESTORE_RECT;
-                let src_rect = rect(r.x0, r.y0 + yoff, r.x1, r.y1 + yoff);
-                gfx::vga_copy_rect(&mut self.framebuffer, &self.framebuffer_back, src_rect);
-            }
+            // = seg000:4b04 call travel_restore_minimap_rect.
+            self.travel_restore_minimap_rect();
         }
         // = seg000:4b07..4b0f es = screen; si = fb1; vga_copy_partial — the
         //   game area fb1 -> screen (skipped while composing offscreen, like

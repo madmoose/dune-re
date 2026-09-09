@@ -4568,13 +4568,17 @@ impl GameState {
     }
 
     // = seg000:50ea menu_callback_choice_move_to_location_worm — GO THERE
-    // RIDING A WORM: the worm setup (loc_04285, CALL A WORM) is not ported.
+    // RIDING A WORM: the worm setup, then the shared confirm tail with the
+    // worm mode flag.
     pub(crate) fn menu_callback_choice_move_to_location_worm(
         &mut self,
         _text_id: u16,
         _index: usize,
     ) {
-        println!("GO THERE RIDING A WORM: the worm setup (loc_04285) is not ported");
+        // = seg000:50ea call worm_ride_setup.
+        self.worm_ride_setup();
+        // = seg000:50ed al = 8; falls into map_move_to_location_confirm.
+        self.map_move_to_location_confirm(8);
     }
 
     // = seg000:50ef map_move_to_location_confirm — the shared GO THERE tail:

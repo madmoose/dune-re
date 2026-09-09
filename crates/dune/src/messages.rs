@@ -426,9 +426,8 @@ impl GameState {
         // = seg000:25dd/25e0 the console lights up and the glow fades in.
         self.comm_show_incoming_call();
         self.comm_fade_in_glow();
-        // = seg000:25e3 gfx_copy_screen_to_framebuffer_1 — fb1 = the screen.
-        let screen = self.screen.pixels().to_vec();
-        self.framebuffer.pixels_mut().copy_from_slice(&screen);
+        // = seg000:25e3 call gfx_copy_screen_to_framebuffer_1 — fb1 = the screen.
+        self.gfx_copy_screen_to_framebuffer_1();
         // = seg000:25e6..25ec STARS.HSQ (its palette goes live).
         self.open_sprite_bank(sprite_bank::STARS);
         self.update_screen_palette();

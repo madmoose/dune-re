@@ -68,6 +68,7 @@ mod troop_map_screen;
 mod troops;
 mod ui_hud_head;
 mod voc;
+mod worm_ride;
 
 use std::{
     path::PathBuf,

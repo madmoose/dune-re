@@ -127,9 +127,11 @@ const CMD_SEE_DUNE_MAP: MenuItem =
     item(cmd::SEE_DUNE_MAP, 0x186b, |s, _, _| s.ui_toggle_room_view());
 // = seg001:2214 "CALL A WORM" — the worm-summon verb. Greyed until game_phase
 // >= 0x4f. Appears on plain rooms and on the night-attack sietch (dl==1).
-const CMD_CALL_A_WORM: MenuItem = item(cmd::CALL_A_WORM, 0x42d1, |_, _, _| {
-    println!("menu: CALL A WORM (seg000:42d1) not ported")
-});
+const CMD_CALL_A_WORM: MenuItem = item(
+    cmd::CALL_A_WORM,
+    0x42d1,
+    GameState::menu_callback_choice_call_a_worm,
+);
 // = seg001:2218 "MASSIVE ATTACK" — the first night-attack stage verb (special
 // room dl==1 with night_attack_stage != 0).
 const CMD_MASSIVE_ATTACK: MenuItem = item(cmd::MASSIVE_ATTACK, 0x7317, |_, _, _| {
