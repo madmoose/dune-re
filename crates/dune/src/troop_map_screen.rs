@@ -4174,13 +4174,15 @@ impl GameState {
         let class = self.location_class(li);
         println!("map_draw_location_popup: class={class:02x}");
         if class != 2 {
+            // = the pen y after the name (bx at seg000:603c).
+            let mut y = (ty + 9) as i16;
             if self.bitfield_paul_events & 0x20 != 0 && class == 0 {
-                // = seg000:6052 call location_0605c — the water/spice line;
-                //   niche late-game state, not ported. TODO.
-                println!("map_draw_location_popup: water/spice extra (loc_0605c) not ported");
+                // = seg000:6052 call map_draw_location_water_line — leaves bx
+                //   at the drop row.
+                y = self.map_draw_location_water_line(li, y);
             }
             // = seg000:6056 call loc_060ac — the equipment/battle section.
-            self.map_draw_location_equipment_or_battle(li);
+            self.map_draw_location_equipment_or_battle(li, y);
         }
         // = seg000:6059 jmp set_fb1_as_active_framebuffer.
         self.active_fb = saved;
@@ -4218,19 +4220,108 @@ impl GameState {
         true
     }
 
+    // = seg000:605c map_draw_location_water_line — the location popup's
+    // water line: "water:" then, with a wind trap, the water count and a row
+    // of drop icons fitted to the panel width; without one the NO WIND TRAP
+    // string. Returns the pen y DOS leaves in bx (the drop row).
+    fn map_draw_location_water_line(&mut self, li: usize, pen_y: i16) -> i16 {
+        // = seg000:605c call font_select_small_font.
+        self.font_select_small_font();
+        let panel = self.map_location_info_panel;
+        let r = panel.rect;
+        // = seg000:605f..606e cl = 90h; bx += 0ah; dx = x0 + 4; "water:".
+        let y = pen_y + 10;
+        self.font_draw_phrase_or_command_string_with_color_at_pos(
+            cmd::WATER,
+            panel.text_color(0x90),
+            (r.x0 + 4) as u16,
+            y as u16,
+        );
+        // = seg000:6071 al = water.
+        let water = self.locations[li].water;
+        // = seg000:607a test status,20h; jz loc_0609d — no wind trap.
+        if self.locations[li].status & 0x20 == 0 {
+            // = seg000:609d..60a9 the NO WIND TRAP string at (x0 + 0ah, bx + 7).
+            self.font_draw_phrase_or_command_string_with_color_at_pos(
+                cmd::NO_WIND_TRAP,
+                panel.text_color(0x90),
+                (r.x0 + 0x0a) as u16,
+                (y + 7) as u16,
+            );
+            return y + 7;
+        }
+        // = seg000:6083 call font_draw_number_byte — the count after the label.
+        self.font_draw_number_right_aligned(water as u16);
+        // = seg000:6088..6097 bx += 7; dx = x0 + 4; bp = x1; ax = sprite 75h;
+        //   cx = water; call draw_icon_row (bx restored by the push/pop).
+        let row_y = y + 7;
+        self.draw_icon_row(0x75, r.x0 + 4, row_y, water, r.x1);
+        row_y
+    }
+
+    // = seg000:617a draw_icon_row — draw `count` copies of `sprite` in a row
+    // from (x, y) up to `right`: step = width + 2 when the width per icon
+    // allows it, else (avail - step) / count with a floor of 2 (and then
+    // avail / 2 icons). Returns y + sprite height + 1. The horizontal twin of
+    // draw_equipment_column; draws with the active sprite bank, as DOS does.
+    fn draw_icon_row(&mut self, sprite: u16, x: i16, y: i16, count: u8, right: i16) -> i16 {
+        // = seg000:617a and cx,0ffh; jz ret — nothing to draw.
+        if count == 0 {
+            return y;
+        }
+        // = seg000:6184 get_subresource_ax_pointer_to_dssi — the sprite dims.
+        let (mut w, mut sh) = (0i16, 0i16);
+        self.with_active_bank_sheet(|_, sheet| {
+            if let Some(sp) = sheet.get_sprite(sprite) {
+                w = sp.width() as i16;
+                sh = sp.height() as i16;
+            }
+        });
+        if w == 0 {
+            return y;
+        }
+        // = seg000:6187..619d di = avail = right - x; bp = width + 2;
+        //   avail / count >= bp keeps the natural step.
+        let avail = right - x;
+        let step_full = w + 2;
+        let n = count as i16;
+        let (draw_n, step) = if avail / n >= step_full {
+            (n, step_full)
+        } else {
+            // = seg000:619f..61b3 di -= bp; bp = di / cx; under 2 → bp = 2 and
+            //   cx = di / 2.
+            let squeezed = avail - step_full;
+            let s = squeezed / n;
+            if s >= 2 { (n, s) } else { (squeezed / 2, 2) }
+        };
+        let draw_n = draw_n.max(1);
+        // = seg000:61b7..61c6 draw_sprite_clobbering_bx_dx per icon, dx += bp.
+        let clip = self.map_view_clip_rect();
+        let yoff = self.y_offset as i16;
+        let mut ix = x;
+        for _ in 0..draw_n {
+            self.with_active_bank_sheet(|s, sheet| {
+                s.draw_sprite_from_sheet_clipped(sheet, sprite, ix, y + yoff, clip);
+            });
+            ix += step;
+        }
+        // = seg000:61ca..61d1 bx += height + 1.
+        y + sh + 1
+    }
+
     // = seg000:60ac loc_060ac — the location panel's equipment-or-battle
     // section: a "Battle:" gauge when the location has active combat
     // (location_has_battle), else the "Equipment:" header + the location's
     // own equipment column row.
-    fn map_draw_location_equipment_or_battle(&mut self, li: usize) {
+    fn map_draw_location_equipment_or_battle(&mut self, li: usize, pen_y: i16) {
         self.open_onmap_spritesheet();
         self.font_select_tall_font();
         let panel = self.map_location_info_panel;
         let r = panel.rect;
         let x0 = (r.x0 + 4) as u16;
         // = seg000:60b8 bx += 0xc — the section sits a header-height below the
-        //   name; the port derives the pen from the panel top.
-        let y = (r.y0 + 4 + 9 + 0xc) as u16;
+        //   caller's pen (the name, or the water line's drop row).
+        let y = (pen_y + 0xc) as u16;
         if !self.location_has_battle(li) {
             // = seg000:60c3..60d3 "Equipment:" (colour 0x9a) then the
             //   location's own equipment counts (record +0x14), bottom = y1.

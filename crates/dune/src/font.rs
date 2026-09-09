@@ -293,8 +293,9 @@ impl GameState {
         self.font_draw_number_right_aligned(n);
     }
 
-    // = seg000:e297 — draw `n` as a 3-digit number via the  selected glyph func,
+    // = seg000:e297 — draw `n` as a 3-digit number via the selected glyph func,
     // blanking leading zeros to spaces.
+    // = seg000:e295 font_draw_number_byte — the byte entry (ax = al).
     pub fn font_draw_number_right_aligned(&mut self, n: u16) {
         // = seg000:e29b mov cx,64h; div cl — al = hundreds, ah = n % 100.
         let hundreds = (n / 100) as u8;
