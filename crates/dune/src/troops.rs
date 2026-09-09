@@ -1662,6 +1662,13 @@ pub(crate) struct LocationCondit {
     /// = seg001:0096 for_condit_fremen_strength_ds_96 — the summed battle
     /// strength of the location's Fremen troops.
     pub(crate) fremen_strength: u16,
+    /// = seg001:0098 for_condit_probably_number_of_Harkonnen_killed_during_
+    /// massive_attack_ds_98 — the Harkonnen strength the massive attack
+    /// removed (menu_callback_choice_massive_attack).
+    pub(crate) harkonnen_killed_ds_98: u16,
+    /// = seg001:009a for_condit_probably_number_of_Fremen_killed_during_
+    /// massive_attack_ds_9a — the Fremen strength the massive attack lost.
+    pub(crate) fremen_killed_ds_9a: u16,
     /// = seg001:009c for_condit_battle_balance_ds_9c — the strength ratio
     /// (condit_battle_balance): Fremen lose below 0x80, Harkonnen above.
     pub(crate) battle_balance: u8,
@@ -1683,6 +1690,8 @@ impl Default for LocationCondit {
             combined_dissatisfaction: 0,
             harkonnen_strength: 0,
             fremen_strength: 0,
+            harkonnen_killed_ds_98: 0,
+            fremen_killed_ds_9a: 0,
             battle_balance: 0,
         }
     }

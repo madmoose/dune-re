@@ -965,6 +965,9 @@ pub struct GameState {
     // next raid check; consumed (cleared) by actions_time_in_day_4
     // (seg000:1f83).
     pub(crate) harkonnen_raid_suppress_once: u8,
+    // = seg001:473a massive_attack_active — non-zero while the MASSIVE
+    // ATTACK verb runs; the night-attack sim reads its copy (byte_23bea).
+    pub(crate) massive_attack_active: u8,
 
     // = seg001:11bc data_011bc — scene flag set (|= 1) by the night-attack
     // branch of draw_room_game_screen.
@@ -2688,6 +2691,7 @@ impl GameState {
             vision_messages: Vec::new(),
             spice_shipment_unpaid: 0,
             harkonnen_raid_suppress_once: 0,
+            massive_attack_active: 0,
             data_011bc: 0,
 
             // = seg001:11bd/11bf both init dw 0aah (the log head lives in

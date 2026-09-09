@@ -212,6 +212,18 @@ impl AttackState {
         pal.copy_from(&self.screen.pal);
     }
 
+    // = seg001:473a massive_attack_active as the sim sees it (byte_23bea):
+    // menu_callback_choice_massive_attack sets and clears it.
+    pub(crate) fn set_massive_attack(&mut self, active: u8) {
+        self.byte_23bea = active;
+    }
+
+    // = seg001:485d night_attack_data + 7, the sky-flash timer:
+    // menu_callback_choice_massive_attack forces it to 0bh or 11h each round.
+    pub(crate) fn set_sky_flash_timer(&mut self, value: i8) {
+        self.timers.timer7.set(value);
+    }
+
     pub fn step_frame(&mut self) {
         self.night_attack_frame_task();
     }

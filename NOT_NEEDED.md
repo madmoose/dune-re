@@ -81,8 +81,6 @@ its own framebuffer and paces frames itself.
 - `seg000:d677 ui_element_release_redraw_unused` — unreferenced: redraw the HUD element ui_element_press_feedback recorded.
 - `seg000:5381 find_nearest_location_unused` — an unreferenced variant of iterate_over_locations_and_coordinates without the hidden-location test.
 - `seg000:53b6 find_nearest_fortress_unused` — an unreferenced variant of iterate_over_locations_and_coordinates restricted to fortresses.
-- `seg000:7419 callback_troop_location_07419` — an unreferenced variant of the attack callback's tail (occupation 6 -> location_battle_won, else the casualty roll).
-- `seg000:7516 callback_troop_07516` — unreferenced: troop_attack_take_losses for an attacking troop.
 - `seg000:6a6b loc_06a6b` — end the troop contact and clear the occupation bits; nothing references it.
 
 ## Memory management

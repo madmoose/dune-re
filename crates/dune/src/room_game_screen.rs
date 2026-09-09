@@ -134,9 +134,11 @@ const CMD_CALL_A_WORM: MenuItem = item(
 );
 // = seg001:2218 "MASSIVE ATTACK" — the first night-attack stage verb (special
 // room dl==1 with night_attack_stage != 0).
-const CMD_MASSIVE_ATTACK: MenuItem = item(cmd::MASSIVE_ATTACK, 0x7317, |_, _, _| {
-    println!("menu: MASSIVE ATTACK (seg000:7317) not ported")
-});
+const CMD_MASSIVE_ATTACK: MenuItem = item(
+    cmd::MASSIVE_ATTACK,
+    0x7317,
+    GameState::menu_callback_choice_massive_attack,
+);
 // = seg001:221c "FIGHT FOR A WHOLE DAY" — the second night-attack stage verb,
 // adjacent to CMD_MASSIVE_ATTACK.
 const CMD_FIGHT_FOR_A_WHOLE_DAY: MenuItem = item(cmd::FIGHT_FOR_A_WHOLE_DAY, 0x0fc5, |_, _, _| {

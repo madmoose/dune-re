@@ -71,6 +71,8 @@ fn condit_var_name(addr: u16) -> Option<(&'static str, bool)> {
         0x5e => ("location.combined_dissatisfaction", true),
         0x94 => ("location.harkonnen_strength", true),
         0x96 => ("location.fremen_strength", true),
+        0x98 => ("location.harkonnen_killed_ds_98", true),
+        0x9a => ("location.fremen_killed_ds_9a", true),
         0x9c => ("location.battle_balance", false),
         0xa2 => ("area_controlled_by_atreides", true),
         0xa4 => ("area_controlled_by_harkonnen", true),
@@ -357,6 +359,9 @@ impl GameState {
             0x5e => self.location_condit.combined_dissatisfaction,
             0x94 => self.location_condit.harkonnen_strength,
             0x96 => self.location_condit.fremen_strength,
+            // = seg001:0098/009a the massive attack's killed strengths.
+            0x98 => self.location_condit.harkonnen_killed_ds_98,
+            0x9a => self.location_condit.fremen_killed_ds_9a,
             // = seg001:0020 current_smuggler_bill_value_ds_20.
             0x20 => self.current_smuggler_bill_value_ds_20,
             // = seg001:00a0 spice_in_stock — the player's spice, in 10 kg

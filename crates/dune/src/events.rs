@@ -120,7 +120,16 @@ impl GameState {
         // = seg000:1b89 pop [subst_id_06].
         self.string_subst_id_table[6] = saved_subst;
 
-        // = seg000:1b8d loc_01b8d — the refresh tail.
+        // = seg000:1b8d falls into events_refresh_tail.
+        self.events_refresh_tail();
+    }
+
+    // = seg000:1b8d events_refresh_tail — the refresh tail after a
+    // time-period event run (also the massive attack's exit): the
+    // night-attack period step; a pending room-screen swap owns the next
+    // present; a dirty map view refreshes; then the room-redraw request:
+    // bit 7 = the full re-present, else non-zero = draw_room_game_screen.
+    pub(crate) fn events_refresh_tail(&mut self) {
         // = seg000:1b8d call loc_01bec — the night-attack period step.
         self.night_attack_period_step();
         // = seg000:1b90 a pending room-screen swap owns the next present.

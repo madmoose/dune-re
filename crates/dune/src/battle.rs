@@ -159,6 +159,85 @@ impl GameState {
         }
     }
 
+    // = seg000:7317 menu_callback_choice_massive_attack — the MASSIVE ATTACK
+    // night-attack verb: up to 16 rounds of the whole location fighting at
+    // once (one roll against the battle balance picks the round callback for
+    // all of them), the killed strengths into ds:98/9a for the dialogue,
+    // then 20 rounds of the night-attack sky flash forced to one of its two
+    // periods, and the scheduler's refresh tail.
+    pub(crate) fn menu_callback_choice_massive_attack(&mut self, _text_id: u16, _index: usize) {
+        // = seg000:7317 massive_attack_active = 1.
+        self.massive_attack_active = 1;
+        if let Some(attack) = self.attack.as_mut() {
+            attack.set_massive_attack(1);
+        }
+        let li = self.current_location_index as usize;
+        // = seg000:731c..732c stage the strengths; ds:98/9a = the strengths
+        //   before the fight.
+        self.condit_stage_location_strengths(li);
+        self.location_condit.harkonnen_killed_ds_98 = self.location_condit.harkonnen_strength;
+        self.location_condit.fremen_killed_ds_9a = self.location_condit.fremen_strength;
+        // = seg000:732f..733b rand; cmp al,[battle_balance]; the round
+        //   callback: below the balance the hit pass, else the loss pass.
+        let al = self.rand() as u8;
+        let hit = al < self.location_condit.battle_balance;
+        // = seg000:733e..735d up to 16 rounds: re-stage, run the pass over
+        //   the location's troops, stop once a side's staged strength is 0.
+        for _ in 0..16 {
+            self.condit_stage_location_strengths(li);
+            self.for_each_troop_in_location(li, |s, ti| {
+                if hit {
+                    s.callback_troop_massive_attack_hit(ti, li);
+                } else {
+                    s.callback_troop_massive_attack_loss(ti, li);
+                }
+            });
+            if self.location_condit.harkonnen_strength == 0
+                || self.location_condit.fremen_strength == 0
+            {
+                break;
+            }
+        }
+        // = seg000:735f..736c the strengths left come off ds:98/9a.
+        self.condit_stage_location_strengths(li);
+        self.location_condit.harkonnen_killed_ds_98 = self
+            .location_condit
+            .harkonnen_killed_ds_98
+            .wrapping_sub(self.location_condit.harkonnen_strength);
+        self.location_condit.fremen_killed_ds_9a = self
+            .location_condit
+            .fremen_killed_ds_9a
+            .wrapping_sub(self.location_condit.fremen_strength);
+        // = seg000:7370..738f 20 rounds: rand_masked(201h) — al picks the
+        //   sky-flash period 0bh / 11h, ah (0 or 2) pads the 28h-tick wait.
+        for _ in 0..20 {
+            let r = self.rand_masked(0x201);
+            let period: i8 = if r & 1 == 0 { 0x0b } else { 0x11 };
+            if let Some(attack) = self.attack.as_mut() {
+                attack.set_sky_flash_timer(period);
+            }
+            self.wait_interruptable(0x28 + ((r >> 8) & 0xff) as u64);
+        }
+        // = seg000:7391 massive_attack_active = 0; 7396 jmp events_refresh_tail.
+        self.massive_attack_active = 0;
+        if let Some(attack) = self.attack.as_mut() {
+            attack.set_massive_attack(0);
+        }
+        self.events_refresh_tail();
+    }
+
+    // = seg000:7419 callback_troop_massive_attack_hit — the massive attack's
+    // per-troop pass when the Fremen won the round's roll: an attacking
+    // troop (occupation 6) goes to location_battle_won, anyone else to
+    // attack_deal_casualties.
+    fn callback_troop_massive_attack_hit(&mut self, ti: usize, li: usize) {
+        if self.troops[ti].occupation == 6 {
+            self.location_battle_won(ti, li);
+        } else {
+            self.attack_deal_casualties(ti, li);
+        }
+    }
+
     // = seg000:7399 troop_make_occupation_military_training — occupation = 4.
     fn troop_make_occupation_military_training(&mut self, ti: usize) {
         self.troops[ti].occupation = 4;
@@ -441,6 +520,15 @@ impl GameState {
         }
         // = seg000:754e call location_battle_lost.
         self.location_battle_lost(li);
+    }
+
+    // = seg000:7516 callback_troop_massive_attack_loss — the massive attack's
+    // per-troop pass when the Fremen lost the round's roll: an attacking
+    // troop (occupation 6) takes losses.
+    fn callback_troop_massive_attack_loss(&mut self, ti: usize, li: usize) {
+        if self.troops[ti].occupation == 6 {
+            self.troop_attack_take_losses(ti, li);
+        }
     }
 
     // = seg000:7552 callback_troop_harkonnen_casualties — the attack hit's
