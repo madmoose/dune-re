@@ -757,13 +757,55 @@ impl GameState {
         // = seg000:be45..be4b small font; font_draw_phrase_list(ui_stats_
         // text).
         self.font_select_small_font();
-        for &(id, x, y, color) in &STATS_TEXT {
-            self.font_draw_phrase_or_command_string_with_color_at_pos(id, color, x, y);
-        }
+        self.font_draw_phrase_list(&STATS_TEXT);
         // = seg000:be4e..be54 add results_gauge_task (interval 0xc) and fall
         // through into its first run.
         self.add_frame_task(0xc, crate::TaskId::ResultsGauges);
         self.tick_results_gauges();
+    }
+
+    // = seg000:d1a6 font_draw_phrase_list — draw a (string id, x, y, colour)
+    // phrase list (0xffff-terminated in DOS) with font_draw_phrase_or_
+    // command_string_with_color_at_pos.
+    pub(crate) fn font_draw_phrase_list(&mut self, list: &[(u16, u16, u16, u16)]) {
+        for &(id, x, y, color) in list {
+            self.font_draw_phrase_or_command_string_with_color_at_pos(id, color, x, y);
+        }
+    }
+
+    // = seg000:bdbb globe_ornament_stats_redraw — the room view's globe
+    // ornament per-period stats redraw: the day/charisma header, the gauge
+    // targets refreshed, the stat strings; then every landed gauge is
+    // knocked down by one so the gauge task re-animates it. DOS returns
+    // before draw_mouse when the last gauge is still moving (the loopnz
+    // scan ends with ZF clear), leaving the cursor lifted; kept as is.
+    pub(crate) fn globe_ornament_stats_redraw(&mut self) {
+        // = seg000:bdbb cmp [globe_decoration_offset],0; jz ret.
+        if self.globe_decoration_offset == 0 {
+            return;
+        }
+        // = seg000:bdc2..bdcb.
+        self.set_screen_as_active_framebuffer();
+        self.call_restore_cursor();
+        self.ui_stats_draw_ingame_day_and_charisma();
+        self.results_update_gauge_targets();
+        // = seg000:bdce..bdd4 results_stats_timestamp = game_time & fff0.
+        self.results_stats_timestamp = self.game_time & 0xfff0;
+        // = seg000:bdd7..bddd small font; font_draw_phrase_list(ui_stats_text).
+        self.font_select_small_font();
+        self.font_draw_phrase_list(&STATS_TEXT);
+        // = seg000:bde0..bdf4 cmpsb / loopnz over the six gauges: a landed
+        //   gauge (equal bytes) is decremented; the scan running out on a
+        //   moving last gauge returns early.
+        for g in 0..6 {
+            if self.results_gauge_targets[g] == self.results_gauge_current[g] {
+                self.results_gauge_current[g] = self.results_gauge_current[g].wrapping_sub(1);
+            } else if g == 5 {
+                return;
+            }
+        }
+        // = seg000:bdf6 call draw_mouse.
+        self.draw_mouse();
     }
 
     // = seg000:bed7 results_update_gauge_targets — refresh the stats data:

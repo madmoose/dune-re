@@ -204,8 +204,10 @@ impl GameState {
         self.increase_motivation_for_all_active_troops(1);
         // = seg000:7460 or status,8.
         self.locations[li].status |= 8;
-        // = seg000:7464..746f data_0115a = 0x8000 rol first_name — a
-        //   write-only word in DOS (nothing reads it); not modelled.
+        // = seg000:7464..746f won_fortress_regions |= 8000h rol first_name
+        //   (bit first_name - 1); the map overlay open consumes it.
+        let cl = self.locations[li].first_name as u32;
+        self.won_fortress_regions = 0x8000u16.rotate_left(cl);
         // = seg000:7470/7473 callback_troop_after_battle_won over the
         //   location.
         self.for_each_troop_in_location(li, |s, tj| {

@@ -949,10 +949,10 @@ impl GameState {
             return;
         }
         // = seg000:1c39..1c42 the room view (data_046eb == 0) with the
-        //   map/globe ornament up (room_view_toggle bit 7): the globe-
-        //   ornament day/charisma stats redraw (loc_0bdbb). Not ported. TODO.
+        //   map/globe ornament up (room_view_toggle bit 7): call
+        //   globe_ornament_stats_redraw.
         if self.data_046eb == 0 && self.room_view_toggle & 0x80 != 0 {
-            println!("redraw_period_sensitive_view_content: globe stats (loc_0bdbb) not ported");
+            self.globe_ornament_stats_redraw();
         }
     }
 

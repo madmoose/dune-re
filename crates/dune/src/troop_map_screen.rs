@@ -402,6 +402,9 @@ impl GameState {
         // = seg000:547a..5497 the window content: MAP2's rows (res_map_seg
         //   swapped) with data_046eb = 0x40 so map_draw_zoomed_globe fills the
         //   row buffer without blitting, around the loc_0b69a position swap.
+        // = seg000:5484 call map_flip_won_regions (MAP2 is the current
+        //   resource).
+        self.map_flip_won_regions();
         let saved_046eb = std::mem::replace(&mut self.data_046eb, 0x40);
         self.map_overlay_swap_position();
         let map2 = self.map2.clone();

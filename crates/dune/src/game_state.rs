@@ -1402,6 +1402,10 @@ pub struct GameState {
     // dialogue-line-0x0d callback queues; the voice task plays it through the
     // player's PO bank once the spoken line drains (seg000:a789).
     pub(crate) chained_narration_clip: u16,
+    // = seg001:115a won_fortress_regions — bit k = region first_name k + 1
+    // of a fortress won (location_battle_won_for_fortress); consumed by
+    // map_flip_won_regions when the map overlay opens.
+    pub(crate) won_fortress_regions: u16,
 
     // Port-only stand-in for dune37s0.sav: the save image create_save_cl
     // writes at seg000:0029 (cl = 0xff, slot '0') right after init_game_ui.
@@ -2802,6 +2806,7 @@ impl GameState {
             hnm_lop_remaining: 0,
             voc_filename: *b"PF\\PF001I .VOC",
             chained_narration_clip: 0,
+            won_fortress_regions: 0,
             game_over_voc_index: 0x0fff,
             initial_game_image: None,
             music_cd_playlist: crate::music::MUSIC_CD_STANDARD_ORDER,

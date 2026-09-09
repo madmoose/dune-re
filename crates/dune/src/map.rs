@@ -120,6 +120,68 @@ impl GameState {
         }
     }
 
+    // = seg000:5584 map_flip_won_regions — take won_fortress_regions (bit k
+    // = region first_name k + 1): for each region where every location is
+    // Atreides-held, turn its Harkonnen zone cells into Atreides ones.
+    pub(crate) fn map_flip_won_regions(&mut self) {
+        // = seg000:5584..558c xor ax,ax; xchg ax,[won_fortress_regions]; jz.
+        let mut ax = std::mem::take(&mut self.won_fortress_regions);
+        if ax == 0 {
+            return;
+        }
+        // = seg000:5593..55b8 cl = 12 down: bl = 13 - cl, the bit's region.
+        for cl in (1..=12u8).rev() {
+            let bit = ax & 1;
+            ax >>= 1;
+            if bit == 0 {
+                continue;
+            }
+            let bl = 13 - cl;
+            // = seg000:559f..55b1 the region's locations: one that is not
+            //   Atreides-held ends the region (jnb loc_055b6).
+            let all_atreides = (0..self.locations.len())
+                .filter(|&li| self.locations[li].first_name == bl)
+                .all(|li| self.location_is_atreides(li));
+            if all_atreides {
+                // = seg000:55b3 call map_region_zone_to_atreides.
+                self.map_region_zone_to_atreides(bl);
+            }
+        }
+    }
+
+    // = seg000:55c0 map_region_zone_to_atreides — for every location of
+    // region `bl`, flip its spice field's zone; region 7 also flips field
+    // 0x42.
+    fn map_region_zone_to_atreides(&mut self, bl: u8) {
+        for li in 0..self.locations.len() {
+            if self.locations[li].first_name == bl {
+                let field = self.locations[li].spice_field_id;
+                self.map_field_zone_to_atreides(field);
+            }
+        }
+        // = seg000:55d5..55da al = 42h; cmp bl,7; jz map_field_zone_to_atreides.
+        if bl == 7 {
+            self.map_field_zone_to_atreides(0x42);
+        }
+    }
+
+    // = seg000:55dd map_field_zone_to_atreides — for every MAP2 cell holding
+    // spice field `field` (0 = none), turn a Harkonnen zone on the MAP (bits
+    // 5-4 == 0x30) into an Atreides one (0x20).
+    fn map_field_zone_to_atreides(&mut self, field: u8) {
+        if field == 0 {
+            return;
+        }
+        // = seg000:55e2..5601 repnz scasb over MAP2 (the current resource);
+        //   each hit patches the MAP byte at the same offset.
+        let n = self.map.len().min(self.map2.len());
+        for i in 0..n {
+            if self.map2[i] == field && self.map[i] & 0x30 == 0x30 {
+                self.map[i] &= 0xef;
+            }
+        }
+    }
+
     // = seg000:644e location_stamp_atreides_zone_on_map — bits 5-4 = 0x20 on
     // the disc of radius discoverable_at_phase around the location.
     pub(crate) fn location_stamp_atreides_zone_on_map(&mut self, li: usize) {

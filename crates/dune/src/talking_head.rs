@@ -198,6 +198,11 @@ const SAMPLES_PER_LIP_FRAME: u64 = 28224 / 32; // = 882
 pub struct TalkingHead {
     /// Portrait sprite sheet (e.g. LETO.HSQ).
     pub sheet: SpriteSheet,
+    /// = the sheet's sprite slots 0..4 as head_sign_patch_digit_sprites
+    /// rewrote them (DOS patches the resource's offset table in place): the
+    /// digit glyph sprite each slot now shows. None until a digit sign is
+    /// raised.
+    pub sign_digit_sprites: Option<[u16; 5]>,
     /// Parsed lip-sync data (last resource of `sheet`).
     pub lipsync: Lipsync,
 
@@ -271,11 +276,35 @@ pub struct TalkingHead {
 }
 
 impl TalkingHead {
+    /// The sprite to draw for image id `id` (already 0-based): a digit sign
+    /// redirects slots 0..4 to their digit glyphs.
+    pub(crate) fn sprite_id(&self, id: u16) -> u16 {
+        match self.sign_digit_sprites {
+            Some(digits) if (id as usize) < digits.len() => digits[id as usize],
+            _ => id,
+        }
+    }
+
     /// Number of ambient (idle) animations — every animation except the last,
     /// which is the speech lip-id table.
     fn idle_anim_count(&self) -> usize {
         self.lipsync.animations.len().saturating_sub(1).max(1)
     }
+}
+
+// = seg000:8a23 split_decimal_digits — a value's five decimal digits:
+// ten-thousands, thousands, hundreds, tens, units.
+fn split_decimal_digits(value: u16) -> [u8; 5] {
+    // = seg000:8a23..8a2a bl = ax / 10000; 8a2c..8a3a the rest by 100 and
+    //   two aam splits.
+    let v = value as u32;
+    [
+        (v / 10000) as u8,
+        (v / 1000 % 10) as u8,
+        (v / 100 % 10) as u8,
+        (v / 10 % 10) as u8,
+        (v % 10) as u8,
+    ]
 }
 
 impl GameState {
@@ -483,9 +512,8 @@ impl GameState {
         if self.head_sign_state & 0x80 == 0 {
             // = seg000:9abd or [data_047e1],80h — mark it raised.
             self.head_sign_state |= 0x80;
-            // = seg000:9ac2 call loc_09b09 — for a digit-sprite sign (string id
-            //   >= 0x38) this patches the number's digits into the portrait
-            //   resource. Not ported; the text signs below need nothing.
+            // = seg000:9ac2 call head_sign_patch_digit_sprites.
+            self.head_sign_patch_digit_sprites();
             // = seg000:9ac5..9ad3 bp = data_047e2; si = the animation it names;
             //   data_047ce = 0x14 — a 20-frame window to hold the sign up.
             let anim = (self.head_sign_anim / 2) as usize;
@@ -829,6 +857,7 @@ impl GameState {
 
         self.talking_head = Some(TalkingHead {
             sheet,
+            sign_digit_sprites: None,
             lipsync,
             lip_sync_resource_id: lip_sync_resource_id as u16,
             // = seg000:9123 character_id_to_sprite(al) = the returned head/sprite-pair index
@@ -1423,6 +1452,43 @@ impl GameState {
         self.draw_mouse_cursor_if_needed_then_present();
     }
 
+    // = seg000:9b09 head_sign_patch_digit_sprites — a digit-sprite sign
+    // (string id >= 0x38): the value (0x38: the smuggler's bill, else the
+    // CONDIT smuggler byte) split into five digits, and the portrait sheet's
+    // sprite slots 0..4 redirected to the digit glyphs: sprite 6 + digit, or
+    // sprite 5 (blank) for a leading zero.
+    fn head_sign_patch_digit_sprites(&mut self) {
+        // = seg000:9b09..9b10 si = [data_047e4]; cmp word ptr [si],38h; jb ret.
+        let Some(row) = self.head_sign_record.and_then(|i| HEAD_SIGN_TABLE.get(i)) else {
+            return;
+        };
+        if row.string_id < 0x38 {
+            return;
+        }
+        // = seg000:9b12..9b1a ax = the bill for id 38h (the cmp's ZF), else
+        //   al = for_condit_smuggler_dialogue_related_ds_9d.
+        let value = if row.string_id == 0x38 {
+            self.current_smuggler_bill_value_ds_20
+        } else {
+            self.for_condit_smuggler_dialogue_related_ds_9d as u16
+        };
+        // = seg000:9b1c call split_decimal_digits.
+        let digits = split_decimal_digits(value);
+        // = seg000:9b21..9b46 per digit: bp = 5 until a non-zero digit, then
+        //   6; the slot takes sprite bp + digit.
+        let mut bp = 5u16;
+        let mut slots = [0u16; 5];
+        for (slot, &d) in slots.iter_mut().zip(digits.iter()) {
+            if d != 0 {
+                bp = 6;
+            }
+            *slot = bp + d as u16;
+        }
+        if let Some(head) = self.talking_head.as_mut() {
+            head.sign_digit_sprites = Some(slots);
+        }
+    }
+
     // = seg000:a7a5 lip_sync_stop — stop any active voice LIP-SYNC and starve
     // the voice stream: remove the voc frame task, drop the mouth stream and
     // flip the TALK TO ME verb to its idle text. While a voice is marked
@@ -1587,7 +1653,7 @@ impl GameState {
             };
             for image in group {
                 // = seg000:9d2d: sprite index is id-1.
-                if let Some(sprite) = sheet.get_sprite(image.id as u16 - 1) {
+                if let Some(sprite) = sheet.get_sprite(head.sprite_id(image.id as u16 - 1)) {
                     let _ = sprite_blitter(sprite, &mut self.framebuffer)
                         .at(image.x as i16 + x0, image.y as i16 + y0 + yoff)
                         .clip_rect(clip)
@@ -1646,7 +1712,7 @@ impl GameState {
             };
             for image in group {
                 // = seg000:9dcf: the sprite index is id - 1.
-                if let Some(sprite) = sheet.get_sprite(image.id as u16 - 1) {
+                if let Some(sprite) = sheet.get_sprite(head.sprite_id(image.id as u16 - 1)) {
                     let _ = sprite_blitter(sprite, &mut self.screen)
                         .at(image.x as i16 + dx, image.y as i16 + dy)
                         .clip_rect(clip)
@@ -1712,7 +1778,7 @@ impl GameState {
         {
             // = seg000:9cc6 loc_09cc6: the image spans [left, left+w) × [top, top+h), with
             // the sprite header's width (&1ffh) and height (low byte).
-            let Some(sprite) = head.sheet.get_sprite(id as u16 - 1) else {
+            let Some(sprite) = head.sheet.get_sprite(head.sprite_id(id as u16 - 1)) else {
                 continue;
             };
             let left = x as i16 + rx0;
@@ -1785,7 +1851,7 @@ impl GameState {
             // new frame, clipped to the changed box.
             let head = self.talking_head.as_ref().unwrap();
             for &(id, x, y) in &cur {
-                if let Some(sprite) = head.sheet.get_sprite(id as u16 - 1) {
+                if let Some(sprite) = head.sheet.get_sprite(head.sprite_id(id as u16 - 1)) {
                     let _ = sprite_blitter(sprite, &mut self.framebuffer)
                         .at(x as i16 + rx0, y as i16 + ry0 + yoff)
                         .clip_rect(clip)
