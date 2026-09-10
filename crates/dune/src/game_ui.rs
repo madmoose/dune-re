@@ -995,7 +995,8 @@ impl GameState {
             return;
         }
         // = seg000:1a16 call call_restore_cursor — restore the cursor-covered
-        // pixels before redrawing under it. TODO: port the cursor save/restore.
+        // pixels before redrawing under it.
+        self.call_restore_cursor();
         // = seg000:1a19 push [2784]; 1a1d open_icones_spritesheet — the sun/moon and
         // frieze sprites live in ICONES; keep the previous bank to restore.
         let prev = self.open_icones_spritesheet();
@@ -1058,7 +1059,7 @@ impl GameState {
         self.sky_fade_active = false;
         // = seg000:18e3..18ea the staged night attack is torn down (loc_00b21).
         if self.night_attack_stage != 0 {
-            println!("ui_teardown_room_view: night-attack teardown (loc_00b21) not ported");
+            self.clear_night_attack();
         }
     }
 
@@ -1116,26 +1117,31 @@ impl GameState {
         //   (cx -= 5): ui_elements[19..24] are the game-area hotspot (20), the two
         //   person buttons (21/22) and the book button (23), so only the panel and
         //   the command strip stay clickable beneath the overlay.
-        //
-        // TODO: seg000:d6cf the pending_room_screen_request != 0 branch (cx = 5,
-        //   di = ui_elements[7]) that restricts the test to the five command slots
-        //   during a room swap is not modelled — the port's room swap is itself
-        //   stubbed, so honouring it here could strand clicks while it stays set.
-        let end = if std::ptr::eq(self.active_mouse_handlers, &MIXER_MOUSE_HANDLERS) {
-            self.ui_elements.len() - 5
+        // = seg000:d6cf cmp pending_room_screen_request,0; jz — with a room-
+        //   screen request pending or applied (apply_pending_room_screen_request
+        //   leaves 0x80 behind until a restart / load drains it) only the five
+        //   command slots (cx = 5, di = ui_elements[7]) are tested, so the
+        //   game-over verbs stay the only live controls.
+        let (start, end) = if self.pending_room_screen_request != 0 {
+            (7, 12)
+        } else if std::ptr::eq(self.active_mouse_handlers, &MIXER_MOUSE_HANDLERS) {
+            (0, self.ui_elements.len() - 5)
         } else {
-            self.ui_elements.len()
+            (0, self.ui_elements.len())
         };
         // = seg000:d6dc the test loop, one 0eh-byte record per pass.
-        self.ui_elements[..end].iter().position(|e| {
-            // = seg000:d6dc test [di+8],80h — only clickable records (`jns` skips).
-            e.flags & 0x80 != 0
+        self.ui_elements[start..end]
+            .iter()
+            .position(|e| {
+                // = seg000:d6dc test [di+8],80h — only clickable records (`jns` skips).
+                e.flags & 0x80 != 0
                 // = seg000:d6e2..d6f4 rect test: x strict on both sides, y
                 // strict at the top but inclusive at the bottom (dec bx; cmp
                 // bx,[di+6]; inc bx; jb).
                 && e.x0 < x && x < e.x1
                 && e.y0 < y && y <= e.y1
-        })
+            })
+            .map(|i| start + i)
     }
 
     // = seg000:d93e call word ptr [di+0ch] — invoke the matched

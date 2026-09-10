@@ -6,10 +6,11 @@
 //!
 //! Mirrors the contiguous DOS block seg000:1011..123d (the callbacks and the
 //! dispatcher) with the helpers it calls from further afield (seg000:26da,
-//! 29ee..2a50, 40ae, 6f78). Still stubbed: start_scripted_dialogue
-//! (seg000:1771, the cutscene_game_phase_* byte scripts), the troop-system
-//! effects (motivation, the phase-0x64 location scan), the palace-plan
-//! locked-door icon-list truncation, and the string substitution table.
+//! 29ee..2a50, 40ae, 6f78). The scripted scenes run through
+//! sequence.rs (start_scripted_dialogue, seg000:1771). Still stubbed: the
+//! troop-system effects (motivation, the phase-0x64 location scan), the
+//! palace-plan locked-door icon-list truncation, and the string substitution
+//! table.
 
 use crate::{
     GameState, cmd,
@@ -288,9 +289,9 @@ impl GameState {
     fn phase_callback_0c(&mut self) {
         self.scene_records[7].exits[1] &= 0x7f;
         self.scene_records[6].exits[3] &= 0x7f;
-        // = seg000:1039 word [data_0121d] = 0xffff — truncate the
-        //   _stru_206BB_icon_list at its sprite-5 record (the locked-door
-        //   overlay icons). TODO: that icon list is not modelled.
+        // = seg000:1039 word [_stru_206BB_icon_list[3]] = 0xffff — the
+        //   PALACE PLAN icon list ends before its sprite-5 label.
+        self.palace_plan_icon_count = self.palace_plan_icon_count.min(3);
         // = seg000:103f ax = cutscene_game_phase_0c_dialogue; jmp
         //   start_scripted_dialogue — the communication-room gather scene
         //   (Leto and Jessica take turns; sequence.rs).
@@ -353,8 +354,9 @@ impl GameState {
     // east exit, drop a locked-door icon, refresh the compass arrows.
     fn phase_callback_1c(&mut self) {
         self.scene_records[6].exits[1] &= 0x7f;
-        // = seg000:10a9 word [data_01217] = 0xffff — the icon-list truncation
-        //   (see phase_callback_0c). TODO: not modelled.
+        // = seg000:10a9 word [_stru_206BB_icon_list[2]] = 0xffff — the PALACE
+        //   PLAN icon list ends before its sprite-4 label.
+        self.palace_plan_icon_count = self.palace_plan_icon_count.min(2);
         // = seg000:10af jmp rebuild_and_draw_room_nav_panel.
         self.rebuild_and_draw_room_nav_panel();
     }
@@ -449,8 +451,8 @@ impl GameState {
     fn phase_callback_48_met_chani(&mut self) {
         self.increase_charisma(0x0a);
         // = seg000:113e ax = cutscene_game_phase_48_dialogue (seg000:1313);
-        //   call start_scripted_dialogue. TODO: unported (seg000:1771).
-        println!("phase_callback_48_met_chani: start_scripted_dialogue unported");
+        //   call start_scripted_dialogue.
+        self.start_scripted_dialogue(&crate::sequence::SCRIPT_PHASE_48);
         // = seg000:1144..114b room_persons[7].flags = (flags | 0x10) & ~0x02.
         let rp = &mut self.room_persons[7];
         rp.flags = (rp.flags | NPC_STORY_BIT) & !NPC_DETACH_ON_TRAVEL;
@@ -492,8 +494,9 @@ impl GameState {
     // icon, refresh the compass arrows.
     fn phase_callback_54_greenhouse(&mut self) {
         self.scene_records[10].exits[1] &= 0x7f;
-        // = seg000:118d word [data_01211] = 0xffff — the icon-list truncation
-        //   (see phase_callback_0c). TODO: not modelled.
+        // = seg000:118d word [_stru_206BB_icon_list[1]] = 0xffff — the PALACE
+        //   PLAN icon list ends before its sprite-3 label.
+        self.palace_plan_icon_count = self.palace_plan_icon_count.min(1);
         // = seg000:1193 jmp rebuild_and_draw_room_nav_panel.
         self.rebuild_and_draw_room_nav_panel();
     }
@@ -503,23 +506,24 @@ impl GameState {
     // the map.
     fn phase_callback_58_met_liet_kynes(&mut self) {
         self.bitfield_paul_events |= 0x20;
-        // = seg000:119b ax = 0x12fb (cutscene_game_phase_58_dialogue); call
-        //   start_scripted_dialogue. TODO: unported (seg000:1771).
-        println!("phase_callback_58_met_liet_kynes: start_scripted_dialogue unported");
+        // = seg000:119b ax = cutscene_game_phase_58_dialogue (seg000:12fb);
+        //   call start_scripted_dialogue.
+        self.start_scripted_dialogue(&crate::sequence::SCRIPT_PHASE_58);
         // = seg000:11a1 si = array_pointers_locations_found_by_meeting_Liet_
         //   Kynes.
         self.mark_locations_discovered(&[63, 60, 61, 67, 65]);
     }
 
     // = seg000:11b3 callback_game_phase_change_5c — Liet Kynes moves to room
-    // 5, spice-mining pressure rises, and a day+3 deadline is armed.
+    // 5, the full location popup grows, the base worm likelihood rises, and a
+    // day+3 deadline is armed.
     fn phase_callback_5c(&mut self) {
         // = seg000:11b3 room_persons[6].location_and_room low byte = 5.
         let rp = &mut self.room_persons[6];
         rp.location_and_room = (rp.location_and_room & 0xff00) | 5;
-        // = seg000:11b8 add byte [data_011d0], 0x0c — a byte of the region
-        //   table read at seg000:5f15 (troop events). TODO: not modelled.
-        println!("phase_callback_5c: seg000:5f15 pressure bump unported");
+        // = seg000:11b8 add byte [troop_icon_panel_heights], 0x0c — the
+        //   full-class location popup grows 12 rows (the illness readout).
+        self.troop_icon_panel_heights[0] = self.troop_icon_panel_heights[0].wrapping_add(0x0c);
         // = seg000:11c6 inc byte [array_likelihood_of_worm_related_...] —
         //   raise the base worm-event probability.
         self.worm_event_likelihood_by_region[0] =

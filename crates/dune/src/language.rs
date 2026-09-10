@@ -109,9 +109,22 @@ impl GameState {
         }
     }
 
-    // = seg000:cfa0 check_amr_or_eng_language.
+    // = seg000:cfa0 check_amr_or_eng_language — with digital sound present
+    // and the language English (0) or American (3), voiced lines default to
+    // subtitle mode 2 (voice_subtitle_mode and its default).
     pub(crate) fn check_amr_or_eng_language(&mut self) {
-        // TODO: = seg000:cfa0.
+        // = seg000:cfa0 call check_pcm_enabled; jz ret.
+        if !self.check_pcm_enabled() {
+            return;
+        }
+        // = seg000:cfa5..cfae al = language_setting; 0 or 3 continue.
+        let al = self.language_setting;
+        if al != 0 && al != 3 {
+            return;
+        }
+        // = seg000:cfb0..cfb5.
+        self.voice_subtitle_mode = 2;
+        self.voice_subtitle_mode_default = 2;
     }
 
     // = seg000:cfe4 settings_ui_reload_language — reload the language-dependent

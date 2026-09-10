@@ -416,8 +416,8 @@ impl GameState {
     // byte != 0x80) every compass click steps the desert position. The two
     // desert paths meet in the desert-position dispatch (loc_03ff5 ->
     // desert_position_dispatch).
-    // The create_save_cl autosave hooks (cl=2/3) are stubbed: the save system
-    // is not ported (see start()).
+    // The create_save_cl autosave hooks (cl=2/3) write slots 2 and 3 unless
+    // headless.
     pub(crate) fn ui_click_move_room(&mut self, direction: usize) {
         // = seg000:3f28
         self.dismiss_stacked_menus();

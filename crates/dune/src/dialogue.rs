@@ -21,11 +21,11 @@
 //! Both the talk verb and the room-leave auto-dialogue scan share the DOS
 //! present routine present_first_matching_dialogue_line (seg000:9f9e): the
 //! entry walk + per-entry condition, the talking-head setup, the spoken-line
-//! event callbacks + spoken mark + dialogue-played log, and the voice `.voc`
-//! playback are ported. Still stubbed: the subtitle text (draw_subtitle_body
-//! and the whole phrase/text engine) and the multi-part text continuation
-//! (dialogue_text_continuation, armed by the interpolator's sentence
-//! separators and consumed by the talk verb's loc_094dd branch).
+//! event callbacks + spoken mark + dialogue-played log, the voice `.voc`
+//! playback, the subtitle text (subtitle.rs) and the multi-part text
+//! continuation (dialogue_text_continuation, armed by the interpolator's
+//! sentence separators and consumed by the talk verb's loc_094dd branch) are
+//! ported.
 
 use std::io::Cursor;
 
@@ -217,13 +217,14 @@ impl GameState {
         if (self.room_render_flags as i8) < 0 {
             return;
         }
-        // = seg000:3b0a ax = current_lip_sync_resource_id. The special-room
-        // person (al == 0x0f) adds data_0476c to pick its character_*_table slot.
-        let id = self.current_lip_sync_resource_id;
+        // = seg000:3b0a ax = current_lip_sync_resource_id. A Fremen-2 speaker
+        // (al == 0x0f) adds selected_fremen2_index to pick its
+        // character_*_table slot (sal_draw_character recorded the anchors at
+        // id - 0x0f + selected_fremen2).
+        let mut id = self.current_lip_sync_resource_id;
         if id as u8 == 0x0f {
-            // = seg000:3b11 add al,[data_0476c]. TODO: data_0476c (the special-
-            // room slot offset) is not modelled; the simple person handlers never
-            // reach id 0x0f, so this branch is currently unreached.
+            // = seg000:3b11 add al,[selected_fremen2_index].
+            id = (id & 0xff00) | (id as u8).wrapping_add(self.selected_fremen2) as u16;
         }
         // = seg000:3b15 di = id*4; dx = character_x_table[id]; bx =
         // character_y_table[id] (the [47f8h]/[47fah] anchors sal_draw_character
@@ -512,9 +513,13 @@ impl GameState {
         //   entry (set_dialogue_speaker points it at index person_index).
         let speaker = self.current_lip_sync_resource_id as usize;
         // = seg000:954c call NPC_is_Chani_during_game_phase_5d_find_ill_troops_
-        //   at_her_location; 9551 Chani_troop_illness_cure_progress += 0x10 —
-        //   the game-phase-0x5d Chani illness-cure special. TODO: port with the
-        //   troop system.
+        //   at_her_location; jnb; 9551 Chani_troop_illness_cure_progress +=
+        //   0x10 — leaving Chani at a sietch with an ill troop during phase
+        //   0x5d advances the cure.
+        if self.chani_parked_at_ill_location(speaker).is_some() {
+            self.chani_troop_illness_cure_progress =
+                self.chani_troop_illness_cure_progress.wrapping_add(0x10);
+        }
         // = seg000:9556 falls through into npc_clear_travelling.
         self.npc_clear_travelling(speaker);
     }
@@ -1206,16 +1211,7 @@ impl GameState {
         //   present tail so each part still re-presents the head and plays its
         //   voice.
         if self.dialogue_text_continuation.is_none() {
-            // let b0: u8;
-            // let b2: u8;
-            // todo!();
-            let (b0, b2) = (
-                // todo()
-                // self.byte(entry_offset).unwrap_or(0),
-                // self.byte(entry_offset + 2).unwrap_or(0),
-                self.dialogue[entry_offset],
-                self.dialogue[entry_offset + 2],
-            );
+            let (b0, b2) = (self.dialogue[entry_offset], self.dialogue[entry_offset + 2]);
             // = seg000:a049..a05d — dispatch the event callback (al = [si] &
             //   0x0f; 0 = none) via the table at seg000:a107.
             let event = b0 & 0x0f;

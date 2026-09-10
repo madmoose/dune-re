@@ -45,14 +45,50 @@ const ICON_LIST_CHANI_AFTER_TIME_SKIP: [(u16, i16, i16); 1] = [(0, 0x4e, 0x21)];
 // (26, 4), the kiss close-up.
 const ICON_LIST_CHANKISS: [(u16, i16, i16); 1] = [(1, 0x1a, 4)];
 
-// = seg000:128f cutscene_game_phase_C8_dialogue — the game-won script.
+// The person ids the [speaker] and cast-marker bytes name (room_persons
+// order): 0 Leto, 1 Jessica, 2 Thufir, 3 Duncan, 4 Gurney, 5 Stilgar,
+// 6 Liet Kynes, 7 Chani, 8 Harah, 9 the Baron, 0x0a Feyd, 0x0b the Emperor,
+// 0x0f a Fremen (the selected_fremen2 slot), 0xff an empty slot.
+
+// = seg000:128f cutscene_game_phase_C8_dialogue — the game-won script: the
+// throne room with everyone gathered, four rounds of lines, then the final
+// room (action 9, which re-reads a room/cast block), the FINAL.HSQ scene and
+// the credits. The 0xff inside the second cast list is an empty slot, not
+// the end of the script.
 #[rustfmt::skip]
-pub(crate) static SCRIPT_GAME_WON: [u8; 61] = [
-    0x00, 0x02, 0x10, 0x03, 0x01, 0x07, 0x02, 0x04, 0x05, 0x0f, 0x0f, 0x0f, 0x0f, 0x0f, 0x0f,
-    0x0f, 0x0a, 0x0b, 0x09, 0x08, 0x02, 0x04, 0x04, 0x08, 0x02, 0x0b, 0x02, 0x03, 0x02, 0x02,
-    0x02, 0x0b, 0x02, 0x02, 0x04, 0x08, 0x02, 0x05, 0x02, 0x09, 0x02, 0x07, 0x02, 0x0a, 0x04,
-    0x08, 0x02, 0x05, 0x02, 0x0b, 0x02, 0x02, 0x02, 0x02, 0x01, 0x12, 0x02, 0x10, 0x03, 0x01,
-    0xff,
+pub(crate) static SCRIPT_GAME_WON: [u8; 76] = [
+    SCRIPT_SET_ROOM, 2, 16,                  // show room 2, cast:
+    0x03, 0x01, 0x07, 0x02, 0x04, 0x05,      //   Duncan, Jessica, Chani, Thufir, Gurney, Stilgar,
+    0x0f, 0x0f, 0x0f, 0x0f, 0x0f, 0x0f, 0x0f, //   seven Fremen,
+    0x0a, 0x0b, 0x09,                        //   Feyd, the Emperor, the Baron
+    SCRIPT_WAIT,                             // wait for the Continue click
+    SCRIPT_SPEAKER_LINE, 4,                  // Gurney
+    SCRIPT_REDRAW,
+    SCRIPT_WAIT,                             // wait
+    SCRIPT_SPEAKER_LINE, 0x0b,               // the Emperor
+    SCRIPT_SPEAKER_LINE, 3,                  // Duncan
+    SCRIPT_SPEAKER_LINE, 2,                  // Thufir
+    SCRIPT_SPEAKER_LINE, 0x0b,               // the Emperor
+    SCRIPT_SPEAKER_LINE, 2,                  // Thufir
+    SCRIPT_REDRAW,
+    SCRIPT_WAIT,                             // wait
+    SCRIPT_SPEAKER_LINE, 5,                  // Stilgar
+    SCRIPT_SPEAKER_LINE, 9,                  // the Baron
+    SCRIPT_SPEAKER_LINE, 7,                  // Chani
+    SCRIPT_SPEAKER_LINE, 0x0a,               // Feyd
+    SCRIPT_REDRAW,
+    SCRIPT_WAIT,                             // wait
+    SCRIPT_SPEAKER_LINE, 5,                  // Stilgar
+    SCRIPT_SPEAKER_LINE, 0x0b,               // the Emperor
+    SCRIPT_SPEAKER_LINE, 2,                  // Thufir
+    SCRIPT_SPEAKER_LINE, 1,                  // Jessica
+    SCRIPT_ENDING_ROOM, 2, 16,               // the final room 2 (action 9 reads the block), cast:
+    0x03, 0x01, 0xff, 0x02, 0x04, 0x05,      //   Duncan, Jessica, -, Thufir, Gurney, Stilgar,
+    0x0f, 0x0f, 0x0f, 0x0f, 0x0f, 0x0f, 0x0f, //   seven Fremen,
+    0x0a, 0x0b, 0x09,                        //   Feyd, the Emperor, the Baron
+    SCRIPT_WAIT,                             // wait
+    SCRIPT_FINAL_SCENE,
+    SCRIPT_ENDING_CREDITS,
 ];
 
 // = seg000:12f8 cutscene_game_phase_below_14_dialogue.
@@ -93,27 +129,112 @@ pub(crate) static SCRIPT_PHASE_0C: [u8; 46] = [
     SCRIPT_END,
 ];
 
-// = seg000:134f cutscene_game_phase_14_dialogue.
+// = seg000:1313 cutscene_game_phase_48_dialogue — the met-Chani scene
+// phase_callback_48_met_chani starts: Chani speaks, the clock runs to the
+// afternoon, the kiss close-up, and after a redraw Chani, Stilgar and Chani
+// again.
+#[rustfmt::skip]
+pub(crate) static SCRIPT_PHASE_48: [u8; 14] = [
+    SCRIPT_SPEAKER_LINE, 7,                  // Chani
+    SCRIPT_TIME_SKIP,
+    SCRIPT_CHANI_KISS,
+    SCRIPT_REDRAW,
+    SCRIPT_SPEAKER_LINE, 7,                  // Chani
+    SCRIPT_CHANI_KISS,
+    SCRIPT_TIME_SKIP,
+    SCRIPT_SPEAKER_LINE, 5,                  // Stilgar
+    SCRIPT_SPEAKER_LINE, 7,                  // Chani
+    SCRIPT_END,
+];
+
+// = seg000:12fb cutscene_game_phase_58_dialogue — the met-Liet-Kynes scene
+// phase_callback_58_met_liet_kynes starts: room 2 with persons 5, 7 and 6
+// standing, then the lines alternate between persons 7, 6 and 5 around one
+// redraw + wait.
+#[rustfmt::skip]
+pub(crate) static SCRIPT_PHASE_58: [u8; 24] = [
+    SCRIPT_SET_ROOM, 2, 3,                   // show room 2, cast:
+    5, 7, 6,                                 //   Stilgar, Chani, Liet Kynes
+    SCRIPT_WAIT,                             // wait for the Continue click
+    SCRIPT_SPEAKER_LINE, 7,                  // Chani
+    SCRIPT_SPEAKER_LINE, 6,                  // Liet Kynes
+    SCRIPT_SPEAKER_LINE, 7,                  // Chani
+    SCRIPT_SPEAKER_LINE, 5,                  // Stilgar
+    SCRIPT_SPEAKER_LINE, 6,                  // Liet Kynes
+    SCRIPT_REDRAW,
+    SCRIPT_WAIT,                             // wait
+    SCRIPT_SPEAKER_LINE, 7,                  // Chani
+    SCRIPT_SPEAKER_LINE, 6,                  // Liet Kynes
+    SCRIPT_END,
+];
+
+// = seg000:134f cutscene_game_phase_14_dialogue — the phase-0x14 vision
+// scene: Jessica and Leto talk, then room 5 with Duncan and Harah joining.
 #[rustfmt::skip]
 static SCRIPT_PHASE_14: [u8; 33] = [
-    0x02, 0x01, 0x02, 0x00, 0x02, 0x01, 0x04, 0x08, 0x02, 0x00, 0x00, 0x05, 0x04, 0x00, 0x01,
-    0x03, 0x08, 0x08, 0x02, 0x00, 0x02, 0x03, 0x02, 0x00, 0x02, 0x08, 0x04, 0x08, 0x02, 0x00,
-    0x02, 0x00, 0xff,
+    SCRIPT_SPEAKER_LINE, 1,                  // Jessica
+    SCRIPT_SPEAKER_LINE, 0,                  // Leto
+    SCRIPT_SPEAKER_LINE, 1,                  // Jessica
+    SCRIPT_REDRAW,
+    SCRIPT_WAIT,                             // wait for the Continue click
+    SCRIPT_SPEAKER_LINE, 0,                  // Leto
+    SCRIPT_SET_ROOM, 5, 4,                   // show room 5, cast:
+    0x00, 0x01, 0x03, 0x08,                  //   Leto, Jessica, Duncan, Harah
+    SCRIPT_WAIT,                             // wait
+    SCRIPT_SPEAKER_LINE, 0,                  // Leto
+    SCRIPT_SPEAKER_LINE, 3,                  // Duncan
+    SCRIPT_SPEAKER_LINE, 0,                  // Leto
+    SCRIPT_SPEAKER_LINE, 8,                  // Harah
+    SCRIPT_REDRAW,
+    SCRIPT_WAIT,                             // wait
+    SCRIPT_SPEAKER_LINE, 0,                  // Leto
+    SCRIPT_SPEAKER_LINE, 0,                  // Leto
+    SCRIPT_END,
 ];
 
-// = seg000:1370 cutscene_game_phase_18_dialogue.
+// = seg000:1370 cutscene_game_phase_18_dialogue — the phase-0x18 scene:
+// Jessica, then room 10 with Stilgar and Leto; Stilgar and Leto talk, the
+// room is re-shown without Leto standing and he speaks as the silent head.
 #[rustfmt::skip]
 static SCRIPT_PHASE_18: [u8; 34] = [
-    0x02, 0x01, 0x00, 0x0a, 0x03, 0x01, 0x05, 0x00, 0x08, 0x02, 0x05, 0x02, 0x05, 0x02, 0x00,
-    0x02, 0x05, 0x04, 0x08, 0x02, 0x05, 0x02, 0x01, 0x00, 0x0a, 0x02, 0x01, 0x05, 0x06, 0x00,
-    0x08, 0x02, 0x00, 0xff,
+    SCRIPT_SPEAKER_LINE, 1,                  // Jessica
+    SCRIPT_SET_ROOM, 10, 3,                  // show room 10, cast:
+    0x01, 0x05, 0x00,                        //   Jessica, Stilgar, Leto
+    SCRIPT_WAIT,                             // wait for the Continue click
+    SCRIPT_SPEAKER_LINE, 5,                  // Stilgar
+    SCRIPT_SPEAKER_LINE, 5,                  // Stilgar
+    SCRIPT_SPEAKER_LINE, 0,                  // Leto
+    SCRIPT_SPEAKER_LINE, 5,                  // Stilgar
+    SCRIPT_REDRAW,
+    SCRIPT_WAIT,                             // wait
+    SCRIPT_SPEAKER_LINE, 5,                  // Stilgar
+    SCRIPT_SPEAKER_LINE, 1,                  // Jessica
+    SCRIPT_SET_ROOM, 10, 2,                  // re-show room 10, cast:
+    0x01, 0x05,                              //   Jessica, Stilgar
+    SCRIPT_SET_SPEAKER, 0,                   // speaker = Leto, no line
+    SCRIPT_WAIT,                             // wait
+    SCRIPT_SPEAKER_LINE, 0,                  // Leto
+    SCRIPT_END,
 ];
 
-// = seg000:12db cutscene_game_phase_30_dialogue.
+// = seg000:12db cutscene_game_phase_30_dialogue — the phase-0x30 war
+// council in room 2: Jessica, Thufir, Gurney, Stilgar and Chani.
 #[rustfmt::skip]
 static SCRIPT_PHASE_30: [u8; 29] = [
-    0x00, 0x02, 0x05, 0x01, 0x02, 0x04, 0x05, 0x07, 0x02, 0x02, 0x02, 0x01, 0x02, 0x02, 0x02,
-    0x07, 0x02, 0x05, 0x04, 0x08, 0x02, 0x04, 0x02, 0x02, 0x02, 0x01, 0x02, 0x02, 0xff,
+    SCRIPT_SET_ROOM, 2, 5,                   // show room 2, cast:
+    0x01, 0x02, 0x04, 0x05, 0x07,            //   Jessica, Thufir, Gurney, Stilgar, Chani
+    SCRIPT_SPEAKER_LINE, 2,                  // Thufir
+    SCRIPT_SPEAKER_LINE, 1,                  // Jessica
+    SCRIPT_SPEAKER_LINE, 2,                  // Thufir
+    SCRIPT_SPEAKER_LINE, 7,                  // Chani
+    SCRIPT_SPEAKER_LINE, 5,                  // Stilgar
+    SCRIPT_REDRAW,
+    SCRIPT_WAIT,                             // wait for the Continue click
+    SCRIPT_SPEAKER_LINE, 4,                  // Gurney
+    SCRIPT_SPEAKER_LINE, 2,                  // Thufir
+    SCRIPT_SPEAKER_LINE, 1,                  // Jessica
+    SCRIPT_SPEAKER_LINE, 2,                  // Thufir
+    SCRIPT_END,
 ];
 
 impl GameState {
@@ -153,8 +274,8 @@ impl GameState {
         self.is_dialogue_active = true;
         // = seg000:177e call suspend_game_clock.
         self.suspend_game_clock();
-        // = seg000:1781 call loc_0ad5e — the room music refresh (update_room_
-        //   music). Not ported.
+        // = seg000:1781 call update_room_music (loc_0ad5e).
+        self.update_room_music();
         // = seg000:1784..178b data_04776 = (location_and_room low, data_046e0)
         //   — what the teardown puts back.
         self.sequence_saved_scene = (self.location_and_room as u8, self.data_046e0);
@@ -552,8 +673,8 @@ impl GameState {
         self.is_dialogue_active = false;
         // = seg000:174b..1752 the music fade, skipped in phase 0x48.
         if self.game_phase != PHASE_48_CHANI_MET {
-            // = seg000:1752 call midi_begin_song_fade_out. The port's music
-            //   layer has no fade-out entry point yet. TODO.
+            // = seg000:1752 call midi_begin_song_fade_out.
+            self.midi_begin_song_fade_out();
         }
         // = seg000:1755 call reset_game_suspend.
         self.reset_game_suspend();

@@ -538,9 +538,8 @@ pub struct GameState {
     pub(crate) discovered_sietch_count: u8,
 
     // = seg001:0028 number_of_rallied_troops — how many Fremen troops have
-    // been rallied to the Atreides cause. The troop system that maintains it
-    // (troop_rally_troop_066ce) is not yet ported, so it only changes if set
-    // externally; CONDIT conditions (e.g. Leto's early-game mission lines)
+    // been rallied to the Atreides cause. troop_rally_troop (seg000:66ce)
+    // bumps it; CONDIT conditions (e.g. Leto's early-game mission lines)
     // read it.
     pub(crate) number_of_rallied_troops: u8,
 
@@ -940,8 +939,9 @@ pub struct GameState {
 
     // = seg001:1178 number_of_rallied_troops_for_Leto_being_killed — the
     // rallied-troop threshold armed by the phase-0x48 (met Chani) callback
-    // (rallied + 2); 0xff (the static value) = not armed. Its reader (the
-    // Leto-killed event pump) is not yet ported.
+    // (rallied + 2); 0xff (the static value) = not armed. troop_rally_troop
+    // (seg000:66e0) compares the new rally count against it and advances the
+    // story to phase 0x4c when reached.
     pub(crate) number_of_rallied_troops_for_leto_killed: u8,
 
     // = seg001:118d ingame_day_of_last_spice_shipment_event — the day the
@@ -1642,6 +1642,17 @@ pub struct GameState {
     // home panel origin: (75, 15) at start, moved by the panel drag
     // (map_main_mouse_drag) and persisted in the save game.
     pub(crate) map_overlay_home_pos: (i16, i16),
+
+    // = seg001:11d0 troop_icon_panel_heights — the location popup panel
+    // heights by location_popup_class (0 full, 1 battle, 2 header-only);
+    // phase_callback_5c grows the full panel by 12 rows.
+    pub(crate) troop_icon_panel_heights: [u8; 3],
+
+    // = seg001:120b _stru_206BB_icon_list — how many of the PALACE PLAN icon
+    // entries are live: 4 at the start; the phase 0x0c / 0x1c / 0x54
+    // callbacks write the 0xffff terminator over entry 3 / 2 / 1, dropping
+    // the locked-door labels as the doors open.
+    pub(crate) palace_plan_icon_count: u8,
     // = seg001:4723 map_overlay_drag_armed — nonzero while a click on the
     // overlay panel title strip is dragging the panel.
     pub(crate) map_overlay_drag_armed: bool,
@@ -2028,9 +2039,9 @@ pub struct GameState {
     // (seg000:89d3/8a3b/8ac6, unported) tests its 0x10 flag.
     pub(crate) dialogue_line_word0: u16,
 
-    // = seg001:47e0 data_047e0 — the voiced-line random variant index
-    // (format_interpolated_string's rand & 3 tail); its reader (the voc
-    // suffix pick) is not yet ported.
+    // = seg001:47e0 data_047e0 — the voiced-line variant index
+    // (format_interpolated_string's rand & 3 tail, or the number-derived
+    // pick); create_voc_file_name ORs it into the variant letter.
     pub(crate) data_047e0: u8,
 
     // = seg001:47e1/47e2 data_047e1 — the speaker's "hold up a sign" overlay,
@@ -2881,6 +2892,8 @@ impl GameState {
             map_equipment_troop_column_x_ranges: [(0, 0); 7],
             map_overlay_panel_pos: (0, 0),
             map_overlay_home_pos: (75, 15),
+            troop_icon_panel_heights: [0x58, 0x3c, 0x1e],
+            palace_plan_icon_count: 4,
             map_overlay_drag_armed: false,
             map_overlay_panel_rect: Rect::default(),
             prospector_pick_queue: [0; 4],
@@ -3094,9 +3107,8 @@ impl GameState {
 
     // = seg000:0000 start (the startup sequence after parse_command_line /
     // initialize_system / initialize_resources). Plays the intro and credits,
-    // sets up the in-game UI, enters the room view (ui_enter_room_view) and
-    // starts the game clock (reset_game_suspend). play_intro2's WORMSUIT
-    // cutscenes and game_loop are not ported yet.
+    // sets up the in-game UI, enters the room view (ui_enter_room_view),
+    // starts the game clock (reset_game_suspend) and runs game_loop.
     //
     // `skip_intro` is a port-only convenience (no DOS equivalent): when set it
     // jumps straight to the in-game UI, skipping the intro/credits/intro2.
@@ -3137,8 +3149,7 @@ impl GameState {
         // caller but the CLI) leaves the music state untouched.
         self.apply_pending_music_mode();
 
-        // = seg000:001e mov [game_time], 2 — start the in-game clock at 2 (the
-        // PIT game-clock ISR that advances it is not ported yet).
+        // = seg000:001e mov [game_time], 2 — start the in-game clock at 2.
         self.game_time = 2;
 
         // = seg000:0024 call init_game_ui (loc_00083).

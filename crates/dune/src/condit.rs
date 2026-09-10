@@ -198,8 +198,7 @@ impl GameState {
             // location has been discovered (bumped by seg000:426f).
             0x27 => self.discovered_sietch_count,
             // = seg001:0028 number_of_rallied_troops — conditions 4/5/7 gate
-            // early-game Leto lines on it. The troop-rally system that bumps
-            // it is not yet ported.
+            // early-game Leto lines on it (bumped by troop_rally_troop).
             0x28 => self.number_of_rallied_troops,
             // = seg001:0029 charisma.
             0x29 => self.charisma,

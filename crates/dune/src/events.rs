@@ -201,7 +201,7 @@ impl GameState {
             //   redraw the room.
             self.call_restore_cursor();
             self.room_redraw_request = 0;
-            self._clear_night_attack();
+            self.clear_night_attack();
             self.draw_room_game_screen();
             return;
         }
@@ -264,9 +264,9 @@ impl GameState {
         self.accumulate_harkonnen_spice_production();
         // = seg000:1ca0 call recompute_condit_statistics (loc_0c02e).
         self.recompute_condit_statistics();
-        // = seg000:1ca3 call loc_0bf26 — re-format the stats percentage
-        //   strings (the globe-ornament stats display). Not ported (with its
-        //   reader, loc_0bdbb). TODO.
+        // = seg000:1ca3 call results_update_percent_strings — re-format the
+        //   stats percentage strings the globe ornament / SEE RESULTS show.
+        self.results_update_percent_strings();
         // = seg000:1ca6..1cd7 the smuggler restock: each smuggler with
         //   field_2 bit 3 refills empty stock slots whose price byte has bit
         //   7 with two rolled-in bits of one rand() word (0..3 units), the
@@ -407,20 +407,22 @@ impl GameState {
         }
         // = seg000:1da7/1daa si = room_persons[7]; the phase-5d ill-troop
         //   check; jb -> the cure step.
-        if let Some(li) = self.chani_parked_at_ill_location() {
+        if let Some(li) = self.chani_parked_at_ill_location(7) {
             self.chani_troop_cure_progress_step(li);
         }
     }
 
     // = seg000:1e01 NPC_is_Chani_during_game_phase_5d_find_ill_troops_at_her_
-    // location — during phase 0x5d, when room_persons[7] is Chani parked at a
-    // location (location_slot low byte 0x80), pin her to room 2 there and
-    // return the location if it houses an ill troop (the DOS carry).
-    fn chani_parked_at_ill_location(&mut self) -> Option<usize> {
+    // location — during phase 0x5d, when room_persons[npc] is Chani parked at
+    // a location (location_slot low byte 0x80), pin her to room 2 there and
+    // return the location if it houses an ill troop (the DOS carry). si is
+    // room_persons[7] from the event pump and the active speaker's entry from
+    // STAY HERE (seg000:954c).
+    pub(crate) fn chani_parked_at_ill_location(&mut self, npc: usize) -> Option<usize> {
         if self.game_phase != PHASE_5D_CURING_ILLNESS {
             return None;
         }
-        let p = self.room_persons[7];
+        let p = self.room_persons[npc];
         // = seg000:1e08 cmp npc->person_index,7 — Chani.
         if p.person_index != 7 {
             return None;
@@ -432,7 +434,7 @@ impl GameState {
         }
         // = seg000:1e16 npc->location_and_room low byte = 2 — she works from
         //   room 2.
-        self.room_persons[7].location_and_room = (p.location_and_room & 0xff00) | 2;
+        self.room_persons[npc].location_and_room = (p.location_and_room & 0xff00) | 2;
         // = seg000:1e1b..1e22 di = the 1-based location record, falling into
         //   location_does_location_house_an_ill_troop. (An out-of-table index
         //   — the 0x7f80 reset value — reads garbage in DOS; the port skips.)
@@ -1007,7 +1009,7 @@ impl GameState {
     // = seg000:1c18 redraw_period_sensitive_view_content — refresh the view
     // content showing period-dependent numbers: on the full map view the
     // open troop info panel and location popup; in the room view with the
-    // globe ornament up, the day/charisma stats (loc_0bdbb, unported).
+    // globe ornament up, the day/charisma stats (globe_ornament_stats_redraw).
     pub(crate) fn redraw_period_sensitive_view_content(&mut self) {
         // = seg000:1c18/1c1d the data_046eb routing: bit 7 = the full map.
         if self.data_046eb & 0x80 != 0 {
@@ -1054,7 +1056,7 @@ impl GameState {
         // = seg000:1c06..1c12 once the stage cleared: drop the attack task
         //   (loc_00b21) and request the room redraw (data_0473b bit 0).
         if self.night_attack_stage == 0 {
-            self._clear_night_attack();
+            self.clear_night_attack();
             self.room_redraw_request |= 1;
         }
     }

@@ -405,24 +405,6 @@ impl GameState {
         self.palette.apply_palette_update(bytes).unwrap() as u16
     }
 
-    // = seg000:c202 sprite_center_coords
-    fn sprite_center_coords(&self, sprite_id: u16, center_x: &mut i16, center_y: &mut i16) {
-        todo!();
-        // let Some(sheet) = self.bank.as_ref() else {
-        //     return;
-        // };
-
-        // let Some(sprite) = sheet.get_sprite(sprite_id) else {
-        //     return;
-        // };
-
-        // let width = sprite.width();
-        // let height = sprite.height();
-
-        // *center_x = center_x.saturating_sub_unsigned(width / 2);
-        // *center_y = center_y.saturating_sub_unsigned(height / 2);
-    }
-
     // Draw a sprite into the active framebuffer at logical (x, y). The
     // destination y is shifted by `self.y_offset` to mirror how DOS segvga
     // blits auto-apply `fb_base_ofs`. Used by the intro stage 11 icon list.

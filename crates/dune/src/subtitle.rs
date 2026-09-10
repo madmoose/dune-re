@@ -16,10 +16,11 @@
 //! Deviations, all documented in place: the mode-0 strip renders and
 //! outlines in the backbuffer like DOS, but composites into fb1 immediately
 //! (DOS defers to the head-present chain, seg000:9025 — same pixels,
-//! different plumbing; the seg000:908c head-render re-stamp is ported); the
-//! map-troop (data_046eb) and book (data_000c6) special backgrounds are
-//! TODO. A top-level sentence separator (terminator != 0xff) arms the
-//! multi-part continuation TALK TO ME resumes (loc_094dd).
+//! different plumbing; the seg000:908c head-render re-stamp is ported). The
+//! map-troop (data_046eb, subtitle_draw_troop_popup_background) and book
+//! (data_000c6, the BOOK.HSQ ruled page) backgrounds are ported. A top-level
+//! sentence separator (terminator != 0xff) arms the multi-part continuation
+//! TALK TO ME resumes (loc_094dd).
 
 use crate::{GameState, Rect, gfx};
 
@@ -621,13 +622,22 @@ impl GameState {
         //   default 9 has 8 = centre vertically; the mode-0 strip's 1 = top).
         let pen_x = rect.x0 as u16 + self.subtitle_pad_left;
         let mut pen_y = rect.y0 as u16 + self.subtitle_pad_top;
-        let line_h = 10u16;
+        // = seg000:8b2f data_0479a = 10 — the line advance.
+        let mut line_h = 10u16;
         let height_budget =
             (rect.y1 - rect.y0) as u16 - self.subtitle_pad_top - self.subtitle_pad_bottom;
         let total_h = lines.len() as u16 * line_h;
         match self.subtitle_layout_flags & 0x0c {
-            // = seg000:8b3c..8b53 flags 4: spread the lines over the budget.
-            // Only the book layout uses it; line spacing stays 10 here. TODO.
+            // = seg000:8b3c..8b64 flags 4 (the book page): spread the lines
+            //   over the budget — the advance becomes (budget - 8) / (lines -
+            //   1); a single line sits half of (budget - 8) down instead.
+            0x04 => {
+                let ax = height_budget.saturating_sub(8);
+                match lines.len() as u16 {
+                    0 | 1 => pen_y += ax / 2,
+                    n => line_h = ax / (n - 1),
+                }
+            }
             0x08 => {
                 // = seg000:8b66..8b7e centre vertically (leftover / 2).
                 pen_y += height_budget.saturating_sub(total_h) / 2;

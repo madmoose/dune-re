@@ -157,32 +157,27 @@ impl Midi {
         (self.shared.status.load(Ordering::Relaxed) & 0x40) != 0
     }
 
-    // = seg000:de0c midi_wait_until — block until current song position >= target.
-    // Returns false on user-input interrupt (currently always true; ESC plumbing TODO).
-    // Position formula matches midi_wait_until at seg000:de20:
+    // = seg000:de0c midi_wait_until, the position test — true once the
+    // current song position has reached `target`, or when nothing is playing
+    // (seg000:de0c..de11 midi_status sign clear returns at once). The
+    // interruptible wait loop around it is GameState::midi_wait_until.
+    // Position formula (seg000:de20):
     //   (_word_2D07E_midi_measure << 4) | (((0x60 - _word_2D080_midi_ticks_remaining) / 6) & 0xf)
-    pub fn midi_wait_until(&self, target: u16) -> bool {
+    pub fn midi_position_reached(&self, target: u16) -> bool {
         if !self.initialized || target == 0 {
             return true;
         }
+        let status = self.shared.status.load(Ordering::Relaxed);
+        let measure = self.shared.measure.load(Ordering::Relaxed);
+        let tick = self.shared.tick.load(Ordering::Relaxed);
 
-        loop {
-            let status = self.shared.status.load(Ordering::Relaxed);
-            let measure = self.shared.measure.load(Ordering::Relaxed);
-            let tick = self.shared.tick.load(Ordering::Relaxed);
+        let delta = 0x60u16.wrapping_sub(tick) / 6;
+        let pos = (measure << 4) | (delta & 0xf);
 
-            let delta = 0x60u16.wrapping_sub(tick) / 6;
-            let pos = (measure << 4) | (delta & 0xf);
-
-            if target <= pos {
-                return true;
-            }
-            if (status & 0x80) == 0 {
-                // Playback has stopped — don't block forever.
-                return true;
-            }
-            thread::sleep(Duration::from_millis(1));
-        }
+        // = seg000:de3d cmp bx,dx; jbe reached.
+        target <= pos
+            // Playback has stopped — don't block forever.
+            || (status & 0x80) == 0
     }
 
     // = seg000:ad57 play_music_MORNING_HSQ.

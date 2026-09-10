@@ -301,7 +301,7 @@ impl GameState {
                 gfx::vga_set_fb_row(self, 24);
 
                 // = seg000:05a3 midi_wait_until(unk0) — wait for pre-load music sync point.
-                if !self.midi.midi_wait_until(stage.wait_init) {
+                if !self.midi_wait_until(stage.wait_init) {
                     return;
                 }
 
@@ -332,7 +332,7 @@ impl GameState {
                 self.remove_room_frame_task();
 
                 // = seg000:05c4 midi_wait_until(midi) — wait for post-load music sync point.
-                if !self.midi.midi_wait_until(stage.wait_play) {
+                if !self.midi_wait_until(stage.wait_play) {
                     return;
                 }
 
@@ -1708,6 +1708,23 @@ impl GameState {
     // press. ESC additionally latches intro_skip_to_game (kb_esc_was_hit, set by
     // any_key_pressed's kb_check_for_esc_key_hit) so the whole sequence skips
     // into the game; a non-ESC key or the mouse only ends the current phase.
+    // = seg000:de0c midi_wait_until — block until the song position reaches
+    // `target` (Midi::midi_position_reached) or until any_key_pressed
+    // (seg000:de42) reports input; true = reached, false = interrupted (the
+    // DOS carry). Frames keep ticking while it waits, as the intro's other
+    // waits do.
+    pub(crate) fn midi_wait_until(&mut self, target: u16) -> bool {
+        loop {
+            if self.midi.midi_position_reached(target) {
+                return true;
+            }
+            if self.intro_input_pressed() {
+                return false;
+            }
+            self.tick_one_frame();
+        }
+    }
+
     pub(crate) fn intro_input_pressed(&mut self) -> bool {
         if self.any_key_pressed() {
             // = seg000:de54 kb_check_for_esc_key_hit (run inside any_key_pressed):

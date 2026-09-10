@@ -109,8 +109,9 @@ impl GameState {
         self.open_sprite_bank(sprite_bank::PALPLAN);
         // = seg000:192d si=_stru_206BB_icon_list; draw_icons_list_at_si — the plan
         //   base bitmap (sprite 0 at the origin) and the three labels.
+        let live = (self.palace_plan_icon_count as usize).min(PALACE_PLAN_ICONS.len());
         self.with_active_bank_sheet(|s, sheet| {
-            s.draw_icons_list_at_si(&PALACE_PLAN_ICONS, sheet);
+            s.draw_icons_list_at_si(&PALACE_PLAN_ICONS[..live], sheet);
         });
         // = seg000:1933 call iterate_over_all_npcs_and_draw_population — stamp
         //   the per-room population markers.

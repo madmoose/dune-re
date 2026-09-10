@@ -4341,8 +4341,10 @@ impl GameState {
         // = seg000:5eec/5ef1 the class + its panel height [class+11d0h].
         let class = self.location_class(li);
         self.map_location_popup_class = class + 1;
-        const HEIGHTS: [i16; 4] = [88, 60, 30, 0];
-        let h = HEIGHTS[(class as usize).min(3)];
+        let h = self
+            .troop_icon_panel_heights
+            .get(class as usize)
+            .map_or(0, |&h| h as i16);
         // = seg000:5f1b..5f23 the marker position; bh sign-bit off-window bail.
         if m.y < 0 {
             return false;
@@ -4635,7 +4637,9 @@ impl GameState {
     ) {
         let xlat = self.build_spice_density_xlat();
         let r = self.map_view_rect;
-        crate::gfx::vga_draw_landscape(self, rows, width, height, r.x0, r.y0, top_lat, &xlat);
+        // = seg000:58ed mov bh,[map_overlay_mode].
+        let bh = self.map_overlay_mode;
+        crate::gfx::vga_draw_landscape(self, rows, width, height, r.x0, r.y0, top_lat, &xlat, bh);
     }
 
     // = seg000:81d7 map_overlay_route_append_point — append one route point

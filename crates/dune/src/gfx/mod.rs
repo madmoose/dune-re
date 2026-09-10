@@ -50,13 +50,18 @@ pub fn palette_flush(state: &mut GameState) {
     state.screen_pal = state.palette.clone();
 }
 
-// = segvga:0bdc palette_cycle_water — rotate the 64-entry water palette by one
-// entry and flush DAC entries 128..191. DOS runs it from blit_water_ripple; the
-// port's ripple (blit_fb1_to_screen_effect 0x0a) skips the cycling, so this is
-// not wired in yet.
-#[allow(dead_code)]
-pub fn palette_cycle_water(_state: &mut GameState) {
-    todo!("segvga:0bdc palette_cycle_water")
+// = segvga:0bdc palette_cycle_water — rotate the 64 water entries of the live
+// palette (palette_cache + 128*3 = cs:073f, entries 128..191) left by one and
+// write them straight to the DAC (dac_write bx = 0x80, cx = 0x40), bypassing
+// the dirty-flag flush. blit_water_ripple runs it once per pass.
+pub fn palette_cycle_water(state: &mut GameState) {
+    // = segvga:0bea..0bf5 lodsw + [si] hold entry 128; 63 entries slide down
+    //   one slot; the held entry lands in slot 191.
+    state.palette.as_mut_slice()[128..192].rotate_left(1);
+    // = segvga:0bf7..0bfd dac_write — the DAC takes the 64 entries now.
+    for i in 128..192 {
+        state.screen_pal.set(i, state.palette.get(i));
+    }
 }
 
 // = segvga:0c06 vga_set_fb_row — set `fb_base_ofs` (the per-blit destination y
@@ -528,20 +533,27 @@ pub fn vga_blit_shaded(
     }
 }
 
-// = segvga:2441 vga_draw_landscape / segvga:24ad landscape_row_bh0 (gfx_vtable_vga_draw_landscape, the BH = 0
-// plain-remap path) — render the map row buffer (`rows`, stride 0xc8) to the
-// active framebuffer at (x0, y0) through the 256-entry palette-remap table
-// `xlat`. Interior-only: a pixel is drawn only when it equals BOTH its
-// right-hand neighbour and the pixel one row below (segvga:24bb..24c4; the
-// last column, past the dec cx at segvga:24ba, compares the below neighbour
-// only, segvga:24d1), so only the inside of each same-valued region takes its
-// colour and the borders come out as the backdrop 0x70 — that is what gives
-// the spice-density overlay its blobby fields. `top_lat` is the top row's
-// latitude: rows at |latitude| >= 0x46 are trimmed on both sides by the same
-// map_globe_edge_insets curve as vga_blit_shaded (loc_segvga_02396 /
-// loc_segvga_023d7: black up to the four shade bytes 0x1c,0x19,0x18,0x17
-// toward the map, mirrored on the right). The DOS grayscale-mode DAC patch
-// (segvga:245e) has no port equivalent.
+// = segvga:2441 vga_draw_landscape (gfx_vtable_vga_draw_landscape)
+// = segvga:24ad landscape_row_bh0 — the plain row body
+// = segvga:24e9 landscape_row_bh1 — the animated row body
+// Render the map row buffer (`rows`, stride 0xc8) to the active framebuffer at (x0, y0)
+// through the 256-entry palette-remap table `xlat`. Interior-only: a pixel is
+// drawn only when it equals BOTH its right-hand neighbour and the pixel one
+// row below (segvga:24bb..24c4; the last column, past the dec cx at
+// segvga:24ba, compares the below neighbour only, segvga:24d1), so only the
+// inside of each same-valued region takes its colour and the borders come out
+// as the backdrop 0x70 — that is what gives the spice-density overlay its
+// blobby fields. `top_lat` is the top row's latitude: rows at |latitude| >=
+// 0x46 are trimmed on both sides by the same map_globe_edge_insets curve as
+// vga_blit_shaded (loc_segvga_02396 / loc_segvga_023d7: black up to the four
+// shade bytes 0x1c,0x19,0x18,0x17 toward the map, mirrored on the right).
+//
+// `bh` (= map_overlay_mode) picks the row body: 0 is the plain remap; any
+// other value is the animated remap (loc_segvga_02487): a drawn pixel becomes
+// 0x71 + (xlat & 3) unless the xlat is the backdrop 0x70, and between rows
+// every non-0x70 xlat entry rotates left by 2 bits (segvga:2493..24a6), so
+// the occupation layer's regions shimmer through 0x71..0x74 down the window.
+// The DOS grayscale-mode DAC patch (segvga:245e) has no port equivalent.
 #[allow(clippy::too_many_arguments)]
 pub fn vga_draw_landscape(
     state: &mut GameState,
@@ -552,10 +564,22 @@ pub fn vga_draw_landscape(
     y0: i16,
     top_lat: i16,
     xlat: &[u8; 256],
+    bh: u8,
 ) {
     let yoff = state.y_offset as usize;
     let fb = state.active_fb_mut();
+    // = ss:bp — the bh != 0 path rewrites the caller's table between rows.
+    let mut xlat = *xlat;
     for row in 0..height {
+        // = segvga:2493..24a6 the between-row rotation of the bh != 0 path
+        //   (it runs after each row, so it first applies to row 1).
+        if bh != 0 && row > 0 {
+            for e in xlat.iter_mut() {
+                if *e != 0x70 {
+                    *e = e.rotate_left(2);
+                }
+            }
+        }
         let y = (y0 as usize + row + yoff) as u16;
         let mut x = x0 as u16;
         let mut put = |x: &mut u16, c: u8| {
@@ -604,7 +628,14 @@ pub fn vga_draw_landscape(
             let below = rows.get(i + 0xc8).copied().unwrap_or(0);
             let c = if (col == w_int - 1 || cell == right) && cell == below {
                 // = segvga:24c6/24c7 xlat; stosb.
-                xlat[cell as usize]
+                let v = xlat[cell as usize];
+                // = segvga:2503..2509 (bh != 0): 0x70 stays; anything else
+                //   maps to 0x71 + (v & 3).
+                if bh != 0 && v != 0x70 {
+                    0x71 + (v & 3)
+                } else {
+                    v
+                }
             } else {
                 // = segvga:24cc mov al,ah (0x70) — the backdrop.
                 0x70
@@ -624,15 +655,6 @@ pub fn vga_draw_landscape(
             }
         }
     }
-}
-
-// = segvga:24e9 landscape_row_bh1 — the bh != 0 row body of vga_draw_landscape:
-// each pixel is compared with its right and next-row neighbours before the
-// colour lookup and the 0x70-class edge colour is drawn where they differ.
-// vga_draw_landscape only ports the bh = 0 path; no caller selects this one yet.
-#[allow(dead_code)]
-pub fn landscape_row_bh1(_state: &mut GameState) {
-    todo!("segvga:24e9 landscape_row_bh1")
 }
 
 // = segvga:2596 transition_snapshot_screen_to_fb2 — vga_copy_screen from the
@@ -689,8 +711,8 @@ pub fn vga_transition(state: &mut GameState, code: u16, dx: i16, midpoint: Trans
         0x08 => transition_dissolve_lfsr_fast(state),
         0x0c | 0x0e => transition_page_turn(state, dx),
         0x10 => transition_dotted_columns(state),
-        0x12 => transition_diagonal_wipe(state),
-        0x22 | 0x24 => transition_accelerating_strips(state),
+        0x12 => transition_ripple_hold(state),
+        0x22 | 0x24 => transition_scroll_push_down(state),
         0x26 => transition_mosaic_medium(state),
         0x28 => transition_mosaic_fine(state),
         0x2a => transition_spiral(state),
@@ -1022,11 +1044,66 @@ pub fn transition_tick(state: &mut GameState) -> u16 {
     cx
 }
 
-// = segvga:279a transition_diagonal_wipe (dispatch entry 9) — code 0x12: the
-// synchronous full-screen diagonal wipe, transition_kernel run in a tight loop
-// over col = 8..0x3c0 with 3 vsync waits per step.
-fn transition_diagonal_wipe(_state: &mut GameState) {
-    todo!("segvga:279a transition_diagonal_wipe")
+// = segvga:279a transition_ripple_hold (dispatch entry 9) — code 0x12: the
+// water-ripple hold on the OLD screen. The screen is snapshotted into fb2 and
+// ds = fb2, so the ripple kernel's clean reference is the old image and
+// nothing of fb1 is revealed; the transition() tail's full copy paints the
+// new image afterwards. The band sweeps col = 8..0x3c0 (drawn only while col
+// < 0x1f4), three vsync_wait_5_ticks per step, erasing and restarting at the
+// end of each sweep, until 0x12c0 ticks have passed.
+fn transition_ripple_hold(state: &mut GameState) {
+    // = segvga:279a call transition_snapshot_screen_to_fb2; 279d/279e ds = si.
+    transition_snapshot_screen_to_fb2(state);
+    let fb_base = state.y_offset as usize * 320;
+    // = segvga:27a0/27a3 cx = 8, si = 1; 27a6/27a9 dx = [bp].
+    let mut col: u16 = 8;
+    let mut frame: u16 = 1;
+    let start = state.game_ticks();
+    loop {
+        // = segvga:27ac cmp cx,1f4h; jnb — draw only while col < 500.
+        if col < 0x1f4 {
+            let GameState {
+                screen,
+                framebuffer_saved,
+                ..
+            } = state;
+            transition_draw_edge(
+                screen.pixels_mut(),
+                framebuffer_saved.pixels(),
+                fb_base,
+                col,
+                frame,
+            );
+        }
+        // = segvga:27b9..27bf three vsync_wait_5_ticks — present and pace.
+        let t = state.game_ticks();
+        state.send_frame_to_display();
+        state.sleep_ticks(t, 15);
+        // = segvga:27c2/27c5 col += 8, frame += 1.
+        col += 8;
+        frame += 1;
+        // = segvga:27c8..27d4 at col 0x3c0 erase the last band and restart.
+        if col >= 0x3c0 {
+            let GameState {
+                screen,
+                framebuffer_saved,
+                ..
+            } = state;
+            transition_erase_edge(
+                screen.pixels_mut(),
+                framebuffer_saved.pixels(),
+                fb_base,
+                col,
+                frame,
+            );
+            col = 8;
+            frame = 1;
+        }
+        // = segvga:27d8..27e0 ax = [bp] - dx; cmp ax,12c0h; jb loop.
+        if state.game_ticks().wrapping_sub(start) >= 0x12c0 {
+            break;
+        }
+    }
 }
 
 // Which pixel operation the ellipse kernel applies along the band: DOS selects
@@ -1781,11 +1858,69 @@ fn transition_vertical_curtain(state: &mut GameState, dl: u8) {
     }
 }
 
-// = segvga:2d44 transition_accelerating_strips (dispatch entries 17/18) — codes
-// 0x22 / 0x24: strip reveal with shrinking spacing; the phase doubles when bx
-// wraps and the step grows by 6 per pass.
-fn transition_accelerating_strips(_state: &mut GameState) {
-    todo!("segvga:2d44 transition_accelerating_strips")
+// = segvga:2d44 transition_scroll_push_down (dispatch entries 17/18) — codes
+// 0x22 / 0x24: the push-down scroll over the 152-row game area. The screen is
+// snapshotted into fb2 and the buffer slots swapped (02535 = fb1, 02537 =
+// fb2); each pass paints fb1[si..end] at the top of the area and fb2[base..si]
+// below it, so the new image slides DOWN in from the top and pushes the old
+// one off the bottom, one row per pass. Pass k waits until 6k ticks have
+// elapsed (loc_segvga_02d9d); when the spin overshoots, the step doubles to
+// two rows and the pass counter skips a slot. The ending's FINAL still enters
+// with it (seg000:1522).
+fn transition_scroll_push_down(state: &mut GameState) {
+    const W: usize = 320;
+    // = segvga:2604 cx = 0x98 — the game-area row count.
+    const ROWS: usize = 152;
+    // = segvga:2d44 bx = 0fec0h — one row up per pass.
+    const ROW_STEP: usize = W;
+    // = segvga:2d90..2d9b the per-pass tick budget.
+    const TICKS_PER_PASS: u64 = 6;
+
+    // = segvga:2d47 call transition_snapshot_screen_to_fb2.
+    transition_snapshot_screen_to_fb2(state);
+    // = segvga:2d51..2d5c calc_fb_offset(row = 152, col = 0): si = dx = the
+    //   end of the game area.
+    let fb_base = state.y_offset as usize * W;
+    let end = fb_base + ROWS * W;
+    // = segvga:2d5e call swap_transition_buffers — the copies below read the
+    //   new image from fb1 and the old one from the fb2 snapshot.
+    // = segvga:2d61 cx = [bp]; 2d4a data_segvga_0253b = 0.
+    let start = state.game_ticks();
+    let mut passes: u64 = 0;
+    let mut si = end;
+    loop {
+        {
+            let GameState {
+                screen,
+                framebuffer,
+                framebuffer_saved,
+                ..
+            } = state;
+            let dst = screen.pixels_mut();
+            // = segvga:2d66..2d78 screen[base..base+n] = fb1[si..end].
+            let n = end - si;
+            dst[fb_base..fb_base + n].copy_from_slice(&framebuffer.pixels()[si..end]);
+            // = segvga:2d7a..2d8c screen[base+n..end] = fb2[base..si].
+            dst[fb_base + n..end].copy_from_slice(&framebuffer_saved.pixels()[fb_base..si]);
+        }
+        state.send_frame_to_display();
+        // = segvga:2d90..2da4 passes += 1; spin until [bp] - cx >= passes*6.
+        passes += 1;
+        state.sleep_ticks(start, passes * TICKS_PER_PASS);
+        // = segvga:2da6..2dad bx = -320; unless the spin ended exactly on the
+        //   deadline (zf), double the step and count the missed slot.
+        let mut step = ROW_STEP;
+        if state.game_ticks().wrapping_sub(start) != passes * TICKS_PER_PASS {
+            step *= 2;
+            passes += 1;
+        }
+        // = segvga:2db2..2dbd si += bx; jb ret once si drops below
+        //   fb_base_ofs (a wrap past 0 lands above dx and returns too).
+        if si < fb_base + step {
+            break;
+        }
+        si -= step;
+    }
 }
 
 // = segvga:2dc0 transition_dotted_columns_tall (transition_dispatch_table entry
@@ -2031,21 +2166,45 @@ fn transition_mosaic_full(state: &mut GameState) {
 }
 
 // = segvga:2f71 transition_mosaic_oneway (dispatch entry 23) — code 0x2e:
-// coarse-to-fine mosaic reveal with no palette swap: 8x8 x3, 4x4 x2, 2x2 x2.
-fn transition_mosaic_oneway(_state: &mut GameState) {
-    todo!("segvga:2f71 transition_mosaic_oneway")
+// coarse-to-fine mosaic reveal with no snapshot and no palette swap. ds stays
+// the dispatcher's fb1, so all seven passes stamp the NEW image: 8x8 x3,
+// 4x4 x2, 2x2 x2.
+fn transition_mosaic_oneway(state: &mut GameState) {
+    mosaic_pass(state, MosaicSource::Fb1, 8, &MOSAIC_OFFSETS_8X8);
+    mosaic_pass(state, MosaicSource::Fb1, 8, &MOSAIC_OFFSETS_8X8);
+    mosaic_pass(state, MosaicSource::Fb1, 8, &MOSAIC_OFFSETS_8X8);
+    mosaic_pass(state, MosaicSource::Fb1, 4, &MOSAIC_OFFSETS_4X4);
+    mosaic_pass(state, MosaicSource::Fb1, 4, &MOSAIC_OFFSETS_4X4);
+    mosaic_pass(state, MosaicSource::Fb1, 2, &MOSAIC_OFFSETS_2X2);
+    mosaic_pass(state, MosaicSource::Fb1, 2, &MOSAIC_OFFSETS_2X2);
 }
 
 // = segvga:2f87 transition_mosaic_medium (dispatch entry 19) — code 0x26:
 // 2x2 then 4x4 on the old image, palette_flush, 4x4 then 2x2 on the new one.
-fn transition_mosaic_medium(_state: &mut GameState) {
-    todo!("segvga:2f87 transition_mosaic_medium")
+fn transition_mosaic_medium(state: &mut GameState) {
+    // = segvga:2f87 call transition_snapshot_screen_to_fb2; 2f8a/2f8b ds = si.
+    transition_snapshot_screen_to_fb2(state);
+    mosaic_pass(state, MosaicSource::Fb2, 2, &MOSAIC_OFFSETS_2X2);
+    mosaic_pass(state, MosaicSource::Fb2, 4, &MOSAIC_OFFSETS_4X4);
+    // = segvga:2f93 push cs; call palette_flush.
+    palette_flush(state);
+    // = segvga:2f97 pop ds — the de-pixelate half reads fb1.
+    mosaic_pass(state, MosaicSource::Fb1, 4, &MOSAIC_OFFSETS_4X4);
+    mosaic_pass(state, MosaicSource::Fb1, 2, &MOSAIC_OFFSETS_2X2);
 }
 
 // = segvga:2f9f transition_mosaic_fine (dispatch entry 20) — code 0x28: three
 // 2x2 passes on the old image, palette_flush, one 2x2 pass on the new one.
-fn transition_mosaic_fine(_state: &mut GameState) {
-    todo!("segvga:2f9f transition_mosaic_fine")
+fn transition_mosaic_fine(state: &mut GameState) {
+    // = segvga:2f9f call transition_snapshot_screen_to_fb2; 2fa2/2fa3 ds = si.
+    transition_snapshot_screen_to_fb2(state);
+    mosaic_pass(state, MosaicSource::Fb2, 2, &MOSAIC_OFFSETS_2X2);
+    mosaic_pass(state, MosaicSource::Fb2, 2, &MOSAIC_OFFSETS_2X2);
+    mosaic_pass(state, MosaicSource::Fb2, 2, &MOSAIC_OFFSETS_2X2);
+    // = segvga:2fae push cs; call palette_flush.
+    palette_flush(state);
+    // = segvga:2fb2 pop ds — the last pass reads fb1.
+    mosaic_pass(state, MosaicSource::Fb1, 2, &MOSAIC_OFFSETS_2X2);
 }
 
 // = segvga:2fb7 mosaic_offsets_2x2 — the sample position (row * 320 + col
@@ -2201,9 +2360,13 @@ enum FoldSource {
 // look_at_mirror). It compresses the old screen toward the centre line until it
 // collapses to a thin band (first half), uploads the new palette at the step-9
 // midpoint, then expands the new image back out from the centre (second half) —
-// reading as the room "folding" away to reveal the mirror. `dl` selects
-// direction: dl >= 0 takes the reverse path; the forward path (dl < 0) is
-// unimplemented, as every current caller sets dx = 0.
+// reading as the room "folding" away to reveal the mirror. `dl` selects the
+// table walk (segvga:3140..3147): dl >= 0 sets cx = 0xff11 (cl 0x11 -> 1,
+// 17 steps); dl < 0 sets cx = 0x0101 (cl 1 -> 0x10, 16 steps). The table at
+// segvga:30f2 is symmetric about its cl == 9 midpoint, so both directions
+// play the same squish / clear / expand — the forward walk only stops one
+// step short of the final (17, 1) expansion. Every current caller passes
+// dx = 0.
 fn transition_vertical_fold(state: &mut GameState, dl: u8) {
     // = segvga:3130 call loc_02596 — snapshot the visible screen into fb2
     state.framebuffer_saved.copy_from(&state.screen);
@@ -2243,12 +2406,17 @@ fn transition_vertical_fold(state: &mut GameState, dl: u8) {
         step += 1;
     }
 
-    if (dl as i8) < 0 {
-        todo!();
+    // = segvga:3163..316a the forward walk (cl 1 -> 0x10) ends before the
+    //   table's last entry; the reverse walk (cl 0x11 -> 1) plays all of it.
+    let second_half: &[(u16, u16)] = if (dl as i8) < 0 {
+        &FOLD_LINES_REV[..7]
+    } else {
+        &FOLD_LINES_REV
     };
 
-    // First half (cl 0x11..0x0a): squish the OLD screen (snapshotted into fb2)
-    // toward the centre line; clear_at_end runs the cl == 9 band-clear.
+    // First half (cl 0x11..0x0a, or 1..8): squish the OLD screen (snapshotted
+    // into fb2) toward the centre line; clear_at_end runs the cl == 9
+    // band-clear.
     transition_vertical_fold_part(state, &FOLD_LINES, &mut step, FoldSource::OldScreen, true);
 
     // = segvga:311a midpoint: the band-clear above (loc_0311a) erased the
@@ -2270,14 +2438,9 @@ fn transition_vertical_fold(state: &mut GameState, dl: u8) {
     }
     state.present_transition_frame();
 
-    // Second half (cl 8..1): expand the NEW image (fb1) back out from the centre.
-    transition_vertical_fold_part(
-        state,
-        &FOLD_LINES_REV,
-        &mut step,
-        FoldSource::NewImage,
-        false,
-    );
+    // Second half (cl 8..1, or 10..0x10): expand the NEW image (fb1) back out
+    // from the centre.
+    transition_vertical_fold_part(state, second_half, &mut step, FoldSource::NewImage, false);
 
     // = segvga:316c retf — the fold draws only the centre band; the transition
     // wrapper's gfx_copy_whole_framebuf_to_screen lays down the final full fb1
@@ -2298,7 +2461,7 @@ fn transition_vertical_fold(state: &mut GameState, dl: u8) {
 // step toward the centre line together.
 fn transition_vertical_fold_part(
     state: &mut GameState,
-    lines: &[(u16, u16); 8],
+    lines: &[(u16, u16)],
     step: &mut i32,
     source: FoldSource,
     clear_at_end: bool,
@@ -2527,11 +2690,12 @@ impl GameState {
             //   from fb1 with a per-row horizontal shift from the wave table
             //   (segvga:3487), the wave origin advancing one row per call
             //   (data_segvga_034fc). DOS smears the rows in place on the VGA
-            //   surface and cycles the water palette (palette_cycle_water);
-            //   the port simplifies to a clean shifted copy from fb1, which
-            //   reads the same rolling-wave distortion without accumulating
-            //   smear.
+            //   surface; the port simplifies to a clean shifted copy from fb1,
+            //   which reads the same rolling-wave distortion without
+            //   accumulating smear.
             0x0a => {
+                // = segvga:3500 call palette_cycle_water.
+                palette_cycle_water(self);
                 // = segvga:3487 wave_displacement_tbl — a ±5 px sine-like
                 //   ramp, 116 rows per period.
                 #[rustfmt::skip]
@@ -2569,15 +2733,6 @@ impl GameState {
             }
         }
     }
-}
-
-// = segvga:3223 panel_anim_play_all — play all 17 panel animation frames in one
-// blocking call (restore DS/ES, copy the backing rect, loop cl = 17..0 over
-// panel_anim_frame). The port plays the fold one frame per pass through
-// panel_anim_play_step, so this is not wired in.
-#[allow(dead_code)]
-pub fn panel_anim_play_all(_state: &mut GameState) {
-    todo!("segvga:3223 panel_anim_play_all")
 }
 
 // = segvga:3280 panel_solid_fill — the fully-collapsed (frame 9) look: 16 rows of
@@ -2657,6 +2812,9 @@ fn panel_fold_squish(dst: &mut FrameBuffer, src: &FrameBuffer, al: u16, ah: u16)
     }
 }
 
+// = segvga:3223 panel_anim_play_all [not needed] — the blocking variant
+// (blit_mode_dispatch_table entry 10, effect 0x14) that loops cl = 17..1 over
+// the same frame routine in one call; no DOS caller passes effect 0x14.
 // = segvga:3382 panel_anim_play_step (blit_fb1_to_screen_effect al=0x18): render ONE
 // command-panel fold frame (`frame` = the DOS cl, 0x11..1) straight to the visible
 // screen. play_pending_panel_fold drives this once per loop pass. The verb panel was

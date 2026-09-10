@@ -1868,18 +1868,23 @@ impl GameState {
 
     // = seg000:331e prepare_location_data_for_condit — stage the location's
     // CONDIT block (ds:4d..5b) from its record, the troop strength words
-    // (condit_stage_location_strengths) and the troop tally. The derived
-    // pieces still missing: sub_03385 and the
-    // compute_location_available_equipment mask at ds:53.
+    // (condit_stage_location_strengths), the troop tally and the unused-
+    // equipment mask at ds:53. Still missing: sub_03385.
     pub(crate) fn prepare_location_data_for_condit(&mut self, loc_index: usize) {
         // = seg000:331e mov [data_011ce], di — the staged location.
         self.condit_staged_location = loc_index;
         let loc = self.locations[loc_index];
         // = seg000:3324..3329 ds:4e = (first_name << 8) | last_name.
         self.location_condit.area_and_name = ((loc.first_name as u16) << 8) | loc.last_name as u16;
-        // = seg000:332c xlat — ds:50 = the per-region worm-event likelihood
-        //   (array indexed by last_name). TODO: the array is not modelled.
-        self.location_condit.worm_event_likelihood = 0;
+        // = seg000:332c xlat — ds:50 = the worm-event likelihood table entry
+        //   for al = the LAST name (the spice-mining roll at seg000:716b
+        //   indexes the same table by first_name; this site keeps the DOS
+        //   choice).
+        self.location_condit.worm_event_likelihood = self
+            .worm_event_likelihood_by_region
+            .get(loc.last_name as usize)
+            .copied()
+            .unwrap_or(0);
         // = seg000:3333..3348 the direct field copies.
         self.location_condit.status = loc.status;
         self.location_condit.spice_density = loc.spice_density;
@@ -1899,9 +1904,28 @@ impl GameState {
         self.condit_stage_location_strengths(loc_index);
         // = seg000:335d.
         self.condit_tally_troops_at_location(loc_index);
-        // = seg000:3360..3379 compute_location_available_equipment -> the
-        //   ds:53 unused-equipment mask. TODO: not yet ported.
-        self.location_condit.unused_equipment = 0;
+        // = seg000:3360 call compute_location_available_equipment — the
+        //   location's equipment minus what its troops hold (seg001:46fe).
+        self.compute_location_available_equipment(loc_index);
+        // = seg000:3363..3379 seven `cmp byte [di],1; rcl al,1` steps fold
+        //   "slot empty" carries into al (first slot highest), then `not`
+        //   and one `shl`: bit 7-k set = slot k has something unused
+        //   (harvesters, ornithopters, krys knives, laser guns, weirding
+        //   modules, atomics, bulbs), bit 0 clear.
+        let a = self.available_equipment;
+        let mut al: u8 = 0xff;
+        for n in [
+            a.harvesters,
+            a.ornithopters,
+            a.krys_knives,
+            a.laser_guns,
+            a.weirding_modules,
+            a.atomics,
+            a.bulbs,
+        ] {
+            al = (al << 1) | (n < 1) as u8;
+        }
+        self.location_condit.unused_equipment = !al << 1;
         // = seg000:337d call condit_stage_named_npcs_at_location.
         self.condit_stage_named_npcs_at_location(loc_index);
         // = seg000:3380 call condit_scan_nearest_locations.
@@ -4302,14 +4326,16 @@ impl GameState {
         // = seg000:84d2..84fe a defending troop (occupation exactly 6)
         //   leaving:
         if self.troops[ti].occupation == 6 {
-            // = seg000:84d8..84ee leaving a battle-flagged location as the
-            //   last defender collapses the defence (location_do_
-            //   accumulation_05098 + location_battle_lost_...). Not ported.
-            //   TODO.
+            // = seg000:84d8..84ee leaving a battle-flagged location: count
+            //   what is left there (location_count_harkonnen_and_attacking_
+            //   troops; the troop is already unlinked) and with Harkonnen
+            //   present (jcxz) and at most one attacker remaining (dec dx;
+            //   jg) the battle is lost.
             if self.locations[old_li].status & 2 != 0 {
-                println!(
-                    "troop_issue_move_order: the last-defender battle-lost check (seg000:84d8) not ported"
-                );
+                let (cx, dx) = self.location_count_harkonnen_and_attacking_troops(old_li);
+                if cx != 0 && dx <= 1 {
+                    self.location_battle_lost(old_li);
+                }
             }
             // = seg000:84f0..84fe heading for a peaceful sietch costs 3
             //   motivation; another battle destination aborts the order.

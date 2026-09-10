@@ -560,18 +560,20 @@ impl GameState {
         if self.game_screen_mode_flags != 0 {
             return;
         }
-        // = seg000:2e84 data_047aa indexes the persons array; 0 = nobody to voice.
+        // = seg000:2e84 si = [data_047aa] — the pending speaker's room_persons
+        //   entry (build_room_person_record_a records the first standing
+        //   match, seg000:30c6); 0 = nobody to voice.
         let si = self.data_047aa;
         if si == 0 {
             return;
         }
-        // = seg000:2e8e al = (byte) persons_met[si] — index the contiguous
-        // persons array (headed by persons_met) by the byte offset si, then start
-        // that speaker's lip-sync. The port stores those persons as separate
-        // scalar fields, so the [si] read is not modelled; si is always 0 above,
-        // so this path is currently unreachable.
-        // TODO: port the persons-array indexing.
-        self.current_lip_sync_resource_id = self.persons_met;
+        // = seg000:2e8c..2e91 current_lip_sync_resource_id = the entry's
+        //   person_index ([si+0eh]).
+        let idx = (si.wrapping_sub(ROOM_PERSON_TABLE_BASE) / 0x10) as usize;
+        let Some(rp) = self.room_persons.get(idx) else {
+            return;
+        };
+        self.current_lip_sync_resource_id = rp.person_index as u16;
         // = seg000:2e94 call start_room_lip_sync.
         self.start_room_lip_sync();
     }
@@ -817,9 +819,9 @@ impl GameState {
     // game_ui's room_mouse_lmb -> hit_test_ui_elements -> dispatch_ui_click
     // (seg000:d6b7 / d8d4) already pick the clicked HUD element and route to its
     // handler; the per-element entries below are the targets it dispatches to by
-    // func_ptr. (The live game_loop mouse-button edge that would invoke
-    // room_mouse_lmb is still TODO, so nothing triggers these from real input
-    // yet.)
+    // func_ptr; the room record's own LMB entry (room_mouse_lmb) is the DOS
+    // no-op fn_0d917_noop, and game_loop_dispatch_lmb_press runs the hit-test
+    // for every screen.
 
     // = seg000:d445 dispatch_command_menu_slot (entered from the per-row handlers
     // d443..d42f with cx = `slot`). Read the active menu's record for `slot`
@@ -1042,10 +1044,9 @@ impl GameState {
     // (loc_0980c) re-renders the room. room_render_flags bit 7 (the dialogue-zoom
     // flag) picks between two HUD-reconciliation paths — the zoom path
     // (loc_09849) and the non-zoom path (loc_0982e); both are modelled below.
-    // TODO: 097cf also restores the subtitle backdrop
-    // (subtitle_restore_prior) — subtitle state not modelled yet. The room path's
-    // pending_room_action-gated transition-reveal variant (loc_09898, a wiped
-    // re-render + leave scan that lets an evicted companion speak) is not ported.
+    // The room path's pending_room_action-gated transition-reveal variant
+    // (loc_09898, a wiped re-render + leave scan that lets an evicted companion
+    // speak) is not ported.
     pub(crate) fn menu_npc_actions_cleanup(&mut self) {
         // = seg000:97cf call lip_sync_stop — stop the speaker's voice lip-sync
         //   (also patching the TALK TO ME verb template back to its idle text
@@ -1310,9 +1311,17 @@ impl GameState {
                 self.travel_toggle_minimap();
                 return;
             }
-            // TODO: the remaining game-area click branch (seg000:9447..9458,
-            //   the room redraw + callback_main_ui_element_21_22, or the
-            //   speech-bubble menu close) is not ported.
+            // = seg000:9447 cmp current_bubble_layout_ptr,0; jnz loc_09458 —
+            //   with a speech bubble up the click closes its menu
+            //   (menu_callback_choice_exit_menu).
+            if self.subtitle_bubble.is_some() {
+                self.menu_callback_choice_exit_menu(0, 0);
+                return;
+            }
+            // = seg000:9450/9455 redraw the room, then the head-area click
+            //   handler (callback_main_ui_element_21_22).
+            self.draw_room_game_screen();
+            self.callback_main_ui_element_21_22();
             return;
         }
         // = seg000:9430 call screen_element_stack_pop_and_cleanup — a no-op in
@@ -3028,9 +3037,26 @@ impl GameState {
         self.audio_start_voc("SN3.HSQ");
     }
 
-    // = seg000:0b21
-    pub(crate) fn _clear_night_attack(&mut self) {
-        // TODO
+    // = seg000:0b21 loc_00b21 — tear the staged night attack down: end the
+    // looping attack sound, point the map sprite-sheet open back at
+    // ONMAP.HSQ (the self-modified id at seg000:c13c, 0x2b = ATTACK.HSQ
+    // while the attack ran), drop the particle task, and — unless the room
+    // view is up with the sky unsuppressed — forget the troop icon list.
+    pub(crate) fn clear_night_attack(&mut self) {
+        // = seg000:0b21 call call_pcm_vtable_end_loop.
+        self.call_pcm_vtable_end_loop();
+        // = seg000:0b24 byte cs:[data_0c13c] = 0x25 — open_onmap_resource
+        //   opens ONMAP.HSQ again (the port reads the bank by name, so the
+        //   ATTACK.HSQ swap has no state to undo).
+        // = seg000:0b2a/0b2d remove_frame_task(night_attack_frame_task).
+        self.remove_frame_task(crate::TaskId::IntroNightAttack);
+        // = seg000:0b30..0b3c cmp suppress_sky_240_255,0; jnz; cmp
+        //   room_view_toggle,0; js ret.
+        if self.data_0227d == 0 && (self.room_view_toggle as i8) < 0 {
+            return;
+        }
+        // = seg000:0b3e troop_icon_count = 0.
+        self.troop_icons.clear();
     }
 
     // = seg000:0b45
@@ -3143,9 +3169,10 @@ impl GameState {
         self.open_sal_resource();
     }
 
-    // = seg000:5ba0 copy_game_area_rect_to_unknown_rect — copy the game-area rect
-    // (si=1470h) to the backdrop buffer (di=0d83ch) before drawing the room.
-    // TODO: port; no-op stub.
+    // = seg000:5ba0 copy_game_area_rect_to_unknown_rect [not needed] — copy
+    // the game-area rect (si=1470h) into data_d83c_rect, the restore rect the
+    // DOS presents read back; the port's presents take explicit rects (see
+    // map_set_restore_and_clip_rect_to_window), so there is no restore rect.
     // = seg000:5ba8 copy_game_area_rect_to_clip_rect — install the game area as
     // the sprite clip rect (_unk_2CCE4). The port clips per draw call from the
     // active view, so there is no global clip rect to set.

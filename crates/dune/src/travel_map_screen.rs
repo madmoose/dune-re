@@ -2965,8 +2965,8 @@ impl GameState {
         if self.night_attack_stage != 0 {
             self.night_attack_stage = 0;
             // = seg000:4724 call loc_00b21 — stop the attack's audio loop
-            //   and particles. TODO: the night-attack teardown is not ported.
-            println!("map_confirm_travel_and_close: night-attack teardown (loc_00b21) not ported");
+            //   and particles.
+            self.clear_night_attack();
         }
         // = seg000:4727 call screen_element_stack_pop_and_cleanup — pop the
         //   map screen menu; map_screen_cleanup keeps the mode flags now

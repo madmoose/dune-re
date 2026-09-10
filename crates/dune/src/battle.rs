@@ -435,7 +435,7 @@ impl GameState {
     // room 3), every troop there is captured or, a Harkonnen one, marked
     // stationed, the Harkonnen zone is stamped around it (radius 5), status
     // bits 0 and 3 clear, and the map view is marked dirty.
-    fn location_battle_lost(&mut self, li: usize) {
+    pub(crate) fn location_battle_lost(&mut self, li: usize) {
         // = seg000:74b6 and status,0fdh.
         self.locations[li].status &= 0xfd;
         // = seg000:74ba/74be cmp location,[current_location_ptr]; jz

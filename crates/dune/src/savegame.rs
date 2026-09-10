@@ -537,9 +537,9 @@ impl GameState {
         //   home panel origin.
         w16(b, 0x11c1, self.map_overlay_home_pos.0 as u16);
         w16(b, 0x11c3, self.map_overlay_home_pos.1 as u16);
-        // = seg001:11d0 troop_icon_panel_heights (88, 60, 30), constants in
-        //   the port (troop_map_screen HEIGHTS).
-        b[0x11d0..0x11d3].copy_from_slice(&[0x58, 0x3c, 0x1e]);
+        // = seg001:11d0 troop_icon_panel_heights (88, 60, 30; +12 on the
+        //   first after phase 0x5c).
+        b[0x11d0..0x11d3].copy_from_slice(&self.troop_icon_panel_heights);
         // = seg001:11dd _stru_2068D_icon_list — two static (index, x, y)
         //   UISprite entries: (31h, 0, 4ch), (1, 0, 86h).
         for (k, w) in [0x31u16, 0, 0x4c, 1, 0, 0x86].iter().enumerate() {
@@ -547,9 +547,10 @@ impl GameState {
         }
         // = seg001:11e9 data_011e9 — static 0xffff.
         w16(b, 0x11e9, 0xffff);
-        // = seg001:120b _stru_206BB_icon_list — four static entries and the
-        //   0xffff terminator index: (0, b6h, 0ch), (3, 10ah, 41h),
-        //   (4, 0eeh, 41h), (5, 0c1h, 41h).
+        // = seg001:120b _stru_206BB_icon_list — four entries and the 0xffff
+        //   terminator index: (0, b6h, 0ch), (3, 10ah, 41h), (4, 0eeh, 41h),
+        //   (5, 0c1h, 41h); the phase 0x0c / 0x1c callbacks write 0xffff over
+        //   the sprite word of entry 3 / 2 (palace_plan_icon_count).
         for (k, w) in [
             0u16, 0xb6, 0x0c, 3, 0x10a, 0x41, 4, 0xee, 0x41, 5, 0xc1, 0x41, 0xffff,
         ]
@@ -557,6 +558,9 @@ impl GameState {
         .enumerate()
         {
             w16(b, 0x120b + 2 * k, *w);
+        }
+        if let n @ 0..4 = self.palace_plan_icon_count as usize {
+            w16(b, 0x120b + 6 * n, 0xffff);
         }
 
         // = seg001:1179 comm_sighting_list — the count lives at 00c8.
@@ -847,6 +851,14 @@ impl GameState {
         self.book_bookmark_ptr = r16(b, 0x11bf);
         // = seg001:11c1/11c3 the overlay's home panel origin.
         self.map_overlay_home_pos = (r16(b, 0x11c1) as i16, r16(b, 0x11c3) as i16);
+        // = seg001:11d0 troop_icon_panel_heights.
+        self.troop_icon_panel_heights
+            .copy_from_slice(&b[0x11d0..0x11d3]);
+        // = seg001:120b _stru_206BB_icon_list — the first 0xffff sprite word
+        //   ends the list.
+        self.palace_plan_icon_count = (0..4)
+            .find(|&k| r16(b, 0x120b + 6 * k) == 0xffff)
+            .unwrap_or(4) as u8;
         self.location_visibility_distance = r16(b, 0x1176);
         self.number_of_rallied_troops_for_leto_killed = r8(b, 0x1178);
 
@@ -1157,11 +1169,11 @@ impl GameState {
         //   was in when they loaded.
         if (toggle as i8) >= 0 {
             // = seg000:b41b..b424 the room path: drop the transient overlays,
-            //   refresh the date/time indicator, fade the song out
-            //   (midi_begin_song_fade_out is not ported; draw_room_game_screen
-            //   restarts the room music), and rebuild the room screen.
+            //   refresh the date/time indicator, fade the song out, and
+            //   rebuild the room screen.
             self.dismiss_stacked_menus();
             self.ui_redraw_date_and_time_indicator();
+            self.midi_begin_song_fade_out();
             self.draw_room_game_screen();
         } else {
             // = seg000:b408..b418 the globe path (globe_slide_decorations_

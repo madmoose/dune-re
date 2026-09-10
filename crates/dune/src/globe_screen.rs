@@ -854,7 +854,7 @@ impl GameState {
     // values into the consecutive digit-bearing COMMAND strings from 0xc4 on
     // (DOS walks es:si across the string buffer; digit-less strings between
     // them are skipped by the find), and the trend glyph per value.
-    fn results_update_percent_strings(&mut self) {
+    pub(crate) fn results_update_percent_strings(&mut self) {
         // = seg000:bf2c..bf2f si = the phrase 0xc4 string.
         let (start, _) = crate::container::entry_byte_range(&self.command_bin, 0xc4 - 1);
         let mut si = start as usize;
