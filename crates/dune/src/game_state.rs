@@ -2148,6 +2148,12 @@ pub struct GameState {
     // = seg001:d826 _unk_2CCD6_rand_seed.
     pub(crate) rand_bits_seed: u16,
 
+    // = seg001:d828 _unk_2CCD8_bios_timer_count_3 — rand_iterated's LCG seed, separate
+    // from rand's (0d826) and rand_masked's (0d824). DOS seeds it from the
+    // BIOS tick count during startup; the shuffle also perturbs it with the
+    // live PIT counter between draws.
+    pub(crate) rand_iterated_seed: u16,
+
     // = seg001:dbc8 settings_flags (data_0dbc8) — the mixer/settings flags word.
     // bit 0x1 = PCM enabled (check_pcm_enabled), bit 0x100 = music/MIDI enabled
     // (loc_0ae28), bits 0x4/0x400 = PCM / music slider draggable, bits 0x8/0x800
@@ -2165,12 +2171,6 @@ pub struct GameState {
     // advances the playlist 0xc8 ticks later. 0 = unset; cleared when a song
     // starts (seg000:adba).
     pub(crate) music_song_end_tick_stamp: u16,
-
-    // = seg001:d828 _unk_2CCD8_bios_timer_count_3 — rand_iterated's LCG seed, separate
-    // from rand's (0d826) and rand_masked's (0d824). DOS seeds it from the
-    // BIOS tick count during startup; the shuffle also perturbs it with the
-    // live PIT counter between draws.
-    pub(crate) rand_iterated_seed: u16,
 
     // = seg001:dbd8 _word_2D088_screen_buffer_seg — the "front buffer" copy/
     // present target. Normally Screen; gfx_call_bp_with_front_buffer_as_screen
@@ -2993,12 +2993,12 @@ impl GameState {
             language_setting: 0,
             mouse_last_click_time: 0,
             voc_bases: [0; 17],
-            rand_seed: 1,
-            rand_bits_seed: 1,
+            rand_seed: 0,
+            rand_bits_seed: 0,
+            rand_iterated_seed: 0,
             settings_flags: 0x1 | 0x4 | 0x8 | 0x100 | 0x400 | 0x800,
             music_desired_song: 0,
             music_song_end_tick_stamp: 0,
-            rand_iterated_seed: 0,
             screen_buffer: FbId::Screen,
             active_fb: FbId::Fb1,
             map_popup: MapPanelRef::None,
@@ -3105,79 +3105,6 @@ impl GameState {
         self.midi.set_enabled(false);
     }
 
-    // = seg000:0000 start (the startup sequence after parse_command_line /
-    // initialize_system / initialize_resources). Plays the intro and credits,
-    // sets up the in-game UI, enters the room view (ui_enter_room_view),
-    // starts the game clock (reset_game_suspend) and runs game_loop.
-    //
-    // `skip_intro` is a port-only convenience (no DOS equivalent): when set it
-    // jumps straight to the in-game UI, skipping the intro/credits/intro2.
-    pub fn start(&mut self, skip_intro: bool) {
-        // = seg000:0006 call initialize_system.
-        self.initialize_system();
-        // = seg000:0009 call initialize_resources (the port front-loads the
-        // constructor's DNCHAR/COMMAND loads and defers the rest; this brings
-        // in the resources interpreted at runtime).
-        self.initialize_resources();
-
-        // ESC anywhere in the intro skips straight into the game; a non-ESC key
-        // or the mouse only ends the current phase. The flag threads through the
-        // three calls (= the DOS ZF(esc) chained via each function's jz-at-entry).
-        self.intro_skip_to_game = false;
-
-        // = seg000:000d call play_intro.
-        self.play_intro(skip_intro);
-
-        // = seg000:0010 call play_CREDITS_HNM. Skipped when the intro was ended
-        // with ESC (seg000:0309 jz loc_00331).
-        self.play_credits(skip_intro || self.intro_skip_to_game);
-
-        // = seg000:0013 call play_intro_floppy. It self-skips its WORMSUIT
-        // cutscenes when `skip_intro` is set (or ESC ended an earlier phase,
-        // seg000:0226 jz); its tail sets the game up at the palace throne room
-        // (location_and_room 0x200a / location_appearance 0x180) and resets
-        // fb_base_ofs to 0 for the in-game screen.
-        self.intro_floppy_play(skip_intro || self.intro_skip_to_game);
-
-        // = seg000:0016
-        self.midi.midi_reset();
-
-        // = seg000:0019 mov [music_playlist_flags], 0
-        self.music_playlist_flags = 0;
-        // Port-only: the `--music` selection set_music_mode held back, landed
-        // now that the reset above is out of the way. Nothing pending (every
-        // caller but the CLI) leaves the music state untouched.
-        self.apply_pending_music_mode();
-
-        // = seg000:001e mov [game_time], 2 — start the in-game clock at 2.
-        self.game_time = 2;
-
-        // = seg000:0024 call init_game_ui (loc_00083).
-        self.init_game_ui();
-
-        // = seg000:0027/0029 cl=0xff; call create_save_cl — DOS writes the
-        //   fresh game as dune37s0.sav, the image RESTART GAME reloads. The
-        //   port keeps that image in memory (initial_game_image) instead of
-        //   writing a file.
-        self.initial_game_image = Some(self.create_save_in_memory());
-
-        // = seg000:002c call ui_enter_room_view (loc_01860).
-        self.ui_enter_room_view();
-
-        // = seg000:002f mov [pause_enabled], 0ffh — allow the P-key GAME PAUSED
-        // window now that gameplay has begun.
-        self.pause_enabled = 0xff;
-
-        // = seg000:0034 call reset_game_suspend (loc_0b2be) — zero the suspend
-        // counter so the in-game clock and idle animations start running.
-        self.reset_game_suspend();
-
-        // = seg000:0037 call game_loop — the in-game per-frame loop. The port
-        // invokes it from the windowed runtime (bin/dune.rs) right after start()
-        // returns, so headless setup renders/tests that call start() do not enter
-        // its infinite loop.
-    }
-
     // = seg000:e594 initialize_system — the DOS startup: clear the data
     // segment, load the VGA driver, allocate the framebuffers, hook the
     // interrupts, probe the input and audio devices, then leave fb1 active,
@@ -3230,79 +3157,6 @@ impl GameState {
         self.gfx_clear_active_framebuffer();
         // = seg000:e671 jmp copy_active_framebuffer_to_framebuffer_2.
         self.copy_active_framebuffer_to_framebuffer_2();
-    }
-
-    // = seg000:00b0 initialize_resources (its seg000:00d1 initialize_resources2
-    // body). DOS loads TABLAT (0xba), MAP (0xbf), DIALOGUE (0xbd) and CONDIT
-    // (0xbc) here, then bump-allocates the COMMANDx/PHRASE buffers. The port
-    // loads most of those lazily or in the constructor; this ports the CONDIT
-    // load (seg000:0126) — the one resource interpreted purely at runtime.
-    pub fn initialize_resources(&mut self) {
-        self.dialogue = self
-            .dat_file
-            .read("DIALOGUE.HSQ")
-            .expect("load DIALOGUE.HSQ");
-
-        self.condit = self.dat_file.read("CONDIT.HSQ").expect("load CONDIT.HSQ");
-
-        // = seg000:00d3..00e5 load TABLAT.BIN and byte-swap its words (Tablat
-        // reads big-endian, the equivalent). The seg000:00e7 loop's derived
-        // per-row table (data_04880, 0x10000 / row length) has no ported
-        // reader yet.
-        let tablat = self.dat_file.read("TABLAT.BIN").expect("load TABLAT.BIN");
-        let tablat: &[u8; 792] = tablat[..792].try_into().expect("TABLAT.BIN size");
-        self.tablat = Some(Tablat::new(tablat));
-
-        // = seg000:0106..0114 load MAP.HSQ (idx 0xbf); res_map_ofs = its centre
-        // (the port keeps the whole buffer, see map.rs).
-        self.map = self.dat_file.read("MAP.HSQ").expect("load MAP.HSQ");
-
-        // = seg000:57ec/5481 open_resource_by_index(0x3a) — the MAP2.HSQ
-        // spice layer the density overlay renders (DOS loads it on demand and
-        // swaps res_map_seg to it; the port keeps it alongside the terrain).
-        self.map2 = self.dat_file.read("MAP2.HSQ").expect("load MAP2.HSQ");
-
-        // = seg000:018f..01c6 cache each location's map cell (also marks the
-        // cell's map byte with the location bit 0x40).
-        self.init_location_map_offsets();
-
-        // = seg000:01c8..01df link every troop to its location (offset, map
-        // cell, voice bank).
-        self.init_troop_locations();
-
-        self.build_voc_base_table();
-
-        // = seg000:00b6 call clear_frame_tasks.
-        self.clear_frame_tasks();
-        // = seg000:00b9/00bc — after initialize_resources2 returns, run the
-        // game-phase trigger record twice. Each walk presents the first
-        // condition-matching unspoken entry of DIALOGUE slot 135 (records
-        // 0x456..) silently (subtitles suppressed, pseudo-speaker 0x10 skips
-        // the talking head) and appends it to the dialogue-played log, so a
-        // new game's BOOK opens with two pages — the "On Dune, the desert
-        // covers the entire planet." and "Paul Atreides arrived on Dune with
-        // his father, ..." narrations, both carrying a book video (HNM
-        // 0x19/0x1a via book_video_page_words[0..2]).
-        self.run_game_phase_triggers();
-        self.run_game_phase_triggers();
-    }
-
-    // = seg000:003a exit_to_dos — leave the game: the mouse reset, the memory
-    // driver, the MIDI and PCM resets, the text mode and the DOS return; the
-    // port silences the audio and exits the process.
-    pub(crate) fn exit_to_dos(&mut self) -> ! {
-        // Finalise any in-progress recording first: `std::process::exit` below
-        // skips every destructor, so this is the only chance to mux the clip
-        // when the player quits through the in-game EXIT GAME menu.
-        self.recorder.stop();
-
-        // = seg000:004e/0052 call MIDI_Reset / pcm_vtable_reset — silence audio
-        //   before the process exits so the device is released cleanly.
-        self.midi.midi_reset();
-        self.pcm_player.stop();
-
-        // = the INT 21/4C return to DOS.
-        std::process::exit(0);
     }
 
     // Port-only: keep `cursor_mode` in sync with the recorder. While recording,

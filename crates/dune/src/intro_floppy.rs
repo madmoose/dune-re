@@ -1,15 +1,3 @@
-//! = seg000:021c play_intro2 — the WORMSUIT second-intro act.
-//!
-//! The third startup step (start calls it after play_intro / play_CREDITS_HNM):
-//! eight narrated "WORMSUIT" cutscenes over the WORMSUIT MIDI score, each with a
-//! voice clip and a subtitle line, followed by a night->day sky fade, ending by
-//! setting the game up at the palace throne room.
-//!
-//! Scene draws are dispatched from the `script_2` table (seg000:020c) by the
-//! per-scene render callback loc_002c1. This first pass ports the loop control
-//! flow + the game-setup tail; the individual scene draws and the sky fade are
-//! documented stubs filled in by later stages.
-
 use crate::{
     FbId, GameState, Rect, TextSize,
     gfx::{self, blit},
@@ -47,10 +35,8 @@ impl GameState {
         "Final still",
     ];
 
-    // = seg000:021c DOS skips the cutscenes when entered with ZF set (the intro
-    // aborted with ESC); the port passes `skip` (= start's skip_intro), and
-    // when set only the game-setup tail runs.
-    pub fn intro_floppy_play(&mut self, skip: bool) {
+    // = seg000:021c
+    pub fn play_intro_floppy(&mut self, skip: bool) {
         // = seg000:021c data_0289e = 0x8c (the music-ducking level
         // midi_duck_music_volume reads; no dedicated port field yet).
         self.settings_records[SETTINGS_RECORD_VOLUME_MUSIC_DURING_VOICES].value = 0x8c;

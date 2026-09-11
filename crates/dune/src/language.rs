@@ -137,11 +137,6 @@ impl GameState {
     //   - COMMAND.BIN: index 0xc0 + language = COMMAND{language+1}.HSQ — the verb /
     //     command string table get_phrase_or_command_string reads.
     //
-    // = seg000:0098 adjust_sub_resource_pointers [not needed] — DOS calls it
-    // after each load to turn the resource's buffer-relative offset table into
-    // near pointers; the port's command_string_at, the DIALOGUE/CONDIT readers
-    // and the PHRASE bank all read the word-offset table in place.
-    //
     // The PHRASE bank reloads lazily: dropping current_phrase_bin_id makes the
     // next load_phrasexx_hsq fetch the new language's bank.
     pub(crate) fn settings_ui_reload_language(&mut self) {

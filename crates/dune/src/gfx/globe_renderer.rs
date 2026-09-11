@@ -678,7 +678,7 @@ mod tests {
         let (tx, _rx) = mpsc::sync_channel(64);
         let mut game = GameState::new(dat_file, tx);
         game.set_headless();
-        game.initialize_resources();
+        game.init_resources();
         // = seg000:0332 (play_credits' tail): intro2 always enters with the
         // blit row base cleared.
         game.clear_global_y_offset();

@@ -60,6 +60,7 @@ mod sprite;
 mod sprite_bank;
 mod sprite_blitter;
 mod sprite_sheet;
+mod startup;
 mod subtitle;
 mod tablat;
 mod talking_head;

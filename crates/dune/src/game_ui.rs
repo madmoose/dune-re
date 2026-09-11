@@ -344,32 +344,8 @@ impl GameState {
         self.active_mouse_handlers = handlers;
     }
 
-    // = seg000:0083 init_game_ui — configure the voice/subtitle language, then
-    // draw the in-game HUD (falls through into draw_game_ui at seg000:0086).
-    // Called once from start (seg000:0024) before the game loop.
-    pub fn init_game_ui(&mut self) {
-        // = seg000:0083 call check_amr_or_eng_language.
-        self.check_amr_or_eng_language();
-        // = seg000:0086 fall through into draw_game_ui.
-        self.draw_game_ui();
-    }
-
-    // = seg000:0086 draw_game_ui — clear fb1, draw every HUD element offscreen,
-    // then overlay the character head-and-shoulders portrait. Also entered
-    // standalone from seg000:3768 to redraw the HUD.
-    pub fn draw_game_ui(&mut self) {
-        // = seg000:0086 set_fb1_as_active_framebuffer.
-        self.set_fb1_as_active_framebuffer();
-        // = seg000:0089 gfx_clear_active_framebuffer.
-        self.gfx_clear_active_framebuffer();
-        // = seg000:008c
-        self.gfx_call_bp_with_front_buffer_as_screen(|s| s.draw_all_ui_elements());
-        // = seg000:0095 jmp ui_hud_head_draw.
-        self.ui_hud_head_draw();
-    }
-
     // = seg000:d1ef draw_all_ui_elements.
-    fn draw_all_ui_elements(&mut self) {
+    pub(crate) fn draw_all_ui_elements(&mut self) {
         self.draw_ui_elements_list(0, self.ui_elements.len());
     }
 

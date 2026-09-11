@@ -1357,7 +1357,7 @@ mod tests {
         let (tx, _rx) = mpsc::sync_channel(64);
         let mut game = GameState::new(dat_file, tx);
         game.set_headless();
-        game.initialize_resources();
+        game.init_resources();
 
         // Mutate a spread of state the save must carry.
         game.game_time = 0x123;
@@ -1415,7 +1415,7 @@ mod tests {
         let (tx, _rx) = mpsc::sync_channel(64);
         let mut fresh = GameState::new(dat_file, tx);
         fresh.set_headless();
-        fresh.initialize_resources();
+        fresh.init_resources();
         fresh.load_game_from(&path).expect("load");
         std::fs::remove_file(&path).ok();
 

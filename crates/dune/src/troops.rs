@@ -1698,51 +1698,6 @@ impl Default for LocationCondit {
 }
 
 impl GameState {
-    // = seg000:01c8..01df the startup troop placement pass at the end of
-    // map2_resource_func: for every location, call troop_set_location_info on
-    // each troop chained to it (call_callback_on_all_troops_in_location with
-    // bp = the callback, dx/bx = the location's map cell).
-    pub(crate) fn init_troop_locations(&mut self) {
-        for loc_index in 0..self.locations.len() {
-            // = seg000:01da the 0xff terminator entry ends the walk.
-            if self.locations[loc_index].first_name == 0xff {
-                break;
-            }
-            self.for_each_troop_in_location(loc_index, |game, ti| {
-                game.troop_set_location_info(ti, loc_index);
-            });
-        }
-    }
-
-    // = seg000:01e0 troop_set_location_info — link one troop to a location:
-    // offset_of_location = the location's seg001 pointer, the gps coordinates
-    // = the location's map cell, and the dissatisfaction_and_speech low byte
-    // = the voice-bank id: (first_name & 0xf) | (dissat & 0x70), with bit 7
-    // (the southern Fremen bank) toggled once per threshold first_name passes
-    // (> 3, > 5, > 9), so it ends up set for first_name 4..5 and >= 10.
-    fn troop_set_location_info(&mut self, ti: usize, loc_index: usize) {
-        let loc = self.locations[loc_index];
-        let t = &mut self.troops[ti];
-        // = seg000:01e0..01e6 the location pointer and the map cell.
-        t.offset_of_location = locations::location_ptr(loc_index as u16);
-        t.gps_coordinates_1 = loc.map_x as u16;
-        t.gps_coordinates_2 = loc.map_y as u16;
-        // = seg000:01e9..0208 the voice-bank low byte.
-        let mut bank = loc.first_name & 0x0f;
-        let mut high = (t.dissatisfaction_and_speech as u8) & 0x70;
-        if loc.first_name > 3 {
-            high ^= 0x80;
-        }
-        if loc.first_name > 5 {
-            high ^= 0x80;
-        }
-        if loc.first_name > 9 {
-            high ^= 0x80;
-        }
-        bank |= high;
-        t.dissatisfaction_and_speech = (t.dissatisfaction_and_speech & 0xff00) | bank as u16;
-    }
-
     // = seg000:6603 call_callback_on_all_troops_in_location — walk the
     // location's troop chain (Location.troop_id -> Troop.next_troop_id,
     // 1-based ids, 0 ends the list) calling `callback` with each troop's

@@ -278,12 +278,8 @@ impl GameState {
         (INTRO_SCRIPT[idx].play)(self);
     }
 
-    // = seg000:0945 intro_script_set_offset / seg000:093f intro_script_load_word — the DOS
-    // script cursor and its reader are the loop index over INTRO_SCRIPT below.
-    // = seg000:0580 play_intro. Iterates the intro_script (seg000:0337) and
-    // drives each stage in sequence: pre-load midi sync, init, post-load
-    // midi sync, transition, play, then the wait-for-pcm-voice gate.
-    pub fn play_intro(&mut self, skip: bool) {
+    // = seg000:0580 play_intro_cd
+    pub fn play_intro_cd(&mut self, skip: bool) {
         // = seg000:0589 — initial midi driver reset before the script loop.
         self.midi.midi_reset();
 
