@@ -32,14 +32,14 @@ use crate::{
 /// (the built-in `dune37s?.sav` slots stay in the working directory itself).
 pub(crate) const SAVES_DIR: &str = "saves";
 
-const PANEL_RECT: Rect = rect(60, 14, 260, 178);
-const NAME_RECT: Rect = rect(68, 28, 252, 40);
-const LIST_RECT: Rect = rect(68, 46, 236, 146);
-const ARROW_UP_RECT: Rect = rect(238, 46, 252, 60);
-const ARROW_DOWN_RECT: Rect = rect(238, 132, 252, 146);
-const BTN_SAVE_RECT: Rect = rect(68, 152, 126, 164);
-const BTN_LOAD_RECT: Rect = rect(131, 152, 189, 164);
-const BTN_CANCEL_RECT: Rect = rect(194, 152, 252, 164);
+const PANEL_RECT: Rect = rect(20, 14, 300, 178);
+const NAME_RECT: Rect = rect(28, 28, 292, 40);
+const LIST_RECT: Rect = rect(28, 46, 276, 146);
+const ARROW_UP_RECT: Rect = rect(278, 46, 292, 60);
+const ARROW_DOWN_RECT: Rect = rect(278, 132, 292, 146);
+const BTN_SAVE_RECT: Rect = rect(28, 152, 86, 164);
+const BTN_LOAD_RECT: Rect = rect(91, 152, 149, 164);
+const BTN_CANCEL_RECT: Rect = rect(234, 152, 252, 164);
 
 const ROW_H: i16 = 10;
 const VISIBLE_ROWS: usize = 10;
