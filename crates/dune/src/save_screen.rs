@@ -30,7 +30,7 @@ use crate::{
 
 /// Directory the custom saves live in, relative to the working directory
 /// (the built-in `dune37s?.sav` slots stay in the working directory itself).
-const SAVES_DIR: &str = "saves";
+pub(crate) const SAVES_DIR: &str = "saves";
 
 const PANEL_RECT: Rect = rect(60, 14, 260, 178);
 const NAME_RECT: Rect = rect(68, 28, 252, 40);
@@ -200,7 +200,7 @@ fn scan_custom_saves() -> Vec<SaveFileEntry> {
     scan_custom_saves_in(Path::new(SAVES_DIR))
 }
 
-fn custom_save_path(name: &str) -> PathBuf {
+pub(crate) fn custom_save_path(name: &str) -> PathBuf {
     Path::new(SAVES_DIR).join(format!("{name}.sav"))
 }
 

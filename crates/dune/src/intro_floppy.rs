@@ -21,9 +21,7 @@ impl GameState {
         GameState::intro_floppy_scene_back,
     ];
 
-    // Port-only: chapter titles for the clip recorder, one per SCENES entry.
-    // While a recording is running, each scene's fade emits its marker through
-    // vga_transition's midpoint hook, at the fade's black moment.
+    // Port-only: chapter titles used when recording video
     const SCENE_CHAPTER_TITLES: [&'static str; 8] = [
         "Starfield",
         "Arrakis globe",
@@ -37,127 +35,114 @@ impl GameState {
 
     // = seg000:021c
     pub fn play_intro_floppy(&mut self, skip: bool) {
-        // = seg000:021c data_0289e = 0x8c (the music-ducking level
-        // midi_duck_music_volume reads; no dedicated port field yet).
-        self.settings_records[SETTINGS_RECORD_VOLUME_MUSIC_DURING_VOICES].value = 0x8c;
+        // = seg000:021c
+        self.settings_records[SETTINGS_RECORD_VOLUME_MUSIC_DURING_VOICES].value = 140;
 
         // = seg000:0221 voice_subtitle_mode = 1 — narration subtitles on.
         self.voice_subtitle_mode = 1;
 
-        // = seg000:0226 jz loc_00292 — skip the cutscene act on the abort path.
-        if !skip {
-            self.intro_floppy_play_cutscenes();
+        // = seg000:0226 jz loc_00292 — skip the cutscene act. `skip` doubles
+        // as the DOS ZF the act threads: an ESC inside it (seg000:0244 /
+        // seg000:025c jz loc_00292) sets it and leaves the act, so the
+        // loc_00292 tail below runs on every path.
+        'act: {
+            if !skip {
+                // = seg000:0228 play_music_WORMSUIT_HSQ (midi_reset + play song 3).
+                self.midi.play_music_wormsuit_hsq(&mut self.dat_file);
+
+                // // = seg000:022e si = 1 .. seg000:0262 cmp si,8 / jbe — eight scenes.
+                for scene in 1..9 {
+                    // = seg000:0232 bp = loc_002c1; seg000:0235 copy_pal_and_transition —
+                    // render scene `si` offscreen, then fade the visible screen to it.
+                    // (The scene's chapter marker is emitted inside, at the fade's
+                    // black moment.)
+                    self.intro_floppy_render_and_transition_to_scene(scene);
+                    // = seg000:0238 midi_duck_music_volume — drop the MIDI score to its
+                    // narration "duck" level for the voice line.
+                    self.midi_duck_music_volume();
+                    // = seg000:023d start_narration_voice_clip — open + queue the next
+                    // PZ\PZ00<si>I.VOC narration clip.
+                    self.start_narration_voice_clip(scene);
+
+                    // = seg000:0241 kb_check_for_esc_key_hit; seg000:0244 jz loc_00292 —
+                    // abort the whole act if ESC was pressed during the transition/voice.
+                    self.kb_check_for_esc_key_hit();
+                    if self.input.lock().unwrap().kb_esc_was_hit != 0 {
+                        break 'act;
+                    }
+
+                    // = seg000:0247/024a ax = 0xfa0 (4000); seg000:024d wait_interruptable —
+                    // hold the scene, breaking early on ANY user input. A non-ESC key just
+                    // ends the wait, so the loop advances to the next scene (skip scene to
+                    // scene); the returned flag is set only when the break was ESC.
+                    let esc_pressed = self.wait_interruptable(0xfa0);
+                    // = seg000:0250 pushf — preserve the wait's ESC flag (DOS ZF) across cleanup.
+                    // = seg000:0251 remove_all_frame_tasks; seg000:0254 pcm_stop_voc.
+                    self.remove_all_frame_tasks();
+                    self.pcm_stop_voc();
+
+                    // = seg000:0257 midi_restore_music_volume — ramp the score back to
+                    // its normal level after the clip finishes.
+                    self.midi_restore_music_volume();
+                    // = seg000:025a popf; seg000:025c jz loc_00292 — abort the whole act
+                    // only on ESC; a non-ESC skip falls through to inc si for the next scene.
+                    if esc_pressed {
+                        break 'act;
+                    }
+                    // = seg000:025e inc si / seg000:025f cmp si,8 / seg000:0262 jbe loop.
+                }
+
+                // = seg000:0262 the loop falls through to the night->day fade only
+                // when all eight scenes played; the two ESC exits above jump
+                // straight to loc_00292 (the tail below), so they must not run it.
+                if !skip {
+                    break 'act;
+                }
+                self.remove_all_frame_tasks();
+
+                // = seg000:0264 bp = draw_xplain9_night_sky_frame; al = 0x10;
+                // seg000:0269 call transition. The transition's bp-callback idiom
+                // (gfx_call_bp_with_front_buffer_as_screen) redirects the front buffer
+                // to fb1 so the callback's draws land in fb1; vga_transition(0x10) then
+                // dissolves the visible screen and reveals fb1 in the new palette.
+                // Port-only: the chapter marker rides the midpoint hook (0x10 reveals
+                // progressively, so it fires as the dissolve starts).
+                self.transition_with_midpoint(
+                    0x10,
+                    0,
+                    Self::intro_floppy_draw_xplain9,
+                    Some(&|s: &mut GameState| s.recorder.add_marker("Night turns to day")),
+                );
+
+                // = seg000:026c wait_interruptable(0xc8) — hold the night scene.
+                self.wait_interruptable(0xc8);
+
+                // = seg000:0272 bl = 0x0c; seg000:0274 call loc_038f1 — arm the sky
+                // cross-fade: load SKY/SKYDN sub-palette 0xc into palette_fade_target
+                // (the day target), set sky_fade_countdown = 0x40, and install the
+                // loc_03916 frame task. The fade step in tick_sky_fade lerps the live
+                // (XPLAIN9 night) palette toward palette_fade_target one step per tick.
+                self.arm_sky_palette_fade(0x0c);
+                // = seg000:0277 sky_fade_active = 1 — armed by the caller, not loc_038f1.
+                self.sky_fade_active = true;
+
+                // = seg000:027c wait_interruptable(0x4b0) — drive the sky-fade task for
+                // 0x40 steps × 0x10 ticks = 0x400 ticks, plus a tail hold.
+                self.wait_interruptable(0x4b0);
+
+                // = seg000:0282 call sky_fade_disarm; 0285 sky_fade_active = 0.
+                self.sky_fade_disarm();
+                self.sky_fade_active = false;
+
+                // = seg000:028a bp = gfx_clear_active_framebuffer (0xc0ad); al = 0x10;
+                // seg000:028f call transition. Dissolve the now-daylit sky to black for
+                // the post-intro2 game-setup tail.
+                self.transition(0x10, 0, Self::gfx_clear_active_framebuffer);
+            }
         }
 
         // = seg000:0292 loc_00292 — game setup after intro2.
-        self.intro_floppy_post_setup();
-    }
-
-    // = seg000:0228..028f the WORMSUIT cutscene loop and the night->day sky fade.
-    fn intro_floppy_play_cutscenes(&mut self) {
-        // = seg000:0228 play_music_WORMSUIT_HSQ (midi_reset + play song 3).
-        self.midi.play_music_wormsuit_hsq(&mut self.dat_file);
-
-        // // = seg000:022e si = 1 .. seg000:0262 cmp si,8 / jbe — eight scenes.
-        for scene in 1..9 {
-            // = seg000:0232 bp = loc_002c1; seg000:0235 copy_pal_and_transition —
-            // render scene `si` offscreen, then fade the visible screen to it.
-            // (The scene's chapter marker is emitted inside, at the fade's
-            // black moment.)
-            self.intro_floppy_render_and_transition_to_scene(scene);
-            // = seg000:0238 midi_duck_music_volume — drop the MIDI score to its
-            // narration "duck" level for the voice line.
-            self.midi_duck_music_volume();
-            // = seg000:023d start_narration_voice_clip — open + queue the next
-            // PZ\PZ00<si>I.VOC narration clip.
-            self.start_narration_voice_clip(scene);
-
-            // = seg000:0241 kb_check_for_esc_key_hit; seg000:0244 jz loc_00292 —
-            // abort the whole act if ESC was pressed during the transition/voice.
-            self.kb_check_for_esc_key_hit();
-            if self.input.lock().unwrap().kb_esc_was_hit != 0 {
-                return;
-            }
-
-            // = seg000:0247/024a ax = 0xfa0 (4000); seg000:024d wait_interruptable —
-            // hold the scene, breaking early on ANY user input. A non-ESC key just
-            // ends the wait, so the loop advances to the next scene (skip scene to
-            // scene); the returned flag is set only when the break was ESC.
-            let esc_pressed = self.wait_interruptable(0xfa0);
-            // = seg000:0250 pushf — preserve the wait's ESC flag (DOS ZF) across cleanup.
-            // = seg000:0251 remove_all_frame_tasks; seg000:0254 pcm_stop_voc.
-            self.remove_all_frame_tasks();
-            self.pcm_stop_voc();
-
-            // = seg000:0257 midi_restore_music_volume — ramp the score back to
-            // its normal level after the clip finishes.
-            self.midi_restore_music_volume();
-            // = seg000:025a popf; seg000:025c jz loc_00292 — abort the whole act
-            // only on ESC; a non-ESC skip falls through to inc si for the next scene.
-            if esc_pressed {
-                return;
-            }
-            // = seg000:025e inc si / seg000:025f cmp si,8 / seg000:0262 jbe loop.
-        }
-
-        self.remove_all_frame_tasks();
-
-        // = seg000:0264..028f the night->day sky fade once all scenes have played.
-        self.intro_floppy_night_to_day_sky_fade();
-    }
-
-    // = seg000:0264..028f the night->day sky fade after the cutscenes.
-    // Reveal the XPLAIN9 night sky via a dotted-columns transition, hold it for
-    // 0xc8 ticks, then arm a sky-palette cross-fade from the night palette
-    // toward SKY/SKYDN sub-palette 0xc (the day palette) over 0x40 fade steps
-    // driven by the loc_03916 frame task while wait_interruptable(0x4b0) runs.
-    // Finally a second dotted-columns transition dissolves the lit sky away.
-    fn intro_floppy_night_to_day_sky_fade(&mut self) {
-        // = seg000:0264 bp = draw_xplain9_night_sky_frame; al = 0x10;
-        // seg000:0269 call transition. The transition's bp-callback idiom
-        // (gfx_call_bp_with_front_buffer_as_screen) redirects the front buffer
-        // to fb1 so the callback's draws land in fb1; vga_transition(0x10) then
-        // dissolves the visible screen and reveals fb1 in the new palette.
-        // Port-only: the chapter marker rides the midpoint hook (0x10 reveals
-        // progressively, so it fires as the dissolve starts).
-        self.transition_with_midpoint(
-            0x10,
-            0,
-            Self::intro_floppy_draw_xplain9,
-            Some(&|s: &mut GameState| s.recorder.add_marker("Night turns to day")),
-        );
-
-        // = seg000:026c wait_interruptable(0xc8) — hold the night scene.
-        self.wait_interruptable(0xc8);
-
-        // = seg000:0272 bl = 0x0c; seg000:0274 call loc_038f1 — arm the sky
-        // cross-fade: load SKY/SKYDN sub-palette 0xc into palette_fade_target
-        // (the day target), set sky_fade_countdown = 0x40, and install the
-        // loc_03916 frame task. The fade step in tick_sky_fade lerps the live
-        // (XPLAIN9 night) palette toward palette_fade_target one step per tick.
-        self.arm_sky_palette_fade(0x0c);
-        // = seg000:0277 sky_fade_active = 1 — armed by the caller, not loc_038f1.
-        self.sky_fade_active = true;
-
-        // = seg000:027c wait_interruptable(0x4b0) — drive the sky-fade task for
-        // 0x40 steps × 0x10 ticks = 0x400 ticks, plus a tail hold.
-        self.wait_interruptable(0x4b0);
-
-        // = seg000:0282 call sky_fade_disarm; 0285 sky_fade_active = 0.
-        self.sky_fade_disarm();
-        self.sky_fade_active = false;
-
-        // = seg000:028a bp = gfx_clear_active_framebuffer (0xc0ad); al = 0x10;
-        // seg000:028f call transition. Dissolve the now-daylit sky to black for
-        // the post-intro2 game-setup tail.
-        self.transition(0x10, 0, Self::gfx_clear_active_framebuffer);
-    }
-
-    // = seg000:0292 loc_00292 — game setup after intro2.
-    fn intro_floppy_post_setup(&mut self) {
-        // = seg000:0292 es=screen_buffer_seg; vga_clear_screen — clear the visible
-        // screen buffer so no intro frame shows through before the room is drawn.
-        self.screen.pixels_mut().fill(0);
+        self.screen.clear();
         // = seg000:029a call pcm_stop_voc — drain any queued voice audio.
         self.pcm_stop_voc();
         // = seg000:029d _byte_227D_suppress_sky_240_255 = 0 (in-game uses the full
@@ -177,15 +162,9 @@ impl GameState {
         // = seg000:02b8 dx=0x200a, bx=0x180; jmp set_scene_and_open_sal — the
         // throne room, with PALACE.SAL loaded.
         self.set_scene_and_open_sal(0x200a, 0x180);
-        // Port-ism: reset fb_base_ofs to 0 for the in-game screen (the in-game HUD
-        // + room scene draw there). DOS relies on the intro2 scenes having left it
-        // at its segvga:01a3 static-init 0; the port stubs those scenes.
-        self.clear_global_y_offset();
     }
 
-    // = seg000:02c1 loc_002c1 — the per-scene render callback. Clear the active
-    // framebuffer, draw the scene from the script_2 table (seg000:020c) selected
-    // by `scene`, then request the matching narration subtitle (string si + 0x117).
+    // = seg000:02c1
     fn intro_floppy_render_scene(&mut self, scene: u16) {
         // = seg000:02c2 gfx_clear_active_framebuffer.
         self.gfx_clear_active_framebuffer();
@@ -265,24 +244,6 @@ impl GameState {
         // = seg000:c12a/c12d gfx_copy_whole_framebuf_to_screen + palette flush.
         self.gfx_copy_whole_framebuf_to_screen();
         self.update_screen_palette();
-    }
-
-    #[doc(hidden)]
-    pub fn intro2_render_scene_for_test(&mut self, scene: u16) {
-        self.intro_floppy_render_scene(scene);
-    }
-
-    #[doc(hidden)]
-    pub fn open_sky_palette_pub(&mut self, name: &str, sub: usize) {
-        // Test helper: load the SKY layout (80 colours @ 128) the way the
-        // SUNRS cycler does. Callers that need the SKYDN 151@73 layout should
-        // go through intro2_draw_sky_pub instead.
-        self.open_sky_palette(name, sub, 0, 80, 128);
-    }
-
-    #[doc(hidden)]
-    pub fn intro2_draw_sky_pub(&mut self) {
-        self.draw_sky();
     }
 
     // = seg000:88af

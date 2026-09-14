@@ -216,6 +216,11 @@ pub struct GameState {
     // the press so a held key advances only once.
     debug_advance_phase_key_down: bool,
 
+    // Port-only autosaves (autosave.rs): the playthrough's start-time stamp
+    // that names the series, and the game_phase the last autosave captured.
+    pub(crate) autosave_series: String,
+    pub(crate) autosave_last_phase: u8,
+
     // Port-only: F5 opens the custom named save/load panel (save_screen.rs).
     // Edge-detects the press so a held key opens the panel only once.
     pub(crate) custom_save_key_down: bool,
@@ -2188,10 +2193,10 @@ pub struct GameState {
     // == seg001:dbe2 map_popup2_ptr
     pub(crate) map_popup2: MapPanelRef,
 
-    // = seg001:dbe6
+    // = seg001:dbe7
     pub(crate) hnm_finished: bool,
 
-    // = seg001:dbe7
+    // = seg001:dbe8
     pub(crate) hnm_frame_counter: u16,
 
     // = seg001:dbea hnm_counter_2 — frame records consumed since the clip was
@@ -2529,6 +2534,8 @@ impl GameState {
             debug_overlay: false,
             debug_overlay_key_down: false,
             debug_advance_phase_key_down: false,
+            autosave_series: String::new(),
+            autosave_last_phase: 0,
             custom_save_key_down: false,
             ctrl_v_cheat_done: false,
             log_condit: false,
@@ -3223,6 +3230,10 @@ impl GameState {
             // Port-only: F5 opens the custom named save/load panel (a blocking
             // modal loop in save_screen.rs). Also reads the raw key state.
             self.poll_custom_save_panel();
+
+            // Port-only: write an autosave when game_phase moved since the
+            // last pass (autosave.rs).
+            self.autosave_on_phase_change();
 
             // = seg000:d820..d82e — the Ctrl+V one-shot cheat: the buffered
             // key-press scancode is 'V' (0x2f) while Left Ctrl (kb_keys[0x1d];

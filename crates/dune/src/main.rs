@@ -3,6 +3,7 @@
 #![allow(dead_code)]
 
 mod attack;
+mod autosave;
 mod avi;
 mod battle;
 mod book_screen;

@@ -1,5 +1,3 @@
-use rand::Rng;
-
 use crate::{game_state::GameState, locations, tablat::Tablat};
 
 impl GameState {
@@ -28,11 +26,15 @@ impl GameState {
         // = seg000:0013 call play_intro_floppy.
         self.play_intro_floppy(skip_intro || self.intro_skip_to_game);
 
+        // Port only
+        self.clear_global_y_offset();
+
         // = seg000:0016
         self.midi.midi_reset();
 
         // = seg000:0019 mov [music_playlist_flags], 0
         self.music_playlist_flags = 0;
+
         // Port-only: the `--music` selection set_music_mode held back, landed
         // now that the reset above is out of the way. Nothing pending (every
         // caller but the CLI) leaves the music state untouched.
@@ -49,6 +51,9 @@ impl GameState {
         //   port keeps that image in memory (initial_game_image) instead of
         //   writing a file.
         self.initial_game_image = Some(self.create_save_in_memory());
+
+        // Port-only: the playthrough starts here — open its autosave series.
+        self.autosave_begin_series();
 
         // = seg000:002c call ui_enter_room_view (loc_01860).
         self.ui_enter_room_view();

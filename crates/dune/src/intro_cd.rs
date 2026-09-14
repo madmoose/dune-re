@@ -263,21 +263,6 @@ const SKY_ICON_LIST: [(u16, i16, i16); 6] = [
 ];
 
 impl GameState {
-    // Run one intro stage's init function by script index. Exposed for the
-    // headless render examples / tests so they exercise the real INTRO_SCRIPT
-    // wiring; not used by play_intro itself.
-    #[doc(hidden)]
-    pub fn intro_stage_init(&mut self, idx: usize) {
-        (INTRO_SCRIPT[idx].init)(self);
-    }
-
-    // Run one intro stage's play function by script index. Exposed for the
-    // headless render examples / tests; not used by play_intro itself.
-    #[doc(hidden)]
-    pub fn intro_stage_play(&mut self, idx: usize) {
-        (INTRO_SCRIPT[idx].play)(self);
-    }
-
     // = seg000:0580 play_intro_cd
     pub fn play_intro_cd(&mut self, skip: bool) {
         // = seg000:0589 — initial midi driver reset before the script loop.

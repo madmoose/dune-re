@@ -1165,6 +1165,8 @@ impl GameState {
         // = seg000:b3fd call reset_game_suspend (also releases the save
         //   menu's suspend_game_clock nesting).
         self.reset_game_suspend();
+        // Port-only: the loaded phase counts as already autosaved.
+        self.autosave_sync_phase();
         // = seg000:b404 or al,al; jns loc_0b41b — rebuild the view the player
         //   was in when they loaded.
         if (toggle as i8) >= 0 {

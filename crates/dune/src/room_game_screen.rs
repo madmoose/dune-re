@@ -812,6 +812,9 @@ impl GameState {
         self.restore_from_save_memory(&image);
         // = seg000:b3f1..b424 — the post-load half.
         self.post_load_fixups(toggle);
+        // Port-only: a restart is a new playthrough — open a new autosave
+        // series under a fresh start stamp.
+        self.autosave_begin_series();
     }
 
     // ---- Command / HUD click dispatch -------------------------------------
