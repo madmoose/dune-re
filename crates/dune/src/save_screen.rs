@@ -14,7 +14,7 @@
 //! bank (and thus no palette shift) is involved.
 
 use std::{
-    fs,
+    fs, io,
     path::{Path, PathBuf},
     time::SystemTime,
 };
@@ -460,18 +460,31 @@ impl GameState {
             return false;
         };
         let path = custom_save_path(&panel.entries[i].name);
-        let toggle = self.pre_load_fixups();
-        match self.load_game_from(&path) {
-            Ok(()) => {
-                self.post_load_fixups(toggle);
-                true
-            }
+        match self.custom_load_from(&path) {
+            Ok(()) => true,
             Err(e) => {
                 println!("custom load {}: {e}", path.display());
                 panel.status = Some((cmd::SAVE_ERROR, self.game_ticks() + STATUS_TICKS));
                 false
             }
         }
+    }
+
+    // Port-only: the panel's load — the DOS load path with the teardown its
+    // only entry guarantees. DOS reaches load_save_game solely through LOOK
+    // AT MIRROR, whose reset_scene_lip_sync_state (seg000:0ea9) has already
+    // stopped any voice line; post_load_fixups then clears the frame tasks
+    // and drops the head (= seg000:b3f4/b3f7) without touching the declared
+    // playing flag (_byte_2D0DB). A load during a voice line would leave
+    // is_voc_pcm_playing set for good, and game_loop_sub_01b0d (seg000:1b0d)
+    // would never run the event scheduler again. Stop the lip-sync first, as
+    // the mirror path does.
+    pub(crate) fn custom_load_from(&mut self, path: &Path) -> io::Result<()> {
+        self.lip_sync_stop();
+        let toggle = self.pre_load_fixups();
+        self.load_game_from(path)?;
+        self.post_load_fixups(toggle);
+        Ok(())
     }
 
     // Port-only: a small solid triangle centered in a scroll-arrow box (the
@@ -840,6 +853,47 @@ mod tests {
         fresh.post_load_fixups(toggle);
 
         let _ = dat_file;
+        fs::remove_dir_all(&dir).unwrap();
+    }
+    // A voice line declared playing (= seg000:a768) when the F5 panel loads a
+    // save must not outlive the load: post_load_fixups drops the head and the
+    // frame tasks, and a stranded is_voc_pcm_playing would stop
+    // game_loop_sub_01b0d (seg000:1b0d) from ever running the event
+    // scheduler again. Asset-gated. Run:
+    //   cargo test -p dune --bin dune -- --ignored custom_load_clears_voice_gate
+    #[test]
+    #[ignore = "needs assets/DUNE.DAT"]
+    fn custom_load_clears_voice_gate() {
+        let dat_path = concat!(env!("CARGO_MANIFEST_DIR"), "/../../assets/DUNE.DAT");
+        let Ok(dat_file) = DatFile::open(dat_path) else {
+            eprintln!("skipping: {dat_path} not found");
+            return;
+        };
+        let dir = std::env::temp_dir().join("dune_custom_load_clears_voice_gate");
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+
+        let (tx, _rx) = mpsc::sync_channel(64);
+        let mut game = GameState::new(dat_file, tx);
+        game.set_headless();
+        game.start(true);
+        let path = dir.join("voice.sav");
+        game.save_game_to(&path).unwrap();
+
+        // A line is playing when the panel loads.
+        game.voc_pcm_playing = true;
+        game.add_frame_task(0, crate::TaskId::TalkingHeadVoc);
+        game.custom_load_from(&path).unwrap();
+
+        assert!(
+            !game.voc_pcm_playing,
+            "= seg000:a7b9 via the mirror-path stop"
+        );
+        // The scheduler gate is open again: a pending period runs its events.
+        game.new_time_period_pending = 1;
+        game.game_loop_sub_01b0d();
+        assert_eq!(game.new_time_period_pending, 0, "= seg000:1b2a consumed");
+
         fs::remove_dir_all(&dir).unwrap();
     }
 }

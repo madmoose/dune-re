@@ -1340,8 +1340,16 @@ impl GameState {
         };
 
         let (mouth, done) = {
+            // = seg000:a7c7..a7d1 with no mouth stream the task polls
+            //   pcm_test_audio_done and, once done, loc_0a789 stops the
+            //   lip-sync. A dropped head leaves nothing to drain, so the
+            //   port takes that stop here: lip_sync_stop clears the declared
+            //   playing flag (= seg000:a7b9), which game_loop_sub_01b0d
+            //   (seg000:1b0d) gates the whole event scheduler on. Removing
+            //   the task alone would leave the flag set and the scheduler
+            //   dead for the rest of the session.
             let Some(head) = self.talking_head.as_ref() else {
-                self.remove_frame_task(crate::TaskId::TalkingHeadVoc);
+                self.lip_sync_stop();
                 return;
             };
             let played = played.saturating_sub(head.voc_baseline);
@@ -2416,5 +2424,30 @@ mod tests {
         game.current_subtitle_id = 0x0500;
         game.dispatch_dialogue_line_event(0x0a, 0);
         assert_eq!(game.head_sign_state, 0, "no sign for an unlisted line");
+    }
+    // The voice task with its head already dropped (post_load_fixups,
+    // seg000:b3f7) has nothing to drain: DOS's task reaches loc_0a789 and
+    // lip_sync_stop, clearing the declared playing flag. The port must not
+    // leave it set, or game_loop_sub_01b0d (seg000:1b0d) never runs the
+    // event scheduler again. Asset-gated:
+    //   cargo test -p dune -- --ignored voc_tick_without_head_clears_gate
+    #[test]
+    #[ignore = "needs assets/DUNE.DAT"]
+    fn voc_tick_without_head_clears_gate() {
+        let dat_path = concat!(env!("CARGO_MANIFEST_DIR"), "/../../assets/DUNE.DAT");
+        let Ok(dat_file) = DatFile::open(dat_path) else {
+            eprintln!("skipping: {dat_path} not found");
+            return;
+        };
+        let (tx, _rx) = mpsc::sync_channel(64);
+        let mut game = GameState::new(dat_file, tx);
+        game.set_headless();
+        game.settings_flags |= 0x1;
+
+        game.voc_pcm_playing = true;
+        game.add_frame_task(0, crate::TaskId::TalkingHeadVoc);
+        game.talking_head = None;
+        game.tick_talking_head_voc();
+        assert!(!game.voc_pcm_playing, "= seg000:a7b9");
     }
 }
